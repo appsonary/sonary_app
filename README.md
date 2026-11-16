@@ -449,3 +449,9 @@ npx expo start --clear
 | **BLOCO 5:** Resiliência de I/O e Auditoria de UX | ✅ Aprovado | Gravação atômica (`.part` ➔ `.m4a`), validação de `Content-Length`, checagem prévia de disco livre (mínimo 25 MB), permissão em runtime (`POST_NOTIFICATIONS`) e relatório [`AUDITORIA_RESILIENCIA_UX.md`](./AUDITORIA_RESILIENCIA_UX.md). |
 | **BLOCO 6:** Redesign Visual YouTube Music | ✅ Aprovado | Reengenharia completa do design do YouTube Music: Sidebar retrátil, Topbar com blur, Chips de humor/energia, Escolhas rápidas em grid 4xN, Mini-player persistente com barra vermelha (`#FF0000`), Modal "Tocando Agora" com 3 abas (A Seguir, Letras, Relacionados) e atalhos de teclado. Zero regressão na camada de áudio e SQLite. |
 | **BLOCO 7:** Automação do Dev & Blindagem CNG | ✅ Aprovado | Scripts `clean.js`, `setup.js`, `patch-android.js`, `run-android.js` e plugins Expo locais (`withAndroidStartupFix.js`, `withTrackPlayerFGS.js`). Eliminação de telas pretas e brancas com inicialização 100% determinística sem necessidade de versionar a pasta `android/`. Suíte de 44 testes passando com 100% de sucesso. |
+
+---
+
+## 📄 Licença
+
+Este projeto é distribuído sob a licença **GNU General Public License v3.0 (GPL-3.0)**. Consulte o arquivo [`LICENSE`](./LICENSE) para mais detalhes.

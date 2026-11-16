@@ -1,6 +1,7 @@
 {
   "name": "sonary-pro",
   "version": "1.0.0",
+  "license": "GPL-3.0",
   "main": "index.ts",
   "scripts": {
     "test": "node --test --test-concurrency=1 --require ./tests/setup.js",
