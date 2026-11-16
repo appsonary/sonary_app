@@ -1,0 +1,51 @@
+{
+  "name": "sonary-pro",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 --require ./tests/setup.js",
+    "clean": "node scripts/clean.js",
+    "clean:all": "node scripts/clean.js",
+    "setup": "node scripts/setup.js",
+    "patch:android": "node scripts/patch-android.js",
+    "start": "expo start --dev-client",
+    "android": "node scripts/run-android.js",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "prebuild": "expo prebuild && node scripts/patch-android.js",
+    "prebuild:clean": "expo prebuild --clean && node scripts/patch-android.js",
+    "build:apk": "node scripts/build-apk.js prod",
+    "build:apk:dev": "node scripts/build-apk.js dev"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^14.1.0",
+    "@shopify/react-native-skia": "1.2.3",
+    "expo": "~51.0.0",
+    "expo-build-properties": "~0.12.5",
+    "expo-file-system": "~17.0.1",
+    "expo-image": "~1.13.0",
+    "expo-image-manipulator": "~12.0.5",
+    "expo-image-picker": "~15.1.0",
+    "expo-linear-gradient": "~13.0.2",
+    "expo-notifications": "~0.28.19",
+    "expo-sqlite": "~14.0.6",
+    "expo-status-bar": "~1.12.1",
+    "lucide-react-native": "^0.395.0",
+    "qrcode-generator": "^2.0.4",
+    "react": "18.2.0",
+    "react-native": "0.74.5",
+    "react-native-gesture-handler": "~2.16.1",
+    "react-native-reanimated": "~3.10.1",
+    "react-native-svg": "15.2.0",
+    "react-native-track-player": "^4.1.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0",
+    "@types/react": "~18.2.79",
+    "@types/react-native": "^0.72.8",
+    "@types/react-test-renderer": "^19.3.0",
+    "react-test-renderer": "^18.2.0",
+    "typescript": "~5.3.3"
+  },
+  "private": true
+}

@@ -1,0 +1,134 @@
+import React, { useEffect, useRef } from 'react';
+import {
+  Animated,
+  Easing,
+  Platform,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { CheckCircle2 } from 'lucide-react-native';
+import { getEaseOutCubic, theme } from '../theme';
+
+export interface ToastBannerProps {
+  message: string | null | undefined;
+  onDismiss?: () => void;
+  topOffset?: number;
+}
+
+/**
+ * Toast flutuante no topo para confirmar ações sem cobrir o mini player.
+ * Renderizado dentro de cada janela ativa (App ou Modal) porque React Native
+ * Modals no Android sobem uma Dialog Window acima da Activity principal.
+ */
+export function ToastBanner({
+  message,
+  onDismiss,
+  topOffset = Platform.OS === 'android' ? 12 : 10,
+}: ToastBannerProps) {
+  const translateY = useRef(new Animated.Value(-16)).current;
+  const opacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!message) return;
+    const easeOut = getEaseOutCubic(Easing);
+    translateY.setValue(-16);
+    opacity.setValue(0);
+    Animated.parallel([
+      Animated.timing(translateY, {
+        toValue: 0,
+        duration: theme.transitions.toastMs,
+        easing: easeOut,
+        useNativeDriver: true,
+      }),
+      Animated.timing(opacity, {
+        toValue: 1,
+        duration: theme.transitions.toastMs,
+        easing: easeOut,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [message, translateY, opacity]);
+
+  if (!message) return null;
+
+  return (
+    <View
+      style={{
+        position: 'absolute',
+        top: topOffset,
+        left: 16,
+        right: 16,
+        alignItems: 'center',
+        zIndex: 9999,
+      }}
+      pointerEvents="box-none"
+    >
+      <Animated.View
+        style={[
+          styles.toastBox,
+          {
+            opacity,
+            transform: [{ translateY }],
+          },
+        ]}
+      >
+        <TouchableOpacity
+          style={styles.toastTouchable}
+          activeOpacity={0.85}
+          onPress={onDismiss}
+          accessibilityRole="button"
+          accessibilityLabel="Fechar notificação de sucesso"
+        >
+          <View style={styles.toastIconBadge}>
+            <CheckCircle2 color="#2BA640" size={15} />
+          </View>
+          <Text style={styles.toastText} numberOfLines={1} ellipsizeMode="tail">
+            {message}
+          </Text>
+        </TouchableOpacity>
+      </Animated.View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  toastBox: {
+    maxWidth: '100%',
+    backgroundColor: 'rgba(24, 24, 24, 0.96)',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(43, 166, 64, 0.35)',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.45,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  toastTouchable: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingLeft: 8,
+    paddingRight: 16,
+    paddingVertical: 8,
+  },
+  toastIconBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(43, 166, 64, 0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  toastText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
+    flexShrink: 1,
+  },
+});
+
+export default ToastBanner;
+
