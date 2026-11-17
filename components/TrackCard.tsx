@@ -15,6 +15,7 @@ import {
 import Svg, { Circle } from 'react-native-svg';
 import {
   CheckCircle2,
+  Clock,
   Download,
   ListMusic,
   ListPlus,
@@ -110,6 +111,7 @@ export interface TrackCardProps {
   isPlaying?: boolean;
   isDownloaded?: boolean;
   isDownloading?: boolean;
+  isQueued?: boolean;
   downloadProgress?: number;
   isOfflineList?: boolean;
   showInlineActions?: boolean;
@@ -127,6 +129,9 @@ export interface TrackContextSheetProps {
   durationText?: string;
   isOfflineList: boolean;
   isDownloaded: boolean;
+  isDownloading?: boolean;
+  isQueued?: boolean;
+  downloadProgress?: number;
   onClose: () => void;
   onPress: () => void;
   onPlayNext?: () => void;
@@ -143,6 +148,9 @@ export const TrackContextSheet: React.FC<TrackContextSheetProps> = ({
   durationText,
   isOfflineList,
   isDownloaded,
+  isDownloading = false,
+  isQueued = false,
+  downloadProgress = 0,
   onClose,
   onPress,
   onPlayNext,
@@ -321,7 +329,7 @@ export const TrackContextSheet: React.FC<TrackContextSheetProps> = ({
                   onPress={(e) => {
                     e?.stopPropagation?.();
                     onClose();
-                    if (!isDownloaded) {
+                    if (!isDownloaded && !isDownloading && !isQueued) {
                       onDownload();
                     }
                   }}
@@ -330,11 +338,21 @@ export const TrackContextSheet: React.FC<TrackContextSheetProps> = ({
                 >
                   {isDownloaded ? (
                     <CheckCircle2 color="#2BA640" size={22} />
+                  ) : isDownloading ? (
+                    <ActivityIndicator color="#FFFFFF" size="small" />
+                  ) : isQueued ? (
+                    <Clock color="#AAAAAA" size={22} />
                   ) : (
                     <Download color="#FFFFFF" size={22} />
                   )}
                   <Text style={styles.sheetActionText}>
-                    {isDownloaded ? 'Música já baixada' : 'Salvar offline'}
+                    {isDownloaded
+                      ? 'Música já baixada'
+                      : isDownloading
+                        ? `Baixando${downloadProgress && downloadProgress > 0 ? ` (${downloadProgress}%)` : '...'}`
+                        : isQueued
+                          ? 'Na fila de downloads'
+                          : 'Salvar offline'}
                   </Text>
                 </TouchableOpacity>
               )}
@@ -410,6 +428,7 @@ const TrackCardInner: React.FC<TrackCardProps> = ({
   isPlaying = false,
   isDownloaded = false,
   isDownloading = false,
+  isQueued = false,
   downloadProgress = 0,
   isOfflineList = false,
   showInlineActions,
@@ -520,6 +539,13 @@ const TrackCardInner: React.FC<TrackCardProps> = ({
         <View style={styles.inlineDownloadingBadge} accessibilityLabel="Baixando música">
           <CircularDownloadProgress progress={downloadProgress} />
         </View>
+      ) : isQueued && !isDownloaded && !showDirectActions ? (
+        <View style={styles.inlineQueuedBadge} accessibilityLabel="Na fila de downloads">
+          <Clock color="#AAAAAA" size={13} />
+          <Text style={styles.queuedBadgeText} numberOfLines={1}>
+            Na fila
+          </Text>
+        </View>
       ) : durationText ? (
         <Text style={styles.trackDuration} numberOfLines={1}>
           {durationText}
@@ -573,13 +599,21 @@ const TrackCardInner: React.FC<TrackCardProps> = ({
               e?.stopPropagation?.();
               onDownload();
             }}
-            disabled={isDownloaded || isDownloading}
+            disabled={isDownloaded || isDownloading || isQueued}
             accessibilityRole="button"
-            accessibilityLabel={isDownloaded ? 'Música já baixada' : `Baixar ${title}`}
+            accessibilityLabel={
+              isDownloaded
+                ? 'Música já baixada'
+                : isQueued
+                  ? 'Na fila de downloads'
+                  : `Baixar ${title}`
+            }
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
             {isDownloading ? (
               <CircularDownloadProgress progress={downloadProgress} />
+            ) : isQueued ? (
+              <Clock color={theme.colors.textSecondary} size={18} />
             ) : isDownloaded ? (
               <CheckCircle2 color={theme.colors.success} size={20} />
             ) : (
@@ -612,6 +646,9 @@ const TrackCardInner: React.FC<TrackCardProps> = ({
           durationText={durationText}
           isOfflineList={isOfflineList}
           isDownloaded={isDownloaded}
+          isDownloading={isDownloading}
+          isQueued={isQueued}
+          downloadProgress={downloadProgress}
           onClose={() => setShowContextMenu(false)}
           onPress={onPress}
           onPlayNext={onPlayNext}
@@ -765,6 +802,21 @@ const styles = StyleSheet.create({
     marginRight: -4,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  inlineQueuedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginLeft: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  queuedBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#AAAAAA',
   },
   deleteButton: {
     padding: 8,

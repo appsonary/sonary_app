@@ -572,3 +572,220 @@ test('Flow 2: "Salvar offline" downloads track into Baixadas tab, preserves down
     clearStorageCache();
   }
 });
+
+test('Flow 2: Queuing multiple tracks shows pending state and opens DownloadQueueModal from BrandHeader', async () => {
+  const {
+    cancelAllDownloads,
+    clearFinishedDownloads,
+    setAudioStreamResolver,
+    clearStorageCache,
+  } = require('../services/storage');
+  const fileSystemMock = require('./mocks/fileSystemMock');
+
+  const mockResults = [
+    {
+      id: 'mq_1',
+      title: 'First Queued Song',
+      artist: 'Artist One',
+      duration: 200,
+      formattedDuration: '3:20',
+      thumbnailUrl: 'https://example.com/1.jpg',
+    },
+    {
+      id: 'mq_2',
+      title: 'Second Queued Song',
+      artist: 'Artist Two',
+      duration: 210,
+      formattedDuration: '3:30',
+      thumbnailUrl: 'https://example.com/2.jpg',
+    },
+  ];
+
+  api.searchTracks = async () => mockResults;
+
+  let releaseFirstDownload = null;
+  setAudioStreamResolver(async (id) => ({
+    streamUrl: `https://mock.example.com/${id}.m4a`,
+  }));
+  fileSystemMock.setCreateDownloadResumable((url, fileUri) => ({
+    downloadAsync: () =>
+      new Promise((resolve, reject) => {
+        if (fileUri.includes('mq_1')) {
+          releaseFirstDownload = {
+            resolve: () => {
+              fileSystemMock.files.set(fileUri, { isDirectory: false, url, size: 1024 * 1024 });
+              resolve({ uri: fileUri, status: 200 });
+            },
+            reject,
+          };
+          return;
+        }
+        fileSystemMock.files.set(fileUri, { isDirectory: false, url, size: 1024 * 1024 });
+        resolve({ uri: fileUri, status: 200 });
+      }),
+    cancelAsync: async () => {
+      releaseFirstDownload?.reject(new Error('Cancelled'));
+    },
+  }));
+
+  try {
+    let tree;
+    await actAsync(async () => {
+      tree = renderer.create(React.createElement(App));
+    });
+    const root = tree.root;
+
+    const input = findInputByPlaceholder(root, 'Buscar faixas');
+    await actAsync(async () => {
+      input.props.onChangeText('Queue Test');
+    });
+    await actAsync(async () => {
+      findSearchActionButton(root).props.onPress();
+    });
+
+    const queueTrack = async (title) => {
+      const moreBtn = root.find(
+        (n) =>
+          n.type === 'TouchableOpacity' &&
+          n.props.accessibilityLabel === `Mais opções para ${title}`
+      );
+      await actAsync(async () => {
+        moreBtn.props.onPress({ stopPropagation: () => {} });
+      });
+      const saveBtn = root.find(
+        (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Salvar offline'
+      );
+      await actAsync(async () => {
+        saveBtn.props.onPress({ stopPropagation: () => {} });
+      });
+    };
+
+    await queueTrack('First Queued Song');
+    await queueTrack('Second Queued Song');
+
+    // Second track must visibly indicate "Na fila" while first is downloading
+    const pendingBadge = root.find(
+      (n) => n.props && n.props.accessibilityLabel === 'Na fila de downloads'
+    );
+    assert.ok(pendingBadge, 'Pending track in search results must show "Na fila" badge');
+
+    // Open 3-dots menu on actively downloading track ('First Queued Song') and verify "Baixando..." state
+    const firstMoreBtn = root.find(
+      (n) =>
+        n.type === 'TouchableOpacity' &&
+        n.props.accessibilityLabel === 'Mais opções para First Queued Song'
+    );
+    await actAsync(async () => {
+      firstMoreBtn.props.onPress({ stopPropagation: () => {} });
+    });
+    const activeSaveBtn = root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Salvar offline'
+    );
+    assert.ok(
+      getAllText(activeSaveBtn).includes('Baixando'),
+      'TrackContextSheet for actively downloading track must display "Baixando..." instead of "Salvar offline"'
+    );
+    await actAsync(async () => {
+      activeSaveBtn.props.onPress({ stopPropagation: () => {} });
+    });
+
+    // BrandHeader button displays badge count (2) and opens DownloadQueueModal
+    const headerQueueBtn = root.find(
+      (n) =>
+        n.type === 'TouchableOpacity' &&
+        n.props.accessibilityLabel === 'Fila de downloads (2)'
+    );
+    assert.ok(headerQueueBtn, 'BrandHeader must expose queue button with count (2)');
+
+    await actAsync(async () => {
+      headerQueueBtn.props.onPress();
+    });
+
+    const modalText = getAllText(root);
+    assert.ok(modalText.includes('Fila de downloads'));
+    assert.ok(modalText.includes('First Queued Song'));
+    assert.ok(modalText.includes('Second Queued Song'));
+    assert.ok(modalText.includes('Na fila'));
+
+    // Cancel pending second track directly inside DownloadQueueModal
+    const cancelSecondBtn = root.find(
+      (n) =>
+        n.type === 'TouchableOpacity' &&
+        n.props.accessibilityLabel === 'Cancelar download de Second Queued Song'
+    );
+    await actAsync(async () => {
+      cancelSecondBtn.props.onPress();
+    });
+
+    assert.strictEqual(
+      root.findAll(
+        (n) =>
+          n.type === 'TouchableOpacity' &&
+          n.props.accessibilityLabel === 'Cancelar download de Second Queued Song'
+      ).length,
+      0,
+      'Cancelled pending item must be removed from DownloadQueueModal'
+    );
+
+    releaseFirstDownload?.resolve();
+    await actAsync(async () => {
+      await new Promise((r) => setTimeout(r, 40));
+    });
+  } finally {
+    await cancelAllDownloads();
+    clearFinishedDownloads();
+    fileSystemMock.setCreateDownloadResumable(null);
+    setAudioStreamResolver();
+    fileSystemMock.resetFileSystem();
+    clearStorageCache();
+  }
+});
+
+test('Flow 2: Cold start with persisted completed and error download queue items does not fire false toasts or error banners', async () => {
+  const { upsertPersistedDownloadQueueBatch } = require('../services/database');
+  const { clearFinishedDownloads } = require('../services/storage');
+
+  await upsertPersistedDownloadQueueBatch([
+    {
+      trackId: 'old_done_1',
+      title: 'Old Completed Track',
+      artist: 'Past Artist',
+      duration: 180,
+      thumbnailUrl: 'https://example.com/old_done.jpg',
+      status: 'completed',
+      progress: 1,
+    },
+    {
+      trackId: 'old_err_1',
+      title: 'Old Failed Track',
+      artist: 'Past Artist',
+      duration: 200,
+      thumbnailUrl: 'https://example.com/old_err.jpg',
+      status: 'error',
+      progress: 0,
+      error: 'HTTP 403',
+    },
+  ]);
+
+  try {
+    let tree;
+    await actAsync(async () => {
+      tree = renderer.create(React.createElement(App));
+      await new Promise((r) => setTimeout(r, 40));
+    });
+
+    const bootText = getAllText(tree.root);
+    assert.strictEqual(
+      bootText.includes('"Old Completed Track" salva em Baixadas'),
+      false,
+      'Cold start must not fire toast for old completed item from previous session'
+    );
+    assert.strictEqual(
+      bootText.includes('Falha ao baixar "Old Failed Track"'),
+      false,
+      'Cold start must not fire error banner/toast for old failed item from previous session'
+    );
+  } finally {
+    clearFinishedDownloads();
+  }
+});

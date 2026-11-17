@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
+  AppState,
   Easing,
   FlatList,
   Image,
@@ -30,6 +31,7 @@ import { AddToPlaylistModal } from './components/AddToPlaylistModal';
 import { PlaylistDetailModal } from './components/PlaylistDetailModal';
 import { BrandHeader } from './components/BrandHeader';
 import { DevMenuModal, isDevMenuEnabled } from './components/DevMenuModal';
+import { DownloadQueueModal } from './components/DownloadQueueModal';
 import { MainTab, NavigationTabBar } from './components/NavigationTabBar';
 import { SearchBarSection, SearchPillInput } from './components/SearchBarSection';
 import { SupportSection } from './components/SupportSection';
@@ -123,6 +125,12 @@ import {
   enqueueDownload,
   getDownloadQueue,
   subscribeDownloadQueue,
+  cancelDownload,
+  cancelAllDownloads,
+  retryDownload,
+  clearFinishedDownloads,
+  hydrateDownloadQueue,
+  DownloadQueueItem,
 } from './services/storage';
 import {
   DownloadedTrack,
@@ -188,6 +196,8 @@ export default function App() {
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
+  const [downloadQueue, setDownloadQueue] = useState<DownloadQueueItem[]>([]);
+  const [isDownloadQueueVisible, setIsDownloadQueueVisible] = useState(false);
   const [downloadedIds, setDownloadedIds] = useState<Set<string>>(new Set());
   const [favoriteTrackIds, setFavoriteTrackIds] = useState<Set<string>>(new Set());
   const [isCurrentFavorite, setIsCurrentFavorite] = useState(false);
@@ -577,6 +587,7 @@ export default function App() {
   }, [nativeActiveTrack?.id]);
 
   const lastSavedSessionRef = React.useRef<{ trackId: string; position: number } | null>(null);
+  const hasHydratedQueueRef = React.useRef<boolean>(false);
   const syncedCompletedIdsRef = React.useRef<Set<string>>(new Set());
   const reportedDownloadErrorMapRef = React.useRef<Map<string, string>>(new Map());
 
@@ -772,7 +783,25 @@ export default function App() {
     setupPlayer().catch((err) => {
       console.error('Falha ao inicializar TrackPlayer nativo:', err);
     });
-    void loadOfflineTracks().then(() => loadOfflineTracks({ clean: true }));
+    void hydrateDownloadQueue()
+      .then((initialQueue) => {
+        for (const item of initialQueue) {
+          if (item.status === 'completed') {
+            syncedCompletedIdsRef.current.add(item.track.id);
+          } else if (item.status === 'error') {
+            reportedDownloadErrorMapRef.current.set(
+              item.track.id,
+              item.error || 'Erro desconhecido'
+            );
+          }
+        }
+        hasHydratedQueueRef.current = true;
+        return loadOfflineTracks();
+      })
+      .then(() => loadOfflineTracks({ clean: true }))
+      .catch(() => {
+        hasHydratedQueueRef.current = true;
+      });
     void loadPlaylists().then((list) => {
       const topIds = list.slice(0, 5).map((p) => p.id);
       if (topIds.length > 0) {
@@ -816,11 +845,20 @@ export default function App() {
       })
       .catch(() => {});
 
+    const appStateSub = AppState.addEventListener?.('change', (nextState) => {
+      if (nextState === 'active') {
+        void hydrateDownloadQueue().then(() => loadOfflineTracks());
+      }
+    });
+
     // Solicita permissão de notificação após o frame inicial estabilizar para evitar race condition na janela do Android 14+
     const permTimer = setTimeout(() => {
       requestNotificationPermission();
     }, 1200);
-    return () => clearTimeout(permTimer);
+    return () => {
+      clearTimeout(permTimer);
+      appStateSub?.remove?.();
+    };
   }, []);
 
   // Monitora se a faixa atualmente em reprodução está favoritada
@@ -869,6 +907,7 @@ export default function App() {
     shellTransitionRef.current = null;
     isOpeningPlaylistRef.current = false;
     setIsDevMenuVisible(false);
+    setIsDownloadQueueVisible(false);
     setIsNowPlayingVisible(false);
     isPlaylistDetailVisibleRef.current = false;
     setIsPlaylistDetailVisible(false);
@@ -1105,6 +1144,7 @@ export default function App() {
   const hasBlockingModalOpen = Boolean(
     (isNowPlayingVisible && activeTrack) ||
       isAddToPlaylistVisible ||
+      isDownloadQueueVisible ||
       (isDevMode && isDevMenuVisible)
   );
 
@@ -1989,9 +2029,33 @@ export default function App() {
     };
   }, [isNowPlayingVisible, volume, isLoadingAudio, nativeActiveTrack?.id, restoredSession]);
 
+  const queuedDownloadIds = React.useMemo(
+    () =>
+      new Set(
+        downloadQueue
+          .filter((i) => i.status === 'pending')
+          .map((i) => i.track.id)
+      ),
+    [downloadQueue]
+  );
+
+  const downloadQueueBadgeCount = React.useMemo(
+    () =>
+      downloadQueue.filter(
+        (i) => i.status === 'downloading' || i.status === 'pending'
+      ).length,
+    [downloadQueue]
+  );
+
+  const hasDownloadErrors = React.useMemo(
+    () => downloadQueue.some((i) => i.status === 'error'),
+    [downloadQueue]
+  );
+
   // Sincroniza a fila de downloads com a UI, lista offline e erros
   useEffect(() => {
     const unsubscribe = subscribeDownloadQueue((queue) => {
+      setDownloadQueue(queue);
       const active = queue.find((i) => i.status === 'downloading');
       if (active) {
         setDownloadingId(active.track.id);
@@ -2016,23 +2080,36 @@ export default function App() {
       syncedCompletedIdsRef.current = new Set(completedIds);
       if (newlyCompleted.length > 0) {
         void loadOfflineTracks();
-        const lastCompleted = newlyCompleted[newlyCompleted.length - 1];
-        if (lastCompleted?.track?.title) {
-          showToast(`"${lastCompleted.track.title}" salva em Baixadas`, 'success');
+        if (hasHydratedQueueRef.current) {
+          const lastCompleted = newlyCompleted[newlyCompleted.length - 1];
+          if (lastCompleted?.track?.title) {
+            showToast(`"${lastCompleted.track.title}" salva em Baixadas`, 'success');
+          }
         }
       }
 
-      const failedItem = queue.find((i) => {
-        if (i.status !== 'error') return false;
-        const msg = i.error || 'Erro desconhecido';
-        return reportedDownloadErrorMapRef.current.get(i.track.id) !== msg;
-      });
-      if (failedItem) {
-        const reason = failedItem.error || 'Não foi possível concluir o download.';
-        reportedDownloadErrorMapRef.current.set(failedItem.track.id, reason);
-        const friendlyMsg = `Falha ao baixar "${failedItem.track.title}": ${reason}`;
-        setErrorMessage(friendlyMsg);
-        showToast(friendlyMsg, 'error');
+      if (!hasHydratedQueueRef.current) {
+        for (const item of queue) {
+          if (item.status === 'error') {
+            reportedDownloadErrorMapRef.current.set(
+              item.track.id,
+              item.error || 'Erro desconhecido'
+            );
+          }
+        }
+      } else {
+        const failedItem = queue.find((i) => {
+          if (i.status !== 'error') return false;
+          const msg = i.error || 'Erro desconhecido';
+          return reportedDownloadErrorMapRef.current.get(i.track.id) !== msg;
+        });
+        if (failedItem) {
+          const reason = failedItem.error || 'Não foi possível concluir o download.';
+          reportedDownloadErrorMapRef.current.set(failedItem.track.id, reason);
+          const friendlyMsg = `Falha ao baixar "${failedItem.track.title}": ${reason}`;
+          setErrorMessage(friendlyMsg);
+          showToast(friendlyMsg, 'error');
+        }
       }
     });
     return () => unsubscribe();
@@ -2044,15 +2121,24 @@ export default function App() {
       showToast(`"${track.title}" já está salva em Baixadas`, 'success');
       return;
     }
-    const existing = getDownloadQueue().find((i) => i.track.id === track.id);
-    if (existing && (existing.status === 'pending' || existing.status === 'downloading')) {
+    setErrorMessage(null);
+    reportedDownloadErrorMapRef.current.delete(track.id);
+    const result = enqueueDownload(track);
+    if (result === 'already_queued') {
       showToast(`"${track.title}" já está na fila de downloads`, 'success');
       return;
     }
-    setErrorMessage(null);
-    reportedDownloadErrorMapRef.current.delete(track.id);
+    if (result === 'queued') {
+      const activeOrPending = getDownloadQueue().filter(
+        (i) => i.status === 'pending' || i.status === 'downloading'
+      ).length;
+      showToast(
+        `"${track.title}" adicionada à fila (${activeOrPending} na fila)`,
+        'success'
+      );
+      return;
+    }
     showToast(`Baixando "${track.title}"...`, 'success');
-    enqueueDownload(track);
   };
 
   const handleDeleteOfflineTrack = async (id: string) => {
@@ -2132,6 +2218,7 @@ export default function App() {
                 onAddToQueue={handleAddToQueue}
                 onAddToPlaylist={handleOpenAddToPlaylist}
                 onDownloadTrack={handleDownload}
+                onShowToast={showToast}
                 onPlaylistUpdated={() => loadPlaylists()}
                 onPlaylistDeleted={(deletedId) => {
                   const filtered = navHistoryRef.current.filter(
@@ -2154,6 +2241,9 @@ export default function App() {
                 {/* Header com Identidade Visual YouTube Music */}
                 <BrandHeader
                   onOpenDevMenu={isDevMode ? () => setIsDevMenuVisible(true) : undefined}
+                  onOpenDownloadQueue={() => setIsDownloadQueueVisible(true)}
+                  downloadQueueCount={downloadQueueBadgeCount}
+                  hasDownloadErrors={hasDownloadErrors}
                 />
 
             {/* Alerta de Erro */}
@@ -2365,6 +2455,7 @@ export default function App() {
                       isPlaying={isPlaying}
                       isDownloaded={downloadedIds.has(item.id)}
                       isDownloading={downloadingId === item.id}
+                      isQueued={queuedDownloadIds.has(item.id)}
                       downloadProgress={downloadProgress}
                       onPress={() => handleSelectTrack(item, index)}
                       onAddToPlaylist={() => handleOpenAddToPlaylist(item)}
@@ -2639,6 +2730,7 @@ export default function App() {
             }}
             isDownloaded={activeTrack ? downloadedIds.has(activeTrack.id) : false}
             isDownloading={activeTrack ? downloadingId === activeTrack.id : false}
+            isQueued={activeTrack ? queuedDownloadIds.has(activeTrack.id) : false}
             downloadProgress={
               activeTrack && downloadingId === activeTrack.id ? downloadProgress : 0
             }
@@ -2677,6 +2769,25 @@ export default function App() {
             }}
           />
         )}
+
+        {/* Modal de Fila de Downloads */}
+        <DownloadQueueModal
+          visible={isDownloadQueueVisible}
+          queue={downloadQueue}
+          onClose={() => setIsDownloadQueueVisible(false)}
+          onCancelItem={(trackId) => {
+            void cancelDownload(trackId);
+          }}
+          onRetryItem={(trackId) => {
+            retryDownload(trackId);
+          }}
+          onCancelAll={() => {
+            void cancelAllDownloads();
+          }}
+          onClearFinished={() => {
+            clearFinishedDownloads();
+          }}
+        />
 
         {/* Modal de Adicionar à Playlist */}
         {isAddToPlaylistVisible && (

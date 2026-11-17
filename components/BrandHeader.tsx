@@ -1,6 +1,6 @@
 import React from 'react';
 import { Image, Platform, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Bell, Code2 } from 'lucide-react-native';
+import { ArrowDownToLine, Bell, Code2 } from 'lucide-react-native';
 import { isDevMenuEnabled } from './DevMenuModal';
 
 const HEADER_LOGO = require('../assets/brand-logo-header.png');
@@ -10,9 +10,18 @@ const ANDROID_STATUS_BAR_HEIGHT =
 export interface BrandHeaderProps {
   subtitle?: string;
   onOpenDevMenu?: () => void;
+  onOpenDownloadQueue?: () => void;
+  downloadQueueCount?: number;
+  hasDownloadErrors?: boolean;
 }
 
-export const BrandHeader: React.FC<BrandHeaderProps> = ({ subtitle, onOpenDevMenu }) => {
+export const BrandHeader: React.FC<BrandHeaderProps> = ({
+  subtitle,
+  onOpenDevMenu,
+  onOpenDownloadQueue,
+  downloadQueueCount = 0,
+  hasDownloadErrors = false,
+}) => {
   const showDevButton = isDevMenuEnabled() && typeof onOpenDevMenu === 'function';
 
   return (
@@ -36,7 +45,7 @@ export const BrandHeader: React.FC<BrandHeaderProps> = ({ subtitle, onOpenDevMen
           </View>
         </View>
 
-        {/* Notificações e botão exclusivo de desenvolvimento */}
+        {/* Dev (em debug), Fila de Downloads (clean) e Notificações */}
         <View style={styles.headerRightActions}>
           {showDevButton && (
             <TouchableOpacity
@@ -47,9 +56,33 @@ export const BrandHeader: React.FC<BrandHeaderProps> = ({ subtitle, onOpenDevMen
               accessibilityRole="button"
               accessibilityLabel="Menu de desenvolvimento"
             >
-              <Code2 color="#FFFFFF" size={16} />
+              <Code2 color="#FFFFFF" size={21} />
             </TouchableOpacity>
           )}
+          <TouchableOpacity
+            style={styles.downloadQueueButton}
+            onPress={onOpenDownloadQueue}
+            disabled={typeof onOpenDownloadQueue !== 'function'}
+            activeOpacity={0.75}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            accessibilityRole="button"
+            accessibilityLabel={
+              downloadQueueCount > 0
+                ? `Fila de downloads (${downloadQueueCount})`
+                : 'Fila de downloads'
+            }
+          >
+            <ArrowDownToLine color="#FFFFFF" size={21} />
+            {downloadQueueCount > 0 ? (
+              <View style={styles.queueBadge}>
+                <Text style={styles.queueBadgeText}>
+                  {downloadQueueCount > 9 ? '9+' : downloadQueueCount}
+                </Text>
+              </View>
+            ) : hasDownloadErrors ? (
+              <View style={styles.queueErrorDot} />
+            ) : null}
+          </TouchableOpacity>
           <View style={styles.notificationsButton} accessibilityLabel="Notificações">
             <Bell color="#FFFFFF" size={22} />
           </View>
@@ -97,12 +130,41 @@ const styles = StyleSheet.create({
   devButton: {
     width: 32,
     height: 32,
-    borderRadius: 16,
-    backgroundColor: '#262628',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.14)',
+  },
+  downloadQueueButton: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  queueBadge: {
+    position: 'absolute',
+    top: 1,
+    right: -2,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 3,
+    borderRadius: 8,
+    backgroundColor: '#FF0000',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  queueBadgeText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  queueErrorDot: {
+    position: 'absolute',
+    top: 4,
+    right: 2,
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#FF4E45',
   },
   notificationsButton: {
     width: 32,

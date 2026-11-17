@@ -1,3 +1,4 @@
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
@@ -10,6 +11,15 @@ import {
   getDownloadedTrackById,
   getDownloadedTracks,
   DownloadedTrack,
+  getPersistedDownloadQueue,
+  upsertPersistedDownloadQueueItem,
+  upsertPersistedDownloadQueueBatch,
+  updatePersistedDownloadQueueState,
+  resetInterruptedDownloadsToPending,
+  removePersistedDownloadQueueItem,
+  clearPersistedFinishedDownloads,
+  clearPersistedCompletedDownloads,
+  clearPersistedActiveDownloads,
 } from './database';
 
 export type { DownloadedTrack };
@@ -223,6 +233,18 @@ const DEFAULT_STREAM_DOWNLOAD_HEADERS: Record<string, string> = {
   Origin: 'https://www.youtube.com',
 };
 
+export class DownloadCancelledError extends Error {
+  constructor(trackId?: string) {
+    super(trackId ? `Download cancelado (${trackId})` : 'Download cancelado');
+    this.name = 'DownloadCancelledError';
+  }
+}
+
+export interface DownloadTrackFileOptions {
+  onResumableCreated?: (resumable: FileSystem.DownloadResumable) => void;
+  shouldAbort?: () => boolean;
+}
+
 /**
  * Realiza o download de uma faixa com suporte a Scoped Storage, gravação atômica (.part -> .m4a) e persistência SQLite.
  */
@@ -230,9 +252,14 @@ export async function downloadTrackFile(
   track: TrackSummary,
   streamUrl: string,
   onProgress?: (progressPercentage: number) => void,
-  headers?: Record<string, string>
+  headers?: Record<string, string>,
+  options?: DownloadTrackFileOptions
 ): Promise<LocalDownloadedTrack> {
   await ensureStorageDirectories();
+
+  if (options?.shouldAbort?.()) {
+    throw new DownloadCancelledError(track.id);
+  }
 
   // 1. Verificação prévia de capacidade de armazenamento livre
   try {
@@ -283,6 +310,12 @@ export async function downloadTrackFile(
       }
     }
   );
+  options?.onResumableCreated?.(downloadResumable);
+
+  if (options?.shouldAbort?.()) {
+    await FileSystem.deleteAsync(partAudioUri, { idempotent: true });
+    throw new DownloadCancelledError(track.id);
+  }
 
   let downloadResult: FileSystem.FileSystemDownloadResult | undefined;
   try {
@@ -290,7 +323,15 @@ export async function downloadTrackFile(
   } catch (downloadErr) {
     // Garante que nenhum fragmento corrompido permaneça no disco em caso de cancelamento/falha
     await FileSystem.deleteAsync(partAudioUri, { idempotent: true });
+    if (options?.shouldAbort?.()) {
+      throw new DownloadCancelledError(track.id);
+    }
     throw downloadErr;
+  }
+
+  if (options?.shouldAbort?.()) {
+    await FileSystem.deleteAsync(partAudioUri, { idempotent: true });
+    throw new DownloadCancelledError(track.id);
   }
 
   if (!downloadResult || !downloadResult.uri) {
@@ -321,6 +362,11 @@ export async function downloadTrackFile(
     throw new Error(
       `Download incompleto (${fileInfo.size} de ${expectedTotalBytes} bytes recebidos).`
     );
+  }
+
+  if (options?.shouldAbort?.()) {
+    await FileSystem.deleteAsync(partAudioUri, { idempotent: true });
+    throw new DownloadCancelledError(track.id);
   }
 
   // Promove atomicamente o arquivo temporário .part para .m4a final
@@ -469,16 +515,44 @@ export async function syncAndCleanStorage(): Promise<void> {
 
   // 2. Limpeza profunda de disco: remove resíduos (.part) e arquivos órfãos não catalogados
   try {
+    const nativeMod = getNativeDownloader();
+    const persistedQueue = nativeMod
+      ? await nativeMod.getQueueSnapshot().catch(() => [])
+      : await getPersistedDownloadQueue().catch(() => []);
+    const protectedQueueIds = new Set<string>();
+    for (const item of downloadQueue) {
+      if (
+        item.status === 'pending' ||
+        item.status === 'downloading' ||
+        item.status === 'completed'
+      ) {
+        protectedQueueIds.add(item.track.id);
+      }
+    }
+    for (const row of persistedQueue) {
+      if (
+        row.status === 'pending' ||
+        row.status === 'downloading' ||
+        row.status === 'completed'
+      ) {
+        protectedQueueIds.add(row.trackId);
+      }
+    }
+
     const audioFiles = await FileSystem.readDirectoryAsync(AUDIO_DIRECTORY);
     for (const filename of audioFiles) {
       if (filename.endsWith('.part')) {
-        await FileSystem.deleteAsync(`${AUDIO_DIRECTORY}${filename}`, { idempotent: true });
+        const videoId = filename.replace('.part', '');
+        if (!protectedQueueIds.has(videoId)) {
+          await FileSystem.deleteAsync(`${AUDIO_DIRECTORY}${filename}`, { idempotent: true });
+        }
       } else if (filename.endsWith('.m4a')) {
         const videoId = filename.replace('.m4a', '');
-        const isQueued = downloadQueue.some(
-          (i) => i.track.id === videoId && (i.status === 'pending' || i.status === 'downloading')
-        );
-        if (!validDbIds.has(videoId) && !isQueued && !(await isDownloadedInDb(videoId))) {
+        if (
+          !validDbIds.has(videoId) &&
+          !protectedQueueIds.has(videoId) &&
+          !(await isDownloadedInDb(videoId))
+        ) {
           await FileSystem.deleteAsync(`${AUDIO_DIRECTORY}${filename}`, { idempotent: true });
         }
       }
@@ -487,10 +561,13 @@ export async function syncAndCleanStorage(): Promise<void> {
     const thumbFiles = await FileSystem.readDirectoryAsync(THUMBNAIL_DIRECTORY);
     for (const filename of thumbFiles) {
       if (filename.includes('.part')) {
-        await FileSystem.deleteAsync(`${THUMBNAIL_DIRECTORY}${filename}`, { idempotent: true });
+        const videoId = filename.replace('.part.jpg', '').replace('.part', '');
+        if (!protectedQueueIds.has(videoId)) {
+          await FileSystem.deleteAsync(`${THUMBNAIL_DIRECTORY}${filename}`, { idempotent: true });
+        }
       } else if (filename.endsWith('.jpg')) {
         const videoId = filename.replace('.jpg', '');
-        if (!validDbIds.has(videoId)) {
+        if (!validDbIds.has(videoId) && !protectedQueueIds.has(videoId)) {
           await FileSystem.deleteAsync(`${THUMBNAIL_DIRECTORY}${filename}`, { idempotent: true });
         }
       }
@@ -520,6 +597,10 @@ export async function deleteDownloadedTrack(videoId: string): Promise<void> {
   downloadQueue = downloadQueue.filter(
     (item) => item.track.id !== videoId || item.status === 'downloading'
   );
+  const nativeMod = getNativeDownloader();
+  await enqueuePersistenceOp(() =>
+    nativeMod ? nativeMod.cancelTrack(videoId) : removePersistedDownloadQueueItem(videoId)
+  );
   if (downloadQueue.length !== prevLen) {
     notifyQueueListeners();
   }
@@ -536,9 +617,345 @@ export interface DownloadQueueItem {
   error?: string;
 }
 
+export type EnqueueResult = 'started' | 'queued' | 'already_queued';
+
+export interface EnqueuePlaylistResult {
+  enqueuedCount: number;
+  alreadyQueuedCount: number;
+  hadActiveBefore: boolean;
+}
+
+interface ActiveDownloadHandle {
+  item: DownloadQueueItem;
+  resumable: FileSystem.DownloadResumable | null;
+  cancelled: boolean;
+}
+
 let downloadQueue: DownloadQueueItem[] = [];
 let isProcessingQueue = false;
+let activeDownloadHandle: ActiveDownloadHandle | null = null;
 const queueListeners = new Set<(queue: DownloadQueueItem[]) => void>();
+let queuePersistenceChain: Promise<void> = Promise.resolve();
+let attachedNativeModule: NativeBackgroundDownloaderSpec | null = null;
+
+interface NativePersistedQueueRow {
+  trackId: string;
+  title: string;
+  artist: string;
+  duration: number;
+  thumbnailUrl?: string;
+  status: 'pending' | 'downloading' | 'completed' | 'error';
+  progress: number;
+  error?: string | null;
+  localAudioUri?: string | null;
+  localArtworkUri?: string | null;
+  downloadedAt?: number | null;
+}
+
+interface NativeBackgroundDownloaderSpec {
+  enqueueItems: (
+    items: Array<{
+      trackId: string;
+      title: string;
+      artist: string;
+      duration: number;
+      thumbnailUrl: string;
+    }>
+  ) => Promise<void>;
+  getQueueSnapshot: () => Promise<NativePersistedQueueRow[]>;
+  enqueueSync: () => Promise<void>;
+  cancelTrack: (trackId: string) => Promise<void>;
+  cancelAll: () => Promise<void>;
+  clearFinished: () => Promise<void>;
+  clearCompleted: () => Promise<void>;
+  isWorkerActive?: () => Promise<boolean>;
+}
+
+function enqueuePersistenceOp(task: () => Promise<void>): Promise<void> {
+  const next = queuePersistenceChain.then(task, task).catch((err) => {
+    console.warn('[Storage] Erro ao persistir fila de downloads:', err);
+  });
+  queuePersistenceChain = next;
+  return next;
+}
+
+function getNativeDownloader(): NativeBackgroundDownloaderSpec | null {
+  if (Platform.OS !== 'android') return null;
+  if (audioStreamResolver !== defaultAudioStreamResolver) return null;
+  const mod = (NativeModules as Record<string, any> | undefined)?.SonaryBackgroundDownloader;
+  if (
+    mod &&
+    typeof mod.enqueueSync === 'function' &&
+    typeof mod.enqueueItems === 'function' &&
+    typeof mod.getQueueSnapshot === 'function'
+  ) {
+    return mod as NativeBackgroundDownloaderSpec;
+  }
+  return null;
+}
+
+function attachNativeDownloadListeners(): void {
+  const nativeMod = getNativeDownloader();
+  if (!nativeMod || attachedNativeModule === nativeMod || typeof NativeEventEmitter !== 'function') {
+    return;
+  }
+
+  attachedNativeModule = nativeMod;
+  try {
+    const emitter = new NativeEventEmitter(nativeMod as any);
+    emitter.addListener('SonaryDownloadQueueChanged', (payload: any) => {
+      if (!payload || typeof payload !== 'object') return;
+      const {
+        type,
+        trackId,
+        title,
+        artist,
+        duration,
+        thumbnailUrl,
+        progress,
+        error,
+        localAudioUri,
+        localArtworkUri,
+        downloadedAt,
+      } = payload;
+
+      if (type === 'sync') {
+        void hydrateDownloadQueue();
+        return;
+      }
+
+      if (!trackId) return;
+
+      if (type === 'progress') {
+        const target = downloadQueue.find((i) => i.track.id === trackId);
+        if (target) {
+          target.status = 'downloading';
+          target.progress = typeof progress === 'number' ? progress : target.progress;
+          notifyQueueListeners();
+        } else {
+          void hydrateDownloadQueue();
+        }
+        return;
+      }
+
+      if (type === 'completed') {
+        const existingTarget = downloadQueue.find((i) => i.track.id === trackId);
+        const resolvedAudioUri =
+          typeof localAudioUri === 'string' && localAudioUri
+            ? localAudioUri
+            : `${AUDIO_DIRECTORY}${trackId}.m4a`;
+        const resolvedThumb =
+          (typeof localArtworkUri === 'string' && localArtworkUri) ||
+          (typeof thumbnailUrl === 'string' && thumbnailUrl) ||
+          existingTarget?.track.thumbnailUrl ||
+          '';
+
+        void enqueuePersistenceOp(async () => {
+          await saveDownloadedTrack({
+            id: trackId,
+            title:
+              typeof title === 'string' && title
+                ? title
+                : existingTarget?.track.title || 'Música',
+            artist:
+              typeof artist === 'string' && artist
+                ? artist
+                : existingTarget?.track.artist || 'Artista',
+            duration:
+              typeof duration === 'number' && Number.isFinite(duration)
+                ? duration
+                : existingTarget?.track.duration || 0,
+            thumbnailUrl: resolvedThumb,
+            localUri: resolvedAudioUri,
+            downloadedAt:
+              typeof downloadedAt === 'number' && Number.isFinite(downloadedAt)
+                ? downloadedAt
+                : Date.now(),
+          });
+          setLocalUriCache(trackId, resolvedAudioUri);
+          const target = downloadQueue.find((i) => i.track.id === trackId);
+          if (target) {
+            target.status = 'completed';
+            target.progress = 1;
+            target.error = undefined;
+            notifyQueueListeners();
+          } else {
+            await hydrateDownloadQueue();
+          }
+        });
+        return;
+      }
+
+      if (type === 'error') {
+        const target = downloadQueue.find((i) => i.track.id === trackId);
+        if (target) {
+          target.status = 'error';
+          target.error = typeof error === 'string' ? error : 'Falha no download';
+          notifyQueueListeners();
+        } else {
+          void hydrateDownloadQueue();
+        }
+        return;
+      }
+
+      if (type === 'cancelled') {
+        const prevLen = downloadQueue.length;
+        downloadQueue = downloadQueue.filter((i) => i.track.id !== trackId);
+        if (downloadQueue.length !== prevLen) {
+          notifyQueueListeners();
+        }
+      }
+    });
+  } catch (err) {
+    console.warn('[Storage] Falha ao registrar eventos nativos de download:', err);
+  }
+}
+
+function scheduleQueueExecution(): void {
+  attachNativeDownloadListeners();
+  const nativeMod = getNativeDownloader();
+  if (nativeMod) {
+    void queuePersistenceChain.then(() => nativeMod.enqueueSync()).catch((err) => {
+      console.warn('[Storage] Falha no worker nativo, executando fallback JS:', err);
+      void processQueue();
+    });
+    return;
+  }
+  void processQueue();
+}
+
+/**
+ * Hidrata a fila de downloads persistida (nativo `sonary_downloads.db` ou SQLite JS fallback)
+ * e reconcilia faixas concluídas para `downloaded_tracks` no `sonary.db`.
+ */
+export async function hydrateDownloadQueue(): Promise<DownloadQueueItem[]> {
+  attachNativeDownloadListeners();
+  await queuePersistenceChain;
+
+  const nativeMod = getNativeDownloader();
+  let workerRunning = false;
+  if (nativeMod && typeof nativeMod.isWorkerActive === 'function') {
+    workerRunning = await nativeMod.isWorkerActive().catch(() => false);
+  }
+
+  if (nativeMod) {
+    const rows = await nativeMod.getQueueSnapshot().catch(() => [] as NativePersistedQueueRow[]);
+    for (const row of rows) {
+      if (row.status === 'completed') {
+        const localAudioUri = row.localAudioUri || `${AUDIO_DIRECTORY}${row.trackId}.m4a`;
+        const alreadyInDb = await isDownloadedInDb(row.trackId).catch(() => false);
+        if (!alreadyInDb) {
+          const info = await FileSystem.getInfoAsync(localAudioUri).catch(() => ({
+            exists: false,
+            size: 0,
+          }));
+          if (info.exists && info.size > 10240) {
+            await saveDownloadedTrack({
+              id: row.trackId,
+              title: row.title || 'Música',
+              artist: row.artist || 'Artista',
+              duration: row.duration || 0,
+              thumbnailUrl: row.localArtworkUri || row.thumbnailUrl || '',
+              localUri: localAudioUri,
+              downloadedAt: row.downloadedAt || Date.now(),
+            }).catch(() => {});
+            setLocalUriCache(row.trackId, localAudioUri);
+          }
+        }
+      }
+    }
+
+    const liveProgressById = new Map<string, DownloadQueueItem>();
+    for (const item of downloadQueue) {
+      if (item.status === 'downloading') {
+        liveProgressById.set(item.track.id, item);
+      }
+    }
+
+    downloadQueue = rows.map((row) => {
+      const live = liveProgressById.get(row.trackId);
+      const status =
+        row.status === 'downloading' && !workerRunning
+          ? 'pending'
+          : row.status;
+      return {
+        track: {
+          id: row.trackId,
+          title: row.title || 'Música',
+          artist: row.artist || 'Artista',
+          duration: row.duration || 0,
+          formattedDuration: formatDurationSimple(row.duration || 0),
+          thumbnailUrl: row.thumbnailUrl || '',
+        },
+        status,
+        progress:
+          status === 'downloading' && live && live.progress > row.progress
+            ? live.progress
+            : row.progress || 0,
+        error: row.error || undefined,
+      };
+    });
+
+    notifyQueueListeners();
+
+    if (downloadQueue.some((i) => i.status === 'pending')) {
+      scheduleQueueExecution();
+    }
+    return getDownloadQueue();
+  }
+
+  if (!isProcessingQueue) {
+    await resetInterruptedDownloadsToPending().catch(() => {});
+  }
+
+  const rows = await getPersistedDownloadQueue().catch(() => []);
+  const liveProgressById = new Map<string, DownloadQueueItem>();
+  for (const item of downloadQueue) {
+    if (item.status === 'downloading') {
+      liveProgressById.set(item.track.id, item);
+    }
+  }
+
+  downloadQueue = rows.map((row) => {
+    const live = liveProgressById.get(row.trackId);
+    const status =
+      row.status === 'downloading' && !isProcessingQueue
+        ? 'pending'
+        : row.status;
+    return {
+      track: {
+        id: row.trackId,
+        title: row.title,
+        artist: row.artist,
+        duration: row.duration,
+        formattedDuration: formatDurationSimple(row.duration),
+        thumbnailUrl: row.thumbnailUrl || '',
+      },
+      status,
+      progress:
+        status === 'downloading' && live && live.progress > row.progress
+          ? live.progress
+          : row.progress || 0,
+      error: row.error || undefined,
+    };
+  });
+
+  notifyQueueListeners();
+
+  const hasPending = downloadQueue.some((i) => i.status === 'pending');
+  if (hasPending) {
+    scheduleQueueExecution();
+  }
+
+  return getDownloadQueue();
+}
+
+function formatDurationSimple(seconds: number): string {
+  if (!seconds || seconds <= 0) return '0:00';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+}
 
 export interface ResolvedDownloadStream {
   streamUrl: string;
@@ -588,60 +1005,239 @@ export function getDownloadQueue(): DownloadQueueItem[] {
   return downloadQueue.map((item) => ({ ...item }));
 }
 
+function pushOrReplacePending(track: TrackSummary): void {
+  downloadQueue = downloadQueue.filter((i) => i.track.id !== track.id);
+  downloadQueue.push({
+    track,
+    status: 'pending',
+    progress: 0,
+  });
+}
+
 /**
  * Enfileira uma faixa individual para download em background.
  */
-export function enqueueDownload(track: TrackSummary): void {
-  if (!track || !track.id) return;
+export function enqueueDownload(track: TrackSummary): EnqueueResult {
+  if (!track || !track.id) return 'already_queued';
   const existing = downloadQueue.find((i) => i.track.id === track.id);
   if (existing && (existing.status === 'pending' || existing.status === 'downloading')) {
-    return;
+    return 'already_queued';
   }
-  if (existing) {
-    existing.track = track;
-    existing.status = 'pending';
-    existing.progress = 0;
-    existing.error = undefined;
+  const hadActiveOrPending = downloadQueue.some(
+    (i) => i.status === 'pending' || i.status === 'downloading'
+  );
+  pushOrReplacePending(track);
+  const nativeMod = getNativeDownloader();
+  if (nativeMod) {
+    enqueuePersistenceOp(() =>
+      nativeMod.enqueueItems([
+        {
+          trackId: track.id,
+          title: track.title,
+          artist: track.artist,
+          duration: track.duration,
+          thumbnailUrl: track.thumbnailUrl || '',
+        },
+      ])
+    );
   } else {
-    downloadQueue.push({
-      track,
-      status: 'pending',
-      progress: 0,
-    });
+    enqueuePersistenceOp(() =>
+      upsertPersistedDownloadQueueItem({
+        trackId: track.id,
+        title: track.title,
+        artist: track.artist,
+        duration: track.duration,
+        thumbnailUrl: track.thumbnailUrl,
+        status: 'pending',
+        progress: 0,
+      })
+    );
   }
   notifyQueueListeners();
-  processQueue();
+  scheduleQueueExecution();
+  return hadActiveOrPending ? 'queued' : 'started';
 }
 
 /**
  * Enfileira múltiplas faixas (ex: uma playlist inteira) para download sequencial.
  */
-export function enqueuePlaylistDownload(tracks: TrackSummary[]): void {
-  if (!tracks || tracks.length === 0) return;
+export function enqueuePlaylistDownload(tracks: TrackSummary[]): EnqueuePlaylistResult {
+  if (!tracks || tracks.length === 0) {
+    return { enqueuedCount: 0, alreadyQueuedCount: 0, hadActiveBefore: false };
+  }
+  const hadActiveBefore = downloadQueue.some(
+    (i) => i.status === 'pending' || i.status === 'downloading'
+  );
+  let enqueuedCount = 0;
+  let alreadyQueuedCount = 0;
+  const persistedBatch: Array<{
+    trackId: string;
+    title: string;
+    artist: string;
+    duration: number;
+    thumbnailUrl?: string;
+    status: 'pending';
+    progress: number;
+  }> = [];
+
   for (const track of tracks) {
     if (!track || !track.id) continue;
     const existing = downloadQueue.find((i) => i.track.id === track.id);
-    if (!existing || (existing.status !== 'pending' && existing.status !== 'downloading')) {
-      if (existing) {
-        existing.track = track;
-        existing.status = 'pending';
-        existing.progress = 0;
-        existing.error = undefined;
-      } else {
-        downloadQueue.push({
-          track,
-          status: 'pending',
-          progress: 0,
-        });
-      }
+    if (existing && (existing.status === 'pending' || existing.status === 'downloading')) {
+      alreadyQueuedCount += 1;
+      continue;
+    }
+    pushOrReplacePending(track);
+    persistedBatch.push({
+      trackId: track.id,
+      title: track.title,
+      artist: track.artist,
+      duration: track.duration,
+      thumbnailUrl: track.thumbnailUrl,
+      status: 'pending',
+      progress: 0,
+    });
+    enqueuedCount += 1;
+  }
+
+  if (enqueuedCount > 0) {
+    const nativeMod = getNativeDownloader();
+    if (nativeMod) {
+      enqueuePersistenceOp(() =>
+        nativeMod.enqueueItems(
+          persistedBatch.map((b) => ({
+            trackId: b.trackId,
+            title: b.title,
+            artist: b.artist,
+            duration: b.duration,
+            thumbnailUrl: b.thumbnailUrl || '',
+          }))
+        )
+      );
+    } else {
+      enqueuePersistenceOp(() => upsertPersistedDownloadQueueBatch(persistedBatch));
+    }
+    notifyQueueListeners();
+    scheduleQueueExecution();
+  }
+  return { enqueuedCount, alreadyQueuedCount, hadActiveBefore };
+}
+
+/**
+ * Cancela um item específico da fila (pendente, baixando, erro ou concluído).
+ */
+export async function cancelDownload(videoId: string): Promise<void> {
+  if (!videoId) return;
+  const target = downloadQueue.find((i) => i.track.id === videoId);
+  const nativeMod = getNativeDownloader();
+  if (!target) {
+    if (nativeMod) {
+      await enqueuePersistenceOp(() => nativeMod.cancelTrack(videoId));
+    } else {
+      await enqueuePersistenceOp(() => removePersistedDownloadQueueItem(videoId));
+    }
+    return;
+  }
+
+  downloadQueue = downloadQueue.filter((i) => i !== target);
+  if (activeDownloadHandle && activeDownloadHandle.item === target) {
+    activeDownloadHandle.cancelled = true;
+    const resumable = activeDownloadHandle.resumable;
+    if (resumable && typeof resumable.cancelAsync === 'function') {
+      resumable.cancelAsync().catch(() => {});
     }
   }
   notifyQueueListeners();
-  processQueue();
+
+  if (nativeMod) {
+    await enqueuePersistenceOp(() => nativeMod.cancelTrack(videoId));
+  } else {
+    await enqueuePersistenceOp(() => removePersistedDownloadQueueItem(videoId));
+  }
 }
 
-async function resolveAndDownloadTrack(item: DownloadQueueItem): Promise<void> {
+/**
+ * Cancela todos os downloads pendentes e o download ativo em andamento.
+ */
+export async function cancelAllDownloads(): Promise<void> {
+  const activeHandle = activeDownloadHandle;
+  const hadAny = downloadQueue.some(
+    (i) => i.status === 'pending' || i.status === 'downloading'
+  );
+  downloadQueue = downloadQueue.filter(
+    (i) => i.status !== 'pending' && i.status !== 'downloading'
+  );
+  if (activeHandle) {
+    activeHandle.cancelled = true;
+    if (activeHandle.resumable && typeof activeHandle.resumable.cancelAsync === 'function') {
+      activeHandle.resumable.cancelAsync().catch(() => {});
+    }
+  }
+  if (hadAny || activeHandle) {
+    notifyQueueListeners();
+  }
+  const nativeMod = getNativeDownloader();
+  if (nativeMod) {
+    await enqueuePersistenceOp(() => nativeMod.cancelAll());
+  } else {
+    await enqueuePersistenceOp(() => clearPersistedActiveDownloads());
+  }
+}
+
+/**
+ * Reenfileira uma faixa que falhou para nova tentativa de download.
+ */
+export function retryDownload(videoId: string): boolean {
+  if (!videoId) return false;
+  const existing = downloadQueue.find((i) => i.track.id === videoId);
+  if (!existing || existing.status !== 'error') {
+    return false;
+  }
+  pushOrReplacePending(existing.track);
+  const nativeMod = getNativeDownloader();
+  if (nativeMod) {
+    enqueuePersistenceOp(() =>
+      nativeMod.enqueueItems([
+        {
+          trackId: existing.track.id,
+          title: existing.track.title,
+          artist: existing.track.artist,
+          duration: existing.track.duration,
+          thumbnailUrl: existing.track.thumbnailUrl || '',
+        },
+      ])
+    );
+  } else {
+    enqueuePersistenceOp(() =>
+      upsertPersistedDownloadQueueItem({
+        trackId: existing.track.id,
+        title: existing.track.title,
+        artist: existing.track.artist,
+        duration: existing.track.duration,
+        thumbnailUrl: existing.track.thumbnailUrl,
+        status: 'pending',
+        progress: 0,
+        error: null,
+      })
+    );
+  }
+  notifyQueueListeners();
+  scheduleQueueExecution();
+  return true;
+}
+
+async function resolveAndDownloadTrack(
+  item: DownloadQueueItem,
+  handle: ActiveDownloadHandle
+): Promise<void> {
+  if (handle.cancelled) {
+    throw new DownloadCancelledError(item.track.id);
+  }
   const streamInfo = await audioStreamResolver(item.track.id);
+  if (handle.cancelled) {
+    throw new DownloadCancelledError(item.track.id);
+  }
+
   const headers: Record<string, string> | undefined = streamInfo.headers
     ? streamInfo.headers
     : streamInfo.userAgent
@@ -652,10 +1248,20 @@ async function resolveAndDownloadTrack(item: DownloadQueueItem): Promise<void> {
     item.track,
     streamInfo.streamUrl,
     (progress) => {
+      if (handle.cancelled) return;
       item.progress = progress;
       notifyQueueListeners();
     },
-    headers
+    headers,
+    {
+      shouldAbort: () => handle.cancelled,
+      onResumableCreated: (resumable) => {
+        handle.resumable = resumable;
+        if (handle.cancelled && typeof resumable.cancelAsync === 'function') {
+          resumable.cancelAsync().catch(() => {});
+        }
+      },
+    }
   );
 }
 
@@ -671,38 +1277,86 @@ async function processQueue(): Promise<void> {
       const nextItem = downloadQueue.find((i) => i.status === 'pending');
       if (!nextItem) break;
 
+      const handle: ActiveDownloadHandle = {
+        item: nextItem,
+        resumable: null,
+        cancelled: false,
+      };
+      activeDownloadHandle = handle;
+
       const alreadyDownloaded = await isTrackDownloaded(nextItem.track.id);
+      if (handle.cancelled || !downloadQueue.includes(nextItem)) {
+        if (activeDownloadHandle === handle) activeDownloadHandle = null;
+        continue;
+      }
       if (alreadyDownloaded) {
         await registerLocalTrackIfMissing(nextItem.track);
         nextItem.status = 'completed';
         nextItem.progress = 1;
+        enqueuePersistenceOp(() =>
+          updatePersistedDownloadQueueState(nextItem.track.id, 'completed', 1, null)
+        );
+        if (activeDownloadHandle === handle) activeDownloadHandle = null;
         notifyQueueListeners();
         continue;
       }
 
       nextItem.status = 'downloading';
       nextItem.progress = 0;
+      enqueuePersistenceOp(() =>
+        updatePersistedDownloadQueueState(nextItem.track.id, 'downloading', 0, null)
+      );
       notifyQueueListeners();
 
       try {
         try {
-          await resolveAndDownloadTrack(nextItem);
+          await resolveAndDownloadTrack(nextItem, handle);
         } catch (firstErr) {
+          if (firstErr instanceof DownloadCancelledError || handle.cancelled) {
+            throw firstErr;
+          }
           // Invalida possível URL expirada no streamCache e tenta uma vez com stream novo
           api.invalidateStreamCache(nextItem.track.id);
           nextItem.progress = 0;
-          await resolveAndDownloadTrack(nextItem);
+          await resolveAndDownloadTrack(nextItem, handle);
+        }
+        if (handle.cancelled) {
+          continue;
         }
         nextItem.status = 'completed';
         nextItem.progress = 1;
+        enqueuePersistenceOp(() =>
+          updatePersistedDownloadQueueState(nextItem.track.id, 'completed', 1, null)
+        );
       } catch (err) {
+        if (err instanceof DownloadCancelledError || handle.cancelled) {
+          downloadQueue = downloadQueue.filter((i) => i !== nextItem);
+          enqueuePersistenceOp(() =>
+            removePersistedDownloadQueueItem(nextItem.track.id)
+          );
+          notifyQueueListeners();
+          continue;
+        }
         nextItem.status = 'error';
         nextItem.error = err instanceof Error ? err.message : String(err);
+        enqueuePersistenceOp(() =>
+          updatePersistedDownloadQueueState(
+            nextItem.track.id,
+            'error',
+            nextItem.progress,
+            nextItem.error || 'Erro desconhecido'
+          )
+        );
         console.warn('[Storage] Falha no download da faixa:', nextItem.track.id, nextItem.error);
+      } finally {
+        if (activeDownloadHandle === handle) {
+          activeDownloadHandle = null;
+        }
       }
       notifyQueueListeners();
     }
   } finally {
+    activeDownloadHandle = null;
     isProcessingQueue = false;
   }
 }
@@ -712,6 +1366,28 @@ async function processQueue(): Promise<void> {
  */
 export function clearCompletedDownloads(): void {
   downloadQueue = downloadQueue.filter((i) => i.status !== 'completed');
+  const nativeMod = getNativeDownloader();
+  if (nativeMod) {
+    enqueuePersistenceOp(() => nativeMod.clearCompleted());
+  } else {
+    enqueuePersistenceOp(() => clearPersistedCompletedDownloads());
+  }
+  notifyQueueListeners();
+}
+
+/**
+ * Limpa itens concluídos e com erro da fila.
+ */
+export function clearFinishedDownloads(): void {
+  downloadQueue = downloadQueue.filter(
+    (i) => i.status !== 'completed' && i.status !== 'error'
+  );
+  const nativeMod = getNativeDownloader();
+  if (nativeMod) {
+    enqueuePersistenceOp(() => nativeMod.clearFinished());
+  } else {
+    enqueuePersistenceOp(() => clearPersistedFinishedDownloads());
+  }
   notifyQueueListeners();
 }
 

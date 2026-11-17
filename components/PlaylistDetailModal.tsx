@@ -21,6 +21,7 @@ import {
   ArrowUpDown,
   ChevronDown,
   ChevronUp,
+  Clock,
   Download,
   Globe,
   Heart,
@@ -91,6 +92,7 @@ export interface PlaylistDetailModalProps {
   onAddToQueue?: (track: TrackSummary) => void;
   onAddToPlaylist?: (track: TrackSummary) => void;
   onDownloadTrack?: (track: TrackSummary) => void;
+  onShowToast?: (message: string, variant?: 'success' | 'error') => void;
   onPlaylistUpdated?: () => void;
   onPlaylistDeleted?: (playlistId: string) => void;
 }
@@ -120,6 +122,7 @@ interface PlaylistTrackRowProps {
   isPlaying: boolean;
   isDownloaded: boolean;
   isDownloading: boolean;
+  isQueued: boolean;
   downloadProgress: number;
   isReordering: boolean;
   onPressTrack: (item: PlaylistTrackItem, index: number) => void;
@@ -136,6 +139,7 @@ const PlaylistTrackRow = React.memo<PlaylistTrackRowProps>(
     isPlaying,
     isDownloaded,
     isDownloading,
+    isQueued,
     downloadProgress,
     isReordering,
     onPressTrack,
@@ -207,10 +211,17 @@ const PlaylistTrackRow = React.memo<PlaylistTrackRowProps>(
           />
         </View>
 
-        {/* Progresso de download ativo ou duração da música centralizada verticalmente */}
+        {/* Progresso de download ativo, status na fila ou duração da música */}
         {isDownloading ? (
           <View style={styles.downloadingIndicator} accessibilityLabel="Baixando música">
             <CircularDownloadProgress progress={downloadProgress} />
+          </View>
+        ) : isQueued && !isDownloaded ? (
+          <View style={styles.queuedIndicator} accessibilityLabel="Na fila de downloads">
+            <Clock color="#AAAAAA" size={13} />
+            <Text style={styles.queuedIndicatorText} numberOfLines={1}>
+              Na fila
+            </Text>
           </View>
         ) : (
           <Text style={styles.trackDuration} numberOfLines={1}>
@@ -252,6 +263,7 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
   onAddToQueue,
   onAddToPlaylist,
   onDownloadTrack,
+  onShowToast,
   onPlaylistUpdated,
   onPlaylistDeleted,
 }) => {
@@ -276,6 +288,7 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(
     () => !initialCached && !hasInitialPreview
   );
+  const [loadError, setLoadError] = useState<boolean>(false);
   const [showOptionsSheet, setShowOptionsSheet] = useState<boolean>(false);
   const [showEditModal, setShowEditModal] = useState<boolean>(false);
   const [pendingCropAsset, setPendingCropAsset] = useState<PickedCoverAsset | null>(null);
@@ -304,12 +317,14 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
   const loadDetails = async (silent = false) => {
     if (!playlistId) return;
     try {
+      setLoadError(false);
       if (!silent) {
         setIsLoading(true);
       }
       const data = await getPlaylistById(playlistId);
       setPlaylist(data);
     } catch (err) {
+      setLoadError(true);
       console.error('[PlaylistDetailModal] Falha ao carregar detalhes:', err);
     } finally {
       setIsLoading(false);
@@ -327,6 +342,7 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
       setIsReordering(false);
       setSearchQuery('');
       setMenuItem(null);
+      setLoadError(false);
       contentOpacity.setValue(0);
       contentTranslateY.setValue(14);
       const cached = getCachedPlaylistById(playlistId);
@@ -352,6 +368,7 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
       contentOpacity.setValue(0);
       contentTranslateY.setValue(14);
       setMenuItem(null);
+      setLoadError(false);
       setPlaylist(null);
     }
     return () => {
@@ -409,10 +426,10 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
   useBackHandler(
     Boolean(
       visible &&
-        !showOptionsSheet &&
-        !showEditModal &&
-        !pendingCropAsset &&
-        !menuItem
+      !showOptionsSheet &&
+      !showEditModal &&
+      !pendingCropAsset &&
+      !menuItem
     ),
     () => {
       if (isReordering) {
@@ -477,7 +494,12 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
 
   const handleDownloadAll = () => {
     if (!playlist || playlist.tracks.length === 0) return;
-    const summaries: TrackSummary[] = playlist.tracks.map((t) => ({
+    const missingTracks = playlist.tracks.filter((t) => !isTrackDownloaded(t));
+    if (missingTracks.length === 0) {
+      onShowToast?.('Todas as músicas da playlist já estão salvas em Baixadas', 'success');
+      return;
+    }
+    const summaries: TrackSummary[] = missingTracks.map((t) => ({
       id: t.trackId,
       title: t.title,
       artist: t.artist,
@@ -485,7 +507,18 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
       formattedDuration: formatSeconds(t.duration),
       thumbnailUrl: t.thumbnailUrl,
     }));
-    enqueuePlaylistDownload(summaries);
+    const result = enqueuePlaylistDownload(summaries);
+    if (result.enqueuedCount === 0) {
+      onShowToast?.('As músicas desta playlist já estão na fila de downloads', 'success');
+    } else if (result.enqueuedCount === 1 && !result.hadActiveBefore) {
+      onShowToast?.(`Baixando "${summaries[0].title}"...`, 'success');
+    } else {
+      onShowToast?.(
+        `${result.enqueuedCount} ${result.enqueuedCount === 1 ? 'música adicionada' : 'músicas adicionadas'
+        } à fila de downloads`,
+        'success'
+      );
+    }
   };
 
   const handlePickCustomCover = async () => {
@@ -629,8 +662,8 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
       const id = track.trackId || track.id;
       return Boolean(
         track.isDownloaded ||
-          downloadedTrackIds?.has(id) ||
-          completedDownloadIds.has(id)
+        downloadedTrackIds?.has(id) ||
+        completedDownloadIds.has(id)
       );
     },
     [downloadedTrackIds, completedDownloadIds]
@@ -658,8 +691,20 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
   const completedDownloadsForPlaylist = activeDownloadsForPlaylist.filter(
     (item) => item.status === 'completed'
   );
+  const pendingOrDownloadingIds = useMemo(
+    () => new Set(pendingOrDownloading.map((item) => item.track.id)),
+    [pendingOrDownloading]
+  );
+  const hasUnqueuedMissingTracks = useMemo(
+    () =>
+      (playlist?.tracks || []).some(
+        (t) => !isTrackDownloaded(t) && !pendingOrDownloadingIds.has(t.trackId || t.id)
+      ),
+    [playlist?.tracks, isTrackDownloaded, pendingOrDownloadingIds]
+  );
 
   const isDownloadingAll = pendingOrDownloading.length > 0;
+  const isDownloadAllDisabled = isDownloadingAll && !hasUnqueuedMissingTracks;
   const downloadStatusText = isDownloadingAll
     ? `${completedDownloadsForPlaylist.length}/${activeDownloadsForPlaylist.length}`
     : 'Baixar';
@@ -691,9 +736,20 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
     [downloadQueue]
   );
 
+  const queuedTrackIds = useMemo(
+    () =>
+      new Set(
+        downloadQueue
+          .filter((item) => item.status === 'pending')
+          .map((item) => item.track.id)
+      ),
+    [downloadQueue]
+  );
+
   const renderTrackItem = useCallback(
     ({ item, index }: { item: PlaylistTrackItem; index: number }) => {
       const isRowDownloading = activeDownloadingItem?.track.id === item.trackId;
+      const isRowQueued = queuedTrackIds.has(item.trackId);
       return (
         <PlaylistTrackRow
           item={item}
@@ -703,6 +759,7 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
           isPlaying={Boolean(isPlaying)}
           isDownloaded={isTrackDownloaded(item)}
           isDownloading={isRowDownloading}
+          isQueued={isRowQueued}
           downloadProgress={
             isRowDownloading ? Math.round((activeDownloadingItem?.progress || 0) * 100) : 0
           }
@@ -719,6 +776,7 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
       isPlaying,
       isTrackDownloaded,
       activeDownloadingItem,
+      queuedTrackIds,
       isReordering,
       handlePressTrack,
       handleMoveTrack,
@@ -767,42 +825,42 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
 
       {/* Top Navigation Bar transparente sobre o glow */}
       <View style={styles.topBar}>
-          <Animated.View
-            pointerEvents="none"
-            style={[styles.topBarScrim, { opacity: topBarScrimOpacity }]}
-          />
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.topBarScrim, { opacity: topBarScrimOpacity }]}
+        />
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={handleClose}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          accessibilityRole="button"
+          accessibilityLabel="Voltar"
+        >
+          <ArrowLeft color="#FFFFFF" size={24} />
+        </TouchableOpacity>
+
+        <Text style={styles.topBarTitle} numberOfLines={1}>
+          {playlist?.name || 'Playlist'}
+        </Text>
+
+        {playlist && !playlist.isSystem ? (
           <TouchableOpacity
-            style={styles.backButton}
-            onPress={handleClose}
+            style={styles.menuButton}
+            onPress={() => setShowOptionsSheet(true)}
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             accessibilityRole="button"
-            accessibilityLabel="Voltar"
+            accessibilityLabel="Mais opções da playlist"
           >
-            <ArrowLeft color="#FFFFFF" size={24} />
+            <MoreVertical color="#FFFFFF" size={22} />
           </TouchableOpacity>
+        ) : (
+          <View style={{ width: 24 }} />
+        )}
+      </View>
 
-          <Text style={styles.topBarTitle} numberOfLines={1}>
-            {playlist?.name || 'Playlist'}
-          </Text>
-
-          {playlist && !playlist.isSystem ? (
-            <TouchableOpacity
-              style={styles.menuButton}
-              onPress={() => setShowOptionsSheet(true)}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-              accessibilityRole="button"
-              accessibilityLabel="Mais opções da playlist"
-            >
-              <MoreVertical color="#FFFFFF" size={22} />
-            </TouchableOpacity>
-          ) : (
-            <View style={{ width: 24 }} />
-          )}
-        </View>
-
-        {isLoading ? null : playlist ? (
-          <View style={styles.listFadeWrap}>
-            <AnimatedFlatList
+      {isLoading ? null : playlist ? (
+        <View style={styles.listFadeWrap}>
+          <AnimatedFlatList
             style={styles.list}
             data={displayedTracks}
             keyExtractor={(item) => item.trackId}
@@ -860,10 +918,10 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
                       <TouchableOpacity
                         style={[
                           styles.circleActionItem,
-                          isDownloadingAll && styles.circleActionDisabled,
+                          isDownloadAllDisabled && styles.circleActionDisabled,
                         ]}
                         onPress={handleDownloadAll}
-                        disabled={isDownloadingAll}
+                        disabled={isDownloadAllDisabled}
                         activeOpacity={0.8}
                         accessibilityRole="button"
                         accessibilityLabel="Baixar todas as músicas da playlist"
@@ -938,26 +996,55 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
               </View>
             }
             ListEmptyComponent={
-              <View style={styles.emptyContainer}>
-                <ListMusic color="#717171" size={48} />
-                <Text style={styles.emptyTitle}>
-                  {searchQuery ? 'Nenhuma faixa encontrada' : 'Sua playlist está vazia'}
-                </Text>
-                <Text style={styles.emptySubtitle}>
-                  {searchQuery
-                    ? `Não foram encontrados resultados para "${searchQuery}".`
-                    : 'Pesquise por músicas online ou navegue nas baixadas e adicione faixas aqui.'}
-                </Text>
-              </View>
+              loadError && playlist.tracks.length === 0 ? (
+                <View style={styles.emptyContainer}>
+                  <ListMusic color="#717171" size={48} />
+                  <Text style={styles.emptyTitle}>Não foi possível carregar as faixas</Text>
+                  <TouchableOpacity
+                    style={styles.retryButton}
+                    onPress={() => loadDetails(false)}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Tentar novamente"
+                  >
+                    <Text style={styles.retryButtonText}>Tentar novamente</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View style={styles.emptyContainer}>
+                  <ListMusic color="#717171" size={48} />
+                  <Text style={styles.emptyTitle}>
+                    {searchQuery ? 'Nenhuma faixa encontrada' : 'Sua playlist está vazia'}
+                  </Text>
+                  <Text style={styles.emptySubtitle}>
+                    {searchQuery
+                      ? `Não foram encontrados resultados para "${searchQuery}".`
+                      : 'Pesquise por músicas online ou navegue nas baixadas e adicione faixas aqui.'}
+                  </Text>
+                </View>
+              )
             }
             renderItem={renderTrackItem}
-            />
-          </View>
-        ) : (
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyTitle}>Playlist não encontrada</Text>
-          </View>
-        )}
+          />
+        </View>
+      ) : (
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyTitle}>
+            {loadError ? 'Não foi possível carregar as faixas' : 'Playlist não encontrada'}
+          </Text>
+          {loadError && (
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={() => loadDetails(false)}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Tentar novamente"
+            >
+              <Text style={styles.retryButtonText}>Tentar novamente</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
 
       {/* Menu Bottom Sheet Contextual da Faixa (montado sob demanda) */}
       {playlist && menuItem && (
@@ -967,6 +1054,13 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
           durationText={formatSeconds(menuItem.track.duration)}
           isOfflineList={false}
           isDownloaded={isTrackDownloaded(menuItem.track)}
+          isDownloading={activeDownloadingItem?.track.id === menuItem.track.trackId}
+          isQueued={queuedTrackIds.has(menuItem.track.trackId)}
+          downloadProgress={
+            activeDownloadingItem?.track.id === menuItem.track.trackId
+              ? Math.round((activeDownloadingItem?.progress || 0) * 100)
+              : 0
+          }
           onClose={() => setMenuItem(null)}
           onPress={() =>
             onPlayTrack(menuItem.track, menuItem.index, playlist.tracks)
@@ -1003,6 +1097,7 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
         playlist={playlist}
         isReordering={isReordering}
         isDownloadingAll={isDownloadingAll}
+        hasUnqueuedMissingTracks={hasUnqueuedMissingTracks}
         onClose={() => setShowOptionsSheet(false)}
         onPickCustomCover={handlePickCustomCover}
         onResetCustomCover={handleResetCustomCover}
@@ -1243,6 +1338,18 @@ const styles = StyleSheet.create({
     marginTop: 6,
     lineHeight: 18,
   },
+  retryButton: {
+    marginTop: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+  },
+  retryButtonText: {
+    color: '#000000',
+    fontSize: 14,
+    fontWeight: '600',
+  },
   trackCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1307,6 +1414,21 @@ const styles = StyleSheet.create({
     marginRight: -4,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  queuedIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginLeft: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  queuedIndicatorText: {
+    color: '#AAAAAA',
+    fontSize: 11,
+    fontWeight: '600',
   },
   removeTrackButton: {
     padding: 8,

@@ -14,6 +14,7 @@ class InMemorySQLiteDatabase {
     this.playbackHistory = [];
     this.appSettings = new Map();
     this.lyricsCache = new Map();
+    this.downloadQueue = new Map();
     const now = Date.now();
     this.playlists.set('__favorites__', {
       id: '__favorites__',
@@ -245,6 +246,109 @@ class InMemorySQLiteDatabase {
       return { lastInsertRowId: 1, changes: 1 };
     }
 
+    // 14. Download queue persistence
+    if (cleanSql.includes('INSERT OR REPLACE INTO download_queue')) {
+      const [
+        trackId,
+        title,
+        artist,
+        duration,
+        thumbnailUrl,
+        status,
+        progress,
+        error,
+        streamUrl,
+        headersJson,
+        position,
+        createdAt,
+        updatedAt,
+      ] = params;
+      this.downloadQueue.set(trackId, {
+        trackId,
+        title,
+        artist,
+        duration,
+        thumbnailUrl: thumbnailUrl || '',
+        status,
+        progress,
+        error: error || null,
+        streamUrl: streamUrl || null,
+        headersJson: headersJson || null,
+        position,
+        createdAt,
+        updatedAt,
+      });
+      return { lastInsertRowId: 1, changes: 1 };
+    }
+
+    if (
+      cleanSql.includes("UPDATE download_queue SET status = 'pending', progress = 0") &&
+      cleanSql.includes("WHERE status = 'downloading'")
+    ) {
+      const [updatedAt] = params;
+      let changes = 0;
+      for (const item of this.downloadQueue.values()) {
+        if (item.status === 'downloading') {
+          item.status = 'pending';
+          item.progress = 0;
+          item.updatedAt = updatedAt;
+          changes += 1;
+        }
+      }
+      return { lastInsertRowId: 0, changes };
+    }
+
+    if (cleanSql.includes('UPDATE download_queue SET status = ?, progress = ?, error = ?, updatedAt = ? WHERE trackId = ?')) {
+      const [status, progress, error, updatedAt, trackId] = params;
+      const item = this.downloadQueue.get(trackId);
+      if (item) {
+        item.status = status;
+        item.progress = progress;
+        item.error = error || null;
+        item.updatedAt = updatedAt;
+      }
+      return { lastInsertRowId: 0, changes: item ? 1 : 0 };
+    }
+
+    if (cleanSql.includes('DELETE FROM download_queue WHERE trackId = ?')) {
+      const [trackId] = params;
+      const deleted = this.downloadQueue.delete(trackId);
+      return { lastInsertRowId: 0, changes: deleted ? 1 : 0 };
+    }
+
+    if (cleanSql.includes("DELETE FROM download_queue WHERE status IN ('completed', 'error')")) {
+      let changes = 0;
+      for (const [k, v] of this.downloadQueue.entries()) {
+        if (v.status === 'completed' || v.status === 'error') {
+          this.downloadQueue.delete(k);
+          changes += 1;
+        }
+      }
+      return { lastInsertRowId: 0, changes };
+    }
+
+    if (cleanSql.includes("DELETE FROM download_queue WHERE status = 'completed'")) {
+      let changes = 0;
+      for (const [k, v] of this.downloadQueue.entries()) {
+        if (v.status === 'completed') {
+          this.downloadQueue.delete(k);
+          changes += 1;
+        }
+      }
+      return { lastInsertRowId: 0, changes };
+    }
+
+    if (cleanSql.includes("DELETE FROM download_queue WHERE status IN ('pending', 'downloading')")) {
+      let changes = 0;
+      for (const [k, v] of this.downloadQueue.entries()) {
+        if (v.status === 'pending' || v.status === 'downloading') {
+          this.downloadQueue.delete(k);
+          changes += 1;
+        }
+      }
+      return { lastInsertRowId: 0, changes };
+    }
+
     return { lastInsertRowId: 0, changes: 0 };
   }
 
@@ -358,6 +462,14 @@ class InMemorySQLiteDatabase {
       return sorted.slice(0, limit);
     }
 
+    // 7. Persisted download queue list
+    if (cleanSql.includes('FROM download_queue')) {
+      return Array.from(this.downloadQueue.values()).sort((a, b) => {
+        if (a.position !== b.position) return a.position - b.position;
+        return a.createdAt - b.createdAt;
+      });
+    }
+
     return [];
   }
 
@@ -389,6 +501,11 @@ class InMemorySQLiteDatabase {
 
     // 4. Next position (MAX(position) + 1)
     if (cleanSql.includes('MAX(position)')) {
+      if (cleanSql.includes('FROM download_queue')) {
+        const items = Array.from(this.downloadQueue.values());
+        if (items.length === 0) return { nextPos: 0 };
+        return { nextPos: Math.max(...items.map((i) => i.position)) + 1 };
+      }
       const [playlistId] = params;
       const tracks = this.playlistTracks.filter((t) => t.playlistId === playlistId);
       if (tracks.length === 0) {

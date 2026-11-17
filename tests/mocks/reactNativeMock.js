@@ -394,6 +394,38 @@ const Keyboard = {
   },
 };
 
+const _nativeEventListeners = new Map();
+class NativeEventEmitter {
+  addListener(event, listener) {
+    if (!_nativeEventListeners.has(event)) {
+      _nativeEventListeners.set(event, new Set());
+    }
+    if (typeof listener === 'function') {
+      _nativeEventListeners.get(event).add(listener);
+    }
+    return {
+      remove: () => {
+        _nativeEventListeners.get(event)?.delete(listener);
+      },
+    };
+  }
+  removeAllListeners(event) {
+    if (event) {
+      _nativeEventListeners.delete(event);
+    } else {
+      _nativeEventListeners.clear();
+    }
+  }
+  static __emit(event, payload) {
+    for (const listener of Array.from(_nativeEventListeners.get(event) || [])) {
+      listener(payload);
+    }
+  }
+  static __reset() {
+    _nativeEventListeners.clear();
+  }
+}
+
 module.exports = {
   __esModule: true,
   View,
@@ -420,6 +452,7 @@ module.exports = {
   BackHandler,
   Keyboard,
   NativeModules: { Clipboard },
+  NativeEventEmitter,
   Animated,
   useWindowDimensions: () => Dimensions.get('window'),
 };

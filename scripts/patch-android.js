@@ -18,6 +18,7 @@ const crypto = require('crypto');
 const { execSync } = require('child_process');
 const { applyBlackSplashTheme } = require('../plugins/withAndroidStartupFix');
 const { patchTrackPlayerMusicService } = require('../plugins/withTrackPlayerFGS');
+const { applyBackgroundDownloadPatches } = require('../plugins/withBackgroundDownloads');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const ANDROID_DIR = path.join(PROJECT_ROOT, 'android');
@@ -361,6 +362,14 @@ if (patchTrackPlayerMusicService(PROJECT_ROOT)) {
   console.log('[SonaryPro] ✅ MusicService.kt: Proteção contra encerramento por notificação aplicada.');
 } else {
   console.log('[SonaryPro] ✔️ MusicService.kt: Já está protegido contra encerramento por notificação.');
+}
+
+// 4f. Patch: Motor nativo de downloads em segundo plano (WorkManager + FGS dataSync)
+if (applyBackgroundDownloadPatches(PROJECT_ROOT)) {
+  patchesApplied++;
+  console.log('[SonaryPro] ✅ Background Downloads: WorkManager, FGS dataSync e módulo nativo aplicados.');
+} else {
+  console.log('[SonaryPro] ✔️ Background Downloads: Já está atualizado.');
 }
 
 // 5. Configura adb reverse para o Metro Bundler na porta 8081 se houver dispositivo conectado

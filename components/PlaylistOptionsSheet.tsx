@@ -26,6 +26,7 @@ export interface PlaylistOptionsSheetProps {
   playlist: PlaylistDetail | null;
   isReordering: boolean;
   isDownloadingAll: boolean;
+  hasUnqueuedMissingTracks?: boolean;
   onClose: () => void;
   onPickCustomCover: () => void;
   onResetCustomCover: () => void;
@@ -40,6 +41,7 @@ export const PlaylistOptionsSheet: React.FC<PlaylistOptionsSheetProps> = ({
   playlist,
   isReordering,
   isDownloadingAll,
+  hasUnqueuedMissingTracks = false,
   onClose,
   onPickCustomCover,
   onResetCustomCover,
@@ -68,7 +70,8 @@ export const PlaylistOptionsSheet: React.FC<PlaylistOptionsSheetProps> = ({
   const trackCountLabel = `${playlist.trackCount} ${
     playlist.trackCount === 1 ? 'música' : 'músicas'
   }`;
-  const canDownload = playlist.tracks.length > 0 && !isDownloadingAll;
+  const isDownloadBlocked = isDownloadingAll && !hasUnqueuedMissingTracks;
+  const canDownload = playlist.tracks.length > 0 && !isDownloadBlocked;
   const canReorder = playlist.tracks.length > 1;
 
   return (
@@ -205,7 +208,7 @@ export const PlaylistOptionsSheet: React.FC<PlaylistOptionsSheetProps> = ({
               >
                 <Download color={canDownload ? '#FFFFFF' : '#717171'} size={21} />
                 <Text style={[styles.actionText, !canDownload && styles.actionTextDisabled]}>
-                  {isDownloadingAll ? 'Baixando playlist...' : 'Baixar playlist'}
+                  {isDownloadBlocked ? 'Baixando playlist...' : 'Baixar playlist'}
                 </Text>
               </TouchableOpacity>
 

@@ -70,6 +70,7 @@ function createDownloadResumable(url, fileUri, options, callback) {
     },
     pauseAsync: async () => {},
     resumeAsync: async () => {},
+    cancelAsync: async () => {},
   };
 }
 

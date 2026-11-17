@@ -41,6 +41,12 @@ const {
   enqueueDownload,
   enqueuePlaylistDownload,
   getDownloadQueue,
+  cancelDownload,
+  cancelAllDownloads,
+  retryDownload,
+  clearFinishedDownloads,
+  hydrateDownloadQueue,
+  syncAndCleanStorage,
   setAudioStreamResolver,
   getLocalTrackUri,
   deleteDownloadedTrack: removeOfflineTrackFromStorage,
@@ -50,6 +56,7 @@ const {
   pickPlaylistCoverFromGallery,
   PLAYLIST_COVERS_DIRECTORY,
 } = require('../services/storage');
+const { NativeEventEmitter, NativeModules, Platform } = require('react-native');
 const { PlaylistDetailModal } = require('../components/PlaylistDetailModal');
 const { getAllText } = require('./helpers/testUtils');
 const { dbInstance } = require('./mocks/sqliteMock');
@@ -816,5 +823,353 @@ test('Storage: processQueue forwards stream headers, retries once on transient f
     setAudioStreamResolver();
     fileSystemMock.resetFileSystem();
     clearStorageCache();
+  }
+});
+
+test('Storage: download queue supports sequential enqueue results, cancel pending/active, retry error, and clear finished', async () => {
+  await initDatabase();
+  const makeTrack = (id) => ({
+    id,
+    title: `Track ${id}`,
+    artist: 'Queue Artist',
+    duration: 180,
+    formattedDuration: '3:00',
+    thumbnailUrl: '',
+  });
+
+  let releaseActive = null;
+  let activeCancelledCount = 0;
+  let failRemainingCount = 2;
+
+  setAudioStreamResolver(async (id) => {
+    if (id === 'q_err_1' && failRemainingCount > 0) {
+      failRemainingCount -= 1;
+      throw new Error('Falha temporária de stream');
+    }
+    return { streamUrl: `https://mock.example.com/${id}.m4a` };
+  });
+
+  fileSystemMock.setCreateDownloadResumable((url, fileUri) => ({
+    downloadAsync: () =>
+      new Promise((resolve, reject) => {
+        if (fileUri.includes('q_act_1')) {
+          releaseActive = { resolve, reject };
+          return;
+        }
+        fileSystemMock.files.set(fileUri, { isDirectory: false, url, size: 1024 * 1024 });
+        resolve({ uri: fileUri, status: 200 });
+      }),
+    cancelAsync: async () => {
+      activeCancelledCount += 1;
+      releaseActive?.reject(new Error('Cancelled by user'));
+    },
+  }));
+
+  try {
+    assert.strictEqual(enqueueDownload(makeTrack('q_act_1')), 'started');
+    assert.strictEqual(enqueueDownload(makeTrack('q_pend_2')), 'queued');
+    assert.strictEqual(enqueueDownload(makeTrack('q_pend_3')), 'queued');
+    assert.strictEqual(enqueueDownload(makeTrack('q_pend_2')), 'already_queued');
+
+    // Wait for q_act_1 to reach downloadAsync
+    await new Promise((r) => setTimeout(r, 20));
+    let q = getDownloadQueue();
+    assert.strictEqual(q.find((i) => i.track.id === 'q_act_1')?.status, 'downloading');
+    assert.strictEqual(q.find((i) => i.track.id === 'q_pend_2')?.status, 'pending');
+    assert.strictEqual(q.find((i) => i.track.id === 'q_pend_3')?.status, 'pending');
+
+    // Cancel pending q_pend_2 without touching active q_act_1
+    await cancelDownload('q_pend_2');
+    q = getDownloadQueue();
+    assert.strictEqual(q.some((i) => i.track.id === 'q_pend_2'), false);
+    assert.strictEqual(q.find((i) => i.track.id === 'q_act_1')?.status, 'downloading');
+
+    // Cancel active q_act_1 -> must call cancelAsync, avoid SQLite save, and advance to q_pend_3
+    await cancelDownload('q_act_1');
+    await new Promise((r) => setTimeout(r, 30));
+
+    assert.strictEqual(activeCancelledCount, 1);
+    assert.strictEqual(await getDownloadedTrackById('q_act_1'), null);
+    assert.ok(await getDownloadedTrackById('q_pend_3'), 'Next pending track must complete after active cancel');
+    assert.strictEqual(getDownloadQueue().some((i) => i.track.id === 'q_act_1'), false);
+
+    // Enqueue failing track, confirm error state, then retryDownload succeeds
+    enqueueDownload(makeTrack('q_err_1'));
+    await new Promise((r) => setTimeout(r, 30));
+    assert.strictEqual(getDownloadQueue().find((i) => i.track.id === 'q_err_1')?.status, 'error');
+
+    assert.strictEqual(retryDownload('q_err_1'), true);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.strictEqual(getDownloadQueue().find((i) => i.track.id === 'q_err_1')?.status, 'completed');
+    assert.ok(await getDownloadedTrackById('q_err_1'));
+
+    clearFinishedDownloads();
+    assert.strictEqual(getDownloadQueue().length, 0);
+  } finally {
+    await cancelAllDownloads();
+    clearFinishedDownloads();
+    fileSystemMock.setCreateDownloadResumable(null);
+    setAudioStreamResolver();
+    fileSystemMock.resetFileSystem();
+    clearStorageCache();
+  }
+});
+
+test('Storage: download queue persists in SQLite, resets interrupted downloading rows, protects .part files, and resumes on hydrateDownloadQueue', async () => {
+  await initDatabase();
+  const {
+    upsertPersistedDownloadQueueItem,
+    getPersistedDownloadQueue,
+  } = require('../services/database');
+
+  try {
+    await upsertPersistedDownloadQueueItem({
+      trackId: 'bg_resume_1',
+      title: 'Interrupted Song',
+      artist: 'Artist R',
+      duration: 195,
+      thumbnailUrl: 'https://example.com/r1.jpg',
+      status: 'downloading',
+      progress: 0.45,
+    });
+
+    const partUri = `${fileSystemMock.documentDirectory}tracks/bg_resume_1.part`;
+    const orphanPartUri = `${fileSystemMock.documentDirectory}tracks/stale_orphan.part`;
+    fileSystemMock.files.set(partUri, { isDirectory: false, size: 1024 * 120 });
+    fileSystemMock.files.set(orphanPartUri, { isDirectory: false, size: 1024 * 50 });
+
+    // syncAndCleanStorage must keep .part of queued/interrupted tracks and delete orphan .part
+    await syncAndCleanStorage();
+    assert.strictEqual(fileSystemMock.files.has(partUri), true, 'Queued track .part must be preserved');
+    assert.strictEqual(fileSystemMock.files.has(orphanPartUri), false, 'Orphan .part must be removed');
+
+    setAudioStreamResolver(async (id) => ({
+      streamUrl: `https://mock.example.com/${id}.m4a`,
+    }));
+
+    const hydrated = await hydrateDownloadQueue();
+    assert.strictEqual(hydrated.length, 1);
+    assert.strictEqual(hydrated[0].track.id, 'bg_resume_1');
+
+    // Wait for resumed JS queue execution to finish downloading
+    await new Promise((r) => setTimeout(r, 40));
+
+    assert.ok(await getDownloadedTrackById('bg_resume_1'), 'Interrupted track must complete after hydration');
+    const persistedAfter = await getPersistedDownloadQueue();
+    assert.strictEqual(persistedAfter.find((r) => r.trackId === 'bg_resume_1')?.status, 'completed');
+  } finally {
+    await cancelAllDownloads();
+    clearFinishedDownloads();
+    setAudioStreamResolver();
+    fileSystemMock.resetFileSystem();
+    clearStorageCache();
+  }
+});
+
+test('Storage native Android downloader isolates queue, reconciles completed tracks, and keeps playlist cache intact', async () => {
+  await initDatabase();
+  const prevOs = Platform.OS;
+  const nativeSnapshot = [];
+  const calls = { enqueueItems: 0, enqueueSync: 0, cancelAll: 0, clearFinished: 0 };
+
+  try {
+    const playlist = await createPlaylist('Canada');
+    await addTrackToPlaylist(playlist.id, {
+      id: 'pl_t1',
+      title: 'Fade Into You',
+      artist: 'Mazzy Star',
+      duration: 240,
+      formattedDuration: '4:00',
+      thumbnailUrl: 'https://example.com/t1.jpg',
+    });
+    const warmDetail = await getPlaylistById(playlist.id);
+    assert.strictEqual(warmDetail.tracks.length, 1);
+    assert.ok(getCachedPlaylistById(playlist.id));
+
+    Platform.OS = 'android';
+    NativeModules.SonaryBackgroundDownloader = {
+      enqueueItems: async (items) => {
+        calls.enqueueItems += 1;
+        for (const item of items) {
+          nativeSnapshot.push({ ...item, status: 'pending', progress: 0 });
+        }
+      },
+      enqueueSync: async () => {
+        calls.enqueueSync += 1;
+      },
+      getQueueSnapshot: async () => nativeSnapshot.slice(),
+      cancelTrack: async (trackId) => {
+        const idx = nativeSnapshot.findIndex((i) => i.trackId === trackId);
+        if (idx >= 0) nativeSnapshot.splice(idx, 1);
+      },
+      cancelAll: async () => {
+        calls.cancelAll += 1;
+        nativeSnapshot.length = 0;
+      },
+      clearFinished: async () => {
+        calls.clearFinished += 1;
+      },
+      clearCompleted: async () => {},
+      isWorkerActive: async () => false,
+    };
+
+    const nat1Uri = `${fileSystemMock.documentDirectory}tracks/nat_1.m4a`;
+    fileSystemMock.files.set(nat1Uri, { isDirectory: false, size: 65536 });
+
+    await enqueueDownload({
+      id: 'nat_1',
+      title: 'Native Track 1',
+      artist: 'Artist N1',
+      duration: 210,
+      formattedDuration: '3:30',
+      thumbnailUrl: 'https://example.com/n1.jpg',
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    assert.strictEqual(calls.enqueueItems, 1);
+    assert.strictEqual(calls.enqueueSync, 1);
+
+    // Emit native completion event with full track metadata
+    NativeEventEmitter.__emit('SonaryDownloadQueueChanged', {
+      type: 'completed',
+      trackId: 'nat_1',
+      title: 'Native Track 1',
+      artist: 'Artist N1',
+      duration: 210,
+      thumbnailUrl: 'https://example.com/n1.jpg',
+      localAudioUri: nat1Uri,
+      localArtworkUri: `${fileSystemMock.documentDirectory}thumbnails/nat_1.jpg`,
+      downloadedAt: Date.now(),
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    assert.strictEqual(await isDownloaded('nat_1'), true, 'Native completed event must save track into downloaded_tracks');
+    const detailAfter = await getPlaylistById(playlist.id);
+    assert.ok(detailAfter, 'Playlist detail must still load cleanly after native download completes');
+    assert.strictEqual(detailAfter.tracks.length, 1);
+    assert.strictEqual(detailAfter.tracks[0].title, 'Fade Into You');
+
+    // Simulate a second track completed while JS was killed (present only in getQueueSnapshot)
+    const nat2Uri = `${fileSystemMock.documentDirectory}tracks/nat_2.m4a`;
+    const nat2ThumbUri = `${fileSystemMock.documentDirectory}thumbnails/nat_2.jpg`;
+    fileSystemMock.files.set(nat2Uri, { isDirectory: false, size: 48000 });
+    fileSystemMock.files.set(nat2ThumbUri, { isDirectory: false, size: 4096 });
+    nativeSnapshot.push({
+      trackId: 'nat_2',
+      title: 'Native Reconciled 2',
+      artist: 'Artist N2',
+      duration: 185,
+      thumbnailUrl: 'https://example.com/n2.jpg',
+      status: 'completed',
+      progress: 1,
+      localAudioUri: nat2Uri,
+      localArtworkUri: nat2ThumbUri,
+      downloadedAt: Date.now(),
+    });
+
+    // syncAndCleanStorage BEFORE hydrateDownloadQueue must preserve .m4a and .jpg of 'completed' item in native queue
+    await syncAndCleanStorage();
+    assert.strictEqual(fileSystemMock.files.has(nat2Uri), true, 'syncAndCleanStorage must preserve .m4a of completed item in native queue');
+    assert.strictEqual(fileSystemMock.files.has(nat2ThumbUri), true, 'syncAndCleanStorage must preserve .jpg of completed item in native queue');
+
+    await hydrateDownloadQueue();
+    assert.strictEqual(await isDownloaded('nat_2'), true, 'hydrateDownloadQueue must reconcile completed native rows into downloaded_tracks');
+
+    // Clear in-memory downloadQueue and verify deleteDownloadedTrack still removes from native queue
+    clearFinishedDownloads();
+    assert.strictEqual(
+      getDownloadQueue().some((i) => i.track.id === 'nat_2'),
+      false,
+      'nat_2 is not in in-memory downloadQueue before delete'
+    );
+    assert.strictEqual(
+      nativeSnapshot.some((i) => i.trackId === 'nat_2'),
+      true,
+      'nat_2 is still in nativeSnapshot before deleteDownloadedTrack'
+    );
+    await removeOfflineTrackFromStorage('nat_2');
+    assert.strictEqual(
+      nativeSnapshot.some((i) => i.trackId === 'nat_2'),
+      false,
+      'deleteDownloadedTrack must remove track from native queue even when in-memory downloadQueue does not contain it'
+    );
+  } finally {
+    await cancelAllDownloads();
+    clearFinishedDownloads();
+    await new Promise((r) => setTimeout(r, 20));
+    delete NativeModules.SonaryBackgroundDownloader;
+    NativeEventEmitter.__reset();
+    Platform.OS = prevOs;
+    fileSystemMock.resetFileSystem();
+    clearStorageCache();
+  }
+});
+
+test('PlaylistDetailModal displays retry state instead of empty message when getPlaylistById fails', async () => {
+  await initDatabase();
+  const playlist = await createPlaylist('Transient Error List');
+  await addTrackToPlaylist(playlist.id, {
+    id: 'err_t1',
+    title: 'Recovery Track',
+    artist: 'Tester',
+    duration: 200,
+    formattedDuration: '3:20',
+    thumbnailUrl: 'https://example.com/e1.jpg',
+  });
+
+  // Ensure initial render goes through getPlaylistById without pre-warmed detail cache
+  await updatePlaylist(playlist.id, 'Transient Error List');
+
+  const originalGetAllAsync = dbInstance.getAllAsync.bind(dbInstance);
+  let failOnce = true;
+  dbInstance.getAllAsync = async (sql, ...args) => {
+    if (failOnce && typeof sql === 'string' && sql.includes('playlist_tracks')) {
+      failOnce = false;
+      throw new Error('database disk image is malformed');
+    }
+    return originalGetAllAsync(sql, ...args);
+  };
+
+  let tree;
+  try {
+    await renderer.act(async () => {
+      tree = renderer.create(
+        React.createElement(PlaylistDetailModal, {
+          visible: true,
+          playlistId: playlist.id,
+          initialPlaylist: {
+            id: playlist.id,
+            name: 'Transient Error List',
+            trackCount: 1,
+            totalDuration: 200,
+          },
+          onClose: () => {},
+          onPlayTrack: () => {},
+          onPlayAll: () => {},
+        })
+      );
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    const texts = getAllText(tree.root);
+    assert.ok(texts.includes('Não foi possível carregar as faixas'), 'Must show error state on DB failure');
+    assert.ok(!texts.includes('Sua playlist está vazia'), 'Must not claim playlist is empty when load failed');
+
+    const retryBtn = tree.root.findByProps({ accessibilityLabel: 'Tentar novamente' });
+    await renderer.act(async () => {
+      retryBtn.props.onPress();
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    const textsAfterRetry = getAllText(tree.root);
+    assert.ok(textsAfterRetry.includes('Recovery Track'), 'Retry must reload playlist tracks');
+  } finally {
+    dbInstance.getAllAsync = originalGetAllAsync;
+    if (tree) {
+      await renderer.act(async () => {
+        tree.unmount();
+      });
+    }
   }
 });

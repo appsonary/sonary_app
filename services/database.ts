@@ -269,6 +269,26 @@ export async function initDatabase(): Promise<void> {
       );
     `);
 
+    // 7. Tabela persistente da fila de downloads (compartilhada via WAL com WorkManager nativo)
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS download_queue (
+        trackId TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        artist TEXT NOT NULL,
+        duration INTEGER NOT NULL,
+        thumbnailUrl TEXT,
+        status TEXT NOT NULL,
+        progress REAL NOT NULL DEFAULT 0,
+        error TEXT,
+        streamUrl TEXT,
+        headersJson TEXT,
+        position INTEGER NOT NULL,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_download_queue_pos ON download_queue(position ASC, createdAt ASC);
+    `);
+
     // Pragmas de performance para leituras concorrentes sem bloqueio (WAL + cache em memória)
     await db.execAsync(`
       PRAGMA journal_mode = WAL;
@@ -1447,4 +1467,154 @@ export async function resetSupportNotificationState(
     await writeSupportState(resetState);
     return resetState;
   });
+}
+
+/* ==========================================================================
+   PERSISTENT DOWNLOAD QUEUE (FILA DE DOWNLOADS EM SQLITE / WAL)
+   ========================================================================== */
+
+export type PersistedDownloadStatus = 'pending' | 'downloading' | 'completed' | 'error';
+
+export interface PersistedDownloadQueueRow {
+  trackId: string;
+  title: string;
+  artist: string;
+  duration: number;
+  thumbnailUrl: string;
+  status: PersistedDownloadStatus;
+  progress: number;
+  error: string | null;
+  streamUrl: string | null;
+  headersJson: string | null;
+  position: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertDownloadQueueInput {
+  trackId: string;
+  title: string;
+  artist: string;
+  duration: number;
+  thumbnailUrl?: string;
+  status: PersistedDownloadStatus;
+  progress?: number;
+  error?: string | null;
+  streamUrl?: string | null;
+  headersJson?: string | null;
+}
+
+export async function getPersistedDownloadQueue(): Promise<PersistedDownloadQueueRow[]> {
+  await initDatabase();
+  const db = await getDatabase();
+  return db.getAllAsync<PersistedDownloadQueueRow>(
+    `SELECT trackId, title, artist, duration, thumbnailUrl, status, progress, error,
+            streamUrl, headersJson, position, createdAt, updatedAt
+     FROM download_queue
+     ORDER BY position ASC, createdAt ASC;`
+  );
+}
+
+export async function upsertPersistedDownloadQueueBatch(
+  items: UpsertDownloadQueueInput[]
+): Promise<void> {
+  if (!items || items.length === 0) return;
+  await initDatabase();
+  const db = await getDatabase();
+  const now = Date.now();
+
+  const maxRow = await db.getFirstAsync<{ nextPos: number }>(
+    `SELECT COALESCE(MAX(position), -1) + 1 AS nextPos FROM download_queue;`
+  );
+  let nextPos = maxRow ? maxRow.nextPos : 0;
+
+  const writeBatch = async () => {
+    for (const item of items) {
+      await db.runAsync(
+        `INSERT OR REPLACE INTO download_queue (
+          trackId, title, artist, duration, thumbnailUrl, status, progress, error,
+          streamUrl, headersJson, position, createdAt, updatedAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        [
+          item.trackId,
+          item.title || 'Música',
+          item.artist || 'Artista',
+          Math.max(0, Math.floor(item.duration || 0)),
+          item.thumbnailUrl || '',
+          item.status,
+          item.progress ?? 0,
+          item.error ?? null,
+          item.streamUrl ?? null,
+          item.headersJson ?? null,
+          nextPos++,
+          now,
+          now,
+        ]
+      );
+    }
+  };
+
+  const dbWithTx = db as SQLite.SQLiteDatabase & {
+    withTransactionAsync?: (task: () => Promise<void>) => Promise<void>;
+  };
+  if (typeof dbWithTx.withTransactionAsync === 'function') {
+    await dbWithTx.withTransactionAsync(writeBatch);
+  } else {
+    await writeBatch();
+  }
+}
+
+export async function upsertPersistedDownloadQueueItem(
+  item: UpsertDownloadQueueInput
+): Promise<void> {
+  return upsertPersistedDownloadQueueBatch([item]);
+}
+
+export async function updatePersistedDownloadQueueState(
+  trackId: string,
+  status: PersistedDownloadStatus,
+  progress: number,
+  error: string | null = null
+): Promise<void> {
+  if (!trackId) return;
+  await initDatabase();
+  const db = await getDatabase();
+  await db.runAsync(
+    `UPDATE download_queue SET status = ?, progress = ?, error = ?, updatedAt = ? WHERE trackId = ?;`,
+    [status, progress, error, Date.now(), trackId]
+  );
+}
+
+export async function resetInterruptedDownloadsToPending(): Promise<void> {
+  await initDatabase();
+  const db = await getDatabase();
+  await db.runAsync(
+    `UPDATE download_queue SET status = 'pending', progress = 0, updatedAt = ? WHERE status = 'downloading';`,
+    [Date.now()]
+  );
+}
+
+export async function removePersistedDownloadQueueItem(trackId: string): Promise<void> {
+  if (!trackId) return;
+  await initDatabase();
+  const db = await getDatabase();
+  await db.runAsync(`DELETE FROM download_queue WHERE trackId = ?;`, [trackId]);
+}
+
+export async function clearPersistedFinishedDownloads(): Promise<void> {
+  await initDatabase();
+  const db = await getDatabase();
+  await db.runAsync(`DELETE FROM download_queue WHERE status IN ('completed', 'error');`);
+}
+
+export async function clearPersistedCompletedDownloads(): Promise<void> {
+  await initDatabase();
+  const db = await getDatabase();
+  await db.runAsync(`DELETE FROM download_queue WHERE status = 'completed';`);
+}
+
+export async function clearPersistedActiveDownloads(): Promise<void> {
+  await initDatabase();
+  const db = await getDatabase();
+  await db.runAsync(`DELETE FROM download_queue WHERE status IN ('pending', 'downloading');`);
 }

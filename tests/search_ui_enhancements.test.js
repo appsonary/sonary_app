@@ -74,6 +74,66 @@ test('Search UI: BrandHeader has balanced YouTube Music layout and refined statu
   );
   assert.ok(bellIcon, 'BrandHeader must render Bell icon inside notifications slot');
 
+  // Verify clean download queue button exists between dev button (when enabled) and notifications Bell
+  const queueBtn = root.find(
+    (n) => n.type === 'TouchableOpacity' && n.props && n.props.accessibilityLabel === 'Fila de downloads'
+  );
+  assert.ok(queueBtn, 'BrandHeader must render clean download queue button');
+  assert.ok(
+    !queueBtn.props.style || !queueBtn.props.style.backgroundColor,
+    'Download queue button must stay clean without a background pill'
+  );
+  assert.ok(
+    !queueBtn.props.style || !queueBtn.props.style.borderWidth,
+    'Download queue button must stay clean without a border'
+  );
+
+  const prevDev = global.__DEV__;
+  global.__DEV__ = true;
+  let devHeaderTree;
+  try {
+    await actAsync(async () => {
+      devHeaderTree = renderer.create(
+        React.createElement(BrandHeader, {
+          onOpenDevMenu: () => {},
+          onOpenDownloadQueue: () => {},
+          downloadQueueCount: 3,
+        })
+      );
+    });
+    const devRightActions = devHeaderTree.root.find(
+      (n) =>
+        n.type === 'View' &&
+        Array.isArray(n.children) &&
+        n.children.some((c) => c.props && c.props.accessibilityLabel === 'Notificações')
+    );
+    const actionLabels = devRightActions.children
+      .map((c) => c.props && c.props.accessibilityLabel)
+      .filter(Boolean);
+    assert.deepStrictEqual(
+      actionLabels,
+      ['Menu de desenvolvimento', 'Fila de downloads (3)', 'Notificações'],
+      'Download queue button must sit between dev button and notifications'
+    );
+    const devBtn = devHeaderTree.root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props && n.props.accessibilityLabel === 'Menu de desenvolvimento'
+    );
+    assert.ok(
+      !devBtn.props.style || !devBtn.props.style.backgroundColor,
+      'Dev button must stay clean without a background pill'
+    );
+    assert.ok(
+      !devBtn.props.style || !devBtn.props.style.borderWidth,
+      'Dev button must stay clean without a border'
+    );
+    assert.ok(
+      getAllText(devRightActions).includes('3'),
+      'BrandHeader download queue button must display active/pending count badge'
+    );
+  } finally {
+    global.__DEV__ = prevDev;
+  }
+
   const legacyProfileAvatar = root.findAll(
     (n) => n.props && n.props.accessibilityLabel === 'Perfil do usuário'
   );

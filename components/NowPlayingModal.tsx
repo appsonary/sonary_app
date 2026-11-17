@@ -36,6 +36,7 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  Clock,
   Heart,
   ListMusic,
   Maximize2,
@@ -106,6 +107,7 @@ export interface NowPlayingModalProps {
   onToggleFavorite?: () => void;
   isDownloaded?: boolean;
   isDownloading?: boolean;
+  isQueued?: boolean;
   downloadProgress?: number;
   onDownload?: () => void;
   onAddToPlaylist?: () => void;
@@ -804,6 +806,7 @@ export default function NowPlayingModal({
   onToggleFavorite,
   isDownloaded = false,
   isDownloading = false,
+  isQueued = false,
   downloadProgress = 0,
   onDownload,
   onAddToPlaylist,
@@ -2751,7 +2754,7 @@ export default function NowPlayingModal({
                       onPress={(e) => {
                         e?.stopPropagation?.();
                         dismissMenuSheet();
-                        if (!isDownloaded && !isDownloading) {
+                        if (!isDownloaded && !isDownloading && !isQueued) {
                           onDownload();
                         }
                       }}
@@ -2761,13 +2764,17 @@ export default function NowPlayingModal({
                           ? 'Música salva offline'
                           : isDownloading
                             ? 'Baixando música'
-                            : 'Salvar offline'
+                            : isQueued
+                              ? 'Na fila de downloads'
+                              : 'Salvar offline'
                       }
                     >
                       {isDownloaded ? (
                         <CheckCircle2 color="#2BA640" size={22} />
                       ) : isDownloading ? (
                         <ActivityIndicator color="#FFFFFF" size="small" />
+                      ) : isQueued ? (
+                        <Clock color="#AAAAAA" size={22} />
                       ) : (
                         <Download color="#FFFFFF" size={22} />
                       )}
@@ -2776,7 +2783,9 @@ export default function NowPlayingModal({
                           ? 'Música já baixada'
                           : isDownloading
                             ? `Baixando${downloadProgress > 0 ? ` (${downloadProgress}%)` : '...'}`
-                            : 'Salvar offline'}
+                            : isQueued
+                              ? 'Na fila de downloads'
+                              : 'Salvar offline'}
                       </Text>
                     </TouchableOpacity>
                   )}

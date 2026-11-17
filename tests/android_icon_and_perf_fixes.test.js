@@ -241,7 +241,7 @@ test('Animation UI-thread audit: zero useNativeDriver: false, isolated useProgre
   );
 });
 
-test('TrackPlayer MusicService guard: patchTrackPlayerMusicService skips NotificationForwarderActivity task removal idempotently', () => {
+test('TrackPlayer MusicService guard: patchTrackPlayerMusicService skips NotificationForwarderActivity and guards exitProcess(0) when downloads are running idempotently', () => {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sonary-rntp-guard-'));
   try {
     const svcDir = path.join(
@@ -261,7 +261,7 @@ test('TrackPlayer MusicService guard: patchTrackPlayerMusicService skips Notific
     const svcPath = path.join(svcDir, 'MusicService.kt');
     fs.writeFileSync(
       svcPath,
-      'class MusicService {\n  override fun onTaskRemoved(rootIntent: Intent?) {\n    super.onTaskRemoved(rootIntent)\n    if (!::player.isInitialized) return\n  }\n}\n'
+      'class MusicService {\n  override fun onTaskRemoved(rootIntent: Intent?) {\n    super.onTaskRemoved(rootIntent)\n    if (!::player.isInitialized) return\n    stopSelf()\n    exitProcess(0)\n  }\n}\n'
     );
 
     assert.strictEqual(patchTrackPlayerMusicService(tmpRoot), true);
@@ -269,6 +269,10 @@ test('TrackPlayer MusicService guard: patchTrackPlayerMusicService skips Notific
     assert.ok(
       patched.includes('if (rootIntent?.component?.className == "expo.modules.notifications.service.NotificationForwarderActivity") return'),
       'MusicService.onTaskRemoved should ignore NotificationForwarderActivity task removal'
+    );
+    assert.ok(
+      patched.includes('System.getProperty("sonary.downloads.running") != "true"'),
+      'MusicService.onTaskRemoved should guard exitProcess(0) when sonary.downloads.running is true'
     );
     assert.strictEqual(patchTrackPlayerMusicService(tmpRoot), false, 'Second call must be idempotent');
   } finally {
@@ -289,6 +293,81 @@ test('AndroidManifest soft input guard: syncMainActivityManifestAttrs enforces a
   const inserted = syncMainActivityManifestAttrs(withoutAttr);
   assert.ok(inserted.includes('android:windowSoftInputMode="adjustNothing"'));
   assert.ok(inserted.includes('android:theme="@style/AppTheme"'));
+});
+
+test('BackgroundDownloads plugin: applies WorkManager, dataSync FGS, MainApplication package, and Kotlin worker idempotently', () => {
+  const {
+    applyBackgroundDownloadPatches,
+  } = require('../plugins/withBackgroundDownloads');
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sonary-bg-dl-'));
+  try {
+    const appDir = path.join(tmpRoot, 'android', 'app');
+    const javaDir = path.join(appDir, 'src', 'main', 'java', 'com', 'sonarypro', 'app');
+    fs.mkdirSync(javaDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(appDir, 'build.gradle'),
+      'dependencies {\n    implementation("com.facebook.react:react-android")\n}\n'
+    );
+    fs.writeFileSync(
+      path.join(javaDir, 'MainApplication.kt'),
+      'package com.sonarypro.app\nclass MainApplication {\n  fun getPackages(): List<ReactPackage> {\n    return PackageList(this).packages\n  }\n}\n'
+    );
+    fs.writeFileSync(
+      path.join(appDir, 'src', 'main', 'AndroidManifest.xml'),
+      '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n  <application>\n  </application>\n</manifest>\n'
+    );
+
+    assert.strictEqual(applyBackgroundDownloadPatches(tmpRoot), true);
+
+    const gradle = fs.readFileSync(path.join(appDir, 'build.gradle'), 'utf8');
+    assert.ok(gradle.includes('androidx.work:work-runtime-ktx:2.9.0'));
+
+    const mainApp = fs.readFileSync(path.join(javaDir, 'MainApplication.kt'), 'utf8');
+    assert.ok(mainApp.includes('SonaryDownloadPackage()'));
+
+    const manifest = fs.readFileSync(path.join(appDir, 'src', 'main', 'AndroidManifest.xml'), 'utf8');
+    assert.ok(manifest.includes('android.permission.FOREGROUND_SERVICE_DATA_SYNC'));
+    assert.ok(manifest.includes('androidx.work.impl.foreground.SystemForegroundService'));
+    assert.ok(manifest.includes('android:foregroundServiceType="dataSync"'));
+    assert.ok(manifest.includes('SonaryDownloadCancelReceiver'));
+
+    assert.ok(fs.existsSync(path.join(javaDir, 'downloads', 'SonaryDownloadWorker.kt')));
+    assert.ok(fs.existsSync(path.join(javaDir, 'downloads', 'SonaryInnerTubeClient.kt')));
+    assert.ok(fs.existsSync(path.join(javaDir, 'downloads', 'SonaryDownloadDb.kt')));
+    assert.ok(fs.existsSync(path.join(javaDir, 'downloads', 'SonaryDownloadModule.kt')));
+
+    const dbKt = fs.readFileSync(path.join(javaDir, 'downloads', 'SonaryDownloadDb.kt'), 'utf8');
+    assert.ok(dbKt.includes('sonary_downloads.db'), 'Kotlin DB must use dedicated sonary_downloads.db');
+    assert.ok(dbKt.includes('SQLiteOpenHelper'), 'Kotlin DB must use singleton SQLiteOpenHelper');
+    assert.ok(!dbKt.includes('sonary.db'), 'Kotlin DB must never open expo-sqlite sonary.db');
+    assert.ok(!dbKt.includes('downloaded_tracks'), 'Kotlin DB must never write downloaded_tracks directly');
+
+    const workerKt = fs.readFileSync(path.join(javaDir, 'downloads', 'SonaryDownloadWorker.kt'), 'utf8');
+    assert.ok(
+      workerKt.includes('System.setProperty("sonary.downloads.running", "true")') &&
+        workerKt.includes('System.setProperty("sonary.downloads.running", "false")'),
+      'SonaryDownloadWorker must manage sonary.downloads.running system property'
+    );
+    assert.ok(
+      workerKt.includes('private suspend fun trySetForegroundSafely(info: ForegroundInfo)') &&
+        workerKt.includes('notificationManager.notify('),
+      'SonaryDownloadWorker must guard setForeground via trySetForegroundSafely and use notificationManager.notify for progress'
+    );
+    assert.ok(
+      workerKt.includes('SonaryInnerTubeClient.invalidateVisitorData()'),
+      'SonaryDownloadWorker must invalidate cached visitorData before retry'
+    );
+
+    const moduleKt = fs.readFileSync(path.join(javaDir, 'downloads', 'SonaryDownloadModule.kt'), 'utf8');
+    assert.ok(
+      moduleKt.includes('ExistingWorkPolicy.REPLACE') && moduleKt.includes('ExistingWorkPolicy.KEEP'),
+      'SonaryDownloadModule must use REPLACE when worker is not running and KEEP when running'
+    );
+
+    assert.strictEqual(applyBackgroundDownloadPatches(tmpRoot), false, 'Second call must be idempotent');
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
 });
 
 

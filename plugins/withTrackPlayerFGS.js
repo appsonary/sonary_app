@@ -3,10 +3,12 @@ const path = require('path');
 const { withAndroidManifest, withDangerousMod, AndroidConfig } = require('@expo/config-plugins');
 
 const FORWARDER_ACTIVITY_CLASS = 'expo.modules.notifications.service.NotificationForwarderActivity';
+const DOWNLOADS_RUNNING_PROP = 'sonary.downloads.running';
 
 /**
  * Evita que o fechamento da task temporária NotificationForwarderActivity (expo-notifications)
- * acione StopPlaybackAndRemoveNotification -> exitProcess(0) no MusicService do RNTP.
+ * acione StopPlaybackAndRemoveNotification -> exitProcess(0) no MusicService do RNTP,
+ * e impede que exitProcess(0) mate o processo enquanto houver downloads em segundo plano ativos.
  */
 function patchTrackPlayerMusicService(projectRoot) {
   const musicServicePath = path.join(
@@ -26,15 +28,26 @@ function patchTrackPlayerMusicService(projectRoot) {
   if (!fs.existsSync(musicServicePath)) return false;
 
   const content = fs.readFileSync(musicServicePath, 'utf8');
-  if (content.includes(FORWARDER_ACTIVITY_CLASS)) return false;
+  let nextContent = content;
 
-  const targetRegex = /(override\s+fun\s+onTaskRemoved\s*\([^)]*\)\s*\{\s*\r?\n\s*super\.onTaskRemoved\([^)]*\))/;
-  if (!targetRegex.test(content)) return false;
+  if (!nextContent.includes(FORWARDER_ACTIVITY_CLASS)) {
+    const targetRegex = /(override\s+fun\s+onTaskRemoved\s*\([^)]*\)\s*\{\s*\r?\n\s*super\.onTaskRemoved\([^)]*\))/;
+    if (targetRegex.test(nextContent)) {
+      nextContent = nextContent.replace(
+        targetRegex,
+        `$1\n\n        // Ignora remoção de task transitória da notificação para não encerrar o app com exitProcess(0).\n        if (rootIntent?.component?.className == "${FORWARDER_ACTIVITY_CLASS}") return`
+      );
+    }
+  }
 
-  const nextContent = content.replace(
-    targetRegex,
-    `$1\n\n        // Ignora remoção de task transitória da notificação para não encerrar o app com exitProcess(0).\n        if (rootIntent?.component?.className == "${FORWARDER_ACTIVITY_CLASS}") return`
-  );
+  if (!nextContent.includes(DOWNLOADS_RUNNING_PROP)) {
+    if (/(\r?\n[ \t]*)exitProcess\(0\)/.test(nextContent)) {
+      nextContent = nextContent.replace(
+        /(\r?\n)([ \t]*)exitProcess\(0\)/,
+        `$1$2if (System.getProperty("${DOWNLOADS_RUNNING_PROP}") != "true") {\n$2    exitProcess(0)\n$2}`
+      );
+    }
+  }
 
   if (nextContent === content) return false;
   fs.writeFileSync(musicServicePath, nextContent, 'utf8');
