@@ -186,13 +186,14 @@ const withAndroidStartupFix = (config) => {
     return modConfig;
   });
 
-  // 3. Modifica AndroidManifest para garantir AppTheme na MainActivity
+  // 3. Modifica AndroidManifest para garantir AppTheme e windowSoftInputMode="adjustNothing" na MainActivity
   config = withAndroidManifest(config, (modConfig) => {
     const mainApplication = AndroidConfig.Manifest.getMainApplicationOrThrow(modConfig.modResults);
     const mainActivity = AndroidConfig.Manifest.getMainActivityOrThrow(modConfig.modResults);
 
     mainApplication.$['android:theme'] = '@style/AppTheme';
     mainActivity.$['android:theme'] = '@style/AppTheme';
+    mainActivity.$['android:windowSoftInputMode'] = 'adjustNothing';
 
     return modConfig;
   });

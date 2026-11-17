@@ -217,6 +217,11 @@ export interface LocalDownloadedTrack {
 }
 
 const MIN_FREE_DISK_BYTES = 25 * 1024 * 1024; // Mínimo de 25 MB livres para novo download
+const DEFAULT_STREAM_DOWNLOAD_HEADERS: Record<string, string> = {
+  'User-Agent': api.INNERTUBE_USER_AGENT,
+  Referer: 'https://www.youtube.com/',
+  Origin: 'https://www.youtube.com',
+};
 
 /**
  * Realiza o download de uma faixa com suporte a Scoped Storage, gravação atômica (.part -> .m4a) e persistência SQLite.
@@ -224,7 +229,8 @@ const MIN_FREE_DISK_BYTES = 25 * 1024 * 1024; // Mínimo de 25 MB livres para no
 export async function downloadTrackFile(
   track: TrackSummary,
   streamUrl: string,
-  onProgress?: (progressPercentage: number) => void
+  onProgress?: (progressPercentage: number) => void,
+  headers?: Record<string, string>
 ): Promise<LocalDownloadedTrack> {
   await ensureStorageDirectories();
 
@@ -253,15 +259,17 @@ export async function downloadTrackFile(
 
   let expectedTotalBytes = 0;
 
+  const requestHeaders = {
+    ...DEFAULT_STREAM_DOWNLOAD_HEADERS,
+    ...(headers || {}),
+  };
+
   // Download do arquivo de áudio gravando inicialmente no arquivo temporário .part
   const downloadResumable = FileSystem.createDownloadResumable(
     streamUrl,
     partAudioUri,
     {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6.0 Safari/605.1.15',
-      },
+      headers: requestHeaders,
     },
     (downloadProgress) => {
       if (downloadProgress.totalBytesExpectedToWrite > 0) {
@@ -346,14 +354,21 @@ export async function downloadTrackFile(
   }
 
   const downloadedAt = Date.now();
+  const safeTitle = track.title || 'Música';
+  const safeArtist = track.artist || 'Artista';
+  const safeDuration =
+    typeof track.duration === 'number' && Number.isFinite(track.duration)
+      ? track.duration
+      : 0;
+  const safeThumbnail = savedArtworkUri || track.thumbnailUrl || '';
 
   // Persiste metadados no SQLite apenas após validação 100% íntegra do arquivo
   await saveDownloadedTrack({
     id: track.id,
-    title: track.title,
-    artist: track.artist,
-    duration: track.duration,
-    thumbnailUrl: savedArtworkUri || track.thumbnailUrl,
+    title: safeTitle,
+    artist: safeArtist,
+    duration: safeDuration,
+    thumbnailUrl: safeThumbnail,
     localUri: finalAudioUri,
     downloadedAt,
   });
@@ -361,9 +376,9 @@ export async function downloadTrackFile(
 
   return {
     id: track.id,
-    title: track.title,
-    artist: track.artist,
-    duration: track.duration,
+    title: safeTitle,
+    artist: safeArtist,
+    duration: safeDuration,
     localAudioUri: finalAudioUri,
     localArtworkUri: savedArtworkUri,
     fileSizeBytes: fileInfo.size,
@@ -460,7 +475,10 @@ export async function syncAndCleanStorage(): Promise<void> {
         await FileSystem.deleteAsync(`${AUDIO_DIRECTORY}${filename}`, { idempotent: true });
       } else if (filename.endsWith('.m4a')) {
         const videoId = filename.replace('.m4a', '');
-        if (!validDbIds.has(videoId)) {
+        const isQueued = downloadQueue.some(
+          (i) => i.track.id === videoId && (i.status === 'pending' || i.status === 'downloading')
+        );
+        if (!validDbIds.has(videoId) && !isQueued && !(await isDownloadedInDb(videoId))) {
           await FileSystem.deleteAsync(`${AUDIO_DIRECTORY}${filename}`, { idempotent: true });
         }
       }
@@ -497,6 +515,14 @@ export async function deleteDownloadedTrack(videoId: string): Promise<void> {
   await FileSystem.deleteAsync(partAudioUri, { idempotent: true });
   await deleteDownloadedTrackFromDb(videoId);
   localUriCache.delete(videoId);
+
+  const prevLen = downloadQueue.length;
+  downloadQueue = downloadQueue.filter(
+    (item) => item.track.id !== videoId || item.status === 'downloading'
+  );
+  if (downloadQueue.length !== prevLen) {
+    notifyQueueListeners();
+  }
 }
 
 /* ==========================================================================
@@ -514,16 +540,25 @@ let downloadQueue: DownloadQueueItem[] = [];
 let isProcessingQueue = false;
 const queueListeners = new Set<(queue: DownloadQueueItem[]) => void>();
 
-let audioStreamResolver: (id: string) => Promise<{ streamUrl: string }> = (id) =>
+export interface ResolvedDownloadStream {
+  streamUrl: string;
+  headers?: Record<string, string>;
+  userAgent?: string;
+}
+
+const defaultAudioStreamResolver = (id: string): Promise<ResolvedDownloadStream> =>
   api.getAudioStream(id);
+
+let audioStreamResolver: (id: string) => Promise<ResolvedDownloadStream> =
+  defaultAudioStreamResolver;
 
 /**
  * Permite customizar ou mockar o resolvedor de stream de áudio (usado em testes).
  */
 export function setAudioStreamResolver(
-  resolver?: (id: string) => Promise<{ streamUrl: string }>
+  resolver?: (id: string) => Promise<ResolvedDownloadStream>
 ): void {
-  audioStreamResolver = resolver || ((id) => api.getAudioStream(id));
+  audioStreamResolver = resolver || defaultAudioStreamResolver;
 }
 
 function notifyQueueListeners() {
@@ -557,11 +592,13 @@ export function getDownloadQueue(): DownloadQueueItem[] {
  * Enfileira uma faixa individual para download em background.
  */
 export function enqueueDownload(track: TrackSummary): void {
+  if (!track || !track.id) return;
   const existing = downloadQueue.find((i) => i.track.id === track.id);
   if (existing && (existing.status === 'pending' || existing.status === 'downloading')) {
     return;
   }
   if (existing) {
+    existing.track = track;
     existing.status = 'pending';
     existing.progress = 0;
     existing.error = undefined;
@@ -582,9 +619,11 @@ export function enqueueDownload(track: TrackSummary): void {
 export function enqueuePlaylistDownload(tracks: TrackSummary[]): void {
   if (!tracks || tracks.length === 0) return;
   for (const track of tracks) {
+    if (!track || !track.id) continue;
     const existing = downloadQueue.find((i) => i.track.id === track.id);
     if (!existing || (existing.status !== 'pending' && existing.status !== 'downloading')) {
       if (existing) {
+        existing.track = track;
         existing.status = 'pending';
         existing.progress = 0;
         existing.error = undefined;
@@ -601,6 +640,25 @@ export function enqueuePlaylistDownload(tracks: TrackSummary[]): void {
   processQueue();
 }
 
+async function resolveAndDownloadTrack(item: DownloadQueueItem): Promise<void> {
+  const streamInfo = await audioStreamResolver(item.track.id);
+  const headers: Record<string, string> | undefined = streamInfo.headers
+    ? streamInfo.headers
+    : streamInfo.userAgent
+      ? { 'User-Agent': streamInfo.userAgent }
+      : undefined;
+
+  await downloadTrackFile(
+    item.track,
+    streamInfo.streamUrl,
+    (progress) => {
+      item.progress = progress;
+      notifyQueueListeners();
+    },
+    headers
+  );
+}
+
 /**
  * Processador sequencial resiliente de fila de downloads em background.
  */
@@ -615,6 +673,7 @@ async function processQueue(): Promise<void> {
 
       const alreadyDownloaded = await isTrackDownloaded(nextItem.track.id);
       if (alreadyDownloaded) {
+        await registerLocalTrackIfMissing(nextItem.track);
         nextItem.status = 'completed';
         nextItem.progress = 1;
         notifyQueueListeners();
@@ -626,16 +685,20 @@ async function processQueue(): Promise<void> {
       notifyQueueListeners();
 
       try {
-        const streamInfo = await audioStreamResolver(nextItem.track.id);
-        await downloadTrackFile(nextItem.track, streamInfo.streamUrl, (progress) => {
-          nextItem.progress = progress;
-          notifyQueueListeners();
-        });
+        try {
+          await resolveAndDownloadTrack(nextItem);
+        } catch (firstErr) {
+          // Invalida possível URL expirada no streamCache e tenta uma vez com stream novo
+          api.invalidateStreamCache(nextItem.track.id);
+          nextItem.progress = 0;
+          await resolveAndDownloadTrack(nextItem);
+        }
         nextItem.status = 'completed';
         nextItem.progress = 1;
       } catch (err) {
         nextItem.status = 'error';
         nextItem.error = err instanceof Error ? err.message : String(err);
+        console.warn('[Storage] Falha no download da faixa:', nextItem.track.id, nextItem.error);
       }
       notifyQueueListeners();
     }

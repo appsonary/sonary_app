@@ -13,6 +13,7 @@ const {
   computeAndroidAssetsHash,
   syncGradleVersions,
   syncAndroidAppName,
+  syncMainActivityManifestAttrs,
 } = require('../scripts/patch-android');
 const { patchTrackPlayerMusicService } = require('../plugins/withTrackPlayerFGS');
 
@@ -274,5 +275,21 @@ test('TrackPlayer MusicService guard: patchTrackPlayerMusicService skips Notific
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 });
+
+test('AndroidManifest soft input guard: syncMainActivityManifestAttrs enforces adjustNothing idempotently', () => {
+  const sampleManifest =
+    '<manifest><application><activity android:name=".MainActivity" android:windowSoftInputMode="adjustResize" android:theme="@style/Other"></activity></application></manifest>';
+  const patched = syncMainActivityManifestAttrs(sampleManifest);
+  assert.ok(patched.includes('android:windowSoftInputMode="adjustNothing"'));
+  assert.ok(!patched.includes('adjustResize'));
+  assert.ok(patched.includes('android:theme="@style/AppTheme"'));
+  assert.strictEqual(syncMainActivityManifestAttrs(patched), patched, 'Patch must be idempotent');
+
+  const withoutAttr = '<manifest><application><activity android:name=".MainActivity"></activity></application></manifest>';
+  const inserted = syncMainActivityManifestAttrs(withoutAttr);
+  assert.ok(inserted.includes('android:windowSoftInputMode="adjustNothing"'));
+  assert.ok(inserted.includes('android:theme="@style/AppTheme"'));
+});
+
 
 

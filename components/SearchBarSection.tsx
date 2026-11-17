@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Keyboard,
+  ScrollView,
   StyleProp,
   StyleSheet,
   Text,
@@ -23,6 +24,9 @@ export interface SearchPillInputProps {
   onFocus?: () => void;
   onBlur?: () => void;
   onSubmitEditing?: () => void;
+  onSearchPress?: () => void;
+  isSearching?: boolean;
+  searchAccessibilityLabel?: string;
   showBackArrow?: boolean;
   onBackPress?: () => void;
   backAccessibilityLabel?: string;
@@ -41,6 +45,9 @@ export const SearchPillInput: React.FC<SearchPillInputProps> = ({
   onFocus,
   onBlur,
   onSubmitEditing,
+  onSearchPress,
+  isSearching = false,
+  searchAccessibilityLabel = 'Buscar músicas',
   showBackArrow = false,
   onBackPress,
   backAccessibilityLabel = 'Voltar',
@@ -54,6 +61,7 @@ export const SearchPillInput: React.FC<SearchPillInputProps> = ({
     <View
       style={[
         styles.searchBar,
+        onSearchPress && styles.searchBarWithInlineAction,
         internalFocused && styles.searchBarFocused,
         style,
       ]}
@@ -68,9 +76,9 @@ export const SearchPillInput: React.FC<SearchPillInputProps> = ({
         >
           <ArrowLeft color="#FFFFFF" size={20} />
         </TouchableOpacity>
-      ) : (
+      ) : !onSearchPress ? (
         <Search color="#9E9EA4" size={20} />
-      )}
+      ) : null}
 
       <TextInput
         ref={inputRef as React.Ref<TextInput>}
@@ -108,6 +116,33 @@ export const SearchPillInput: React.FC<SearchPillInputProps> = ({
           </View>
         </TouchableOpacity>
       )}
+
+      {onSearchPress && (
+        <TouchableOpacity
+          style={[
+            styles.inlineSearchButton,
+            isSearching && styles.searchButtonDisabled,
+          ]}
+          onPress={onSearchPress}
+          disabled={isSearching}
+          hitSlop={{ top: 8, bottom: 8, left: 6, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel={searchAccessibilityLabel}
+          activeOpacity={0.75}
+        >
+          {isSearching ? (
+            <ActivityIndicator
+              color={theme.colors.textInverse}
+              size="small"
+            />
+          ) : (
+            <Search
+              color="#030303"
+              size={18}
+            />
+          )}
+        </TouchableOpacity>
+      )}
     </View>
   );
 };
@@ -120,6 +155,9 @@ export interface SearchBarSectionProps {
   recentQueries?: string[];
   hasResults?: boolean;
   onClearSearch?: () => void;
+  onFocusChange?: (focused: boolean) => void;
+  onRemoveRecentQuery?: (item: string) => void;
+  onClearHistory?: () => void;
 }
 
 export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
@@ -130,27 +168,43 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
   recentQueries = [],
   hasResults = false,
   onClearSearch,
+  onFocusChange,
+  onRemoveRecentQuery,
+  onClearHistory,
 }) => {
   const [isFocused, setIsFocused] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const searchInputRef = useRef<TextInput | null>(null);
-  const hasQuery = query.trim().length > 0;
+  const onFocusChangeRef = useRef(onFocusChange);
+  onFocusChangeRef.current = onFocusChange;
   const showBackArrow = isFocused || hasResults;
 
+  const updateFocus = (nextFocused: boolean) => {
+    setIsFocused(nextFocused);
+    onFocusChangeRef.current?.(nextFocused);
+  };
+
   useEffect(() => {
-    const sub = Keyboard?.addListener?.('keyboardDidHide', () => {
-      setIsFocused(false);
+    const showSub = Keyboard?.addListener?.('keyboardDidShow', (event: any) => {
+      const height = event?.endCoordinates?.height;
+      setKeyboardHeight(typeof height === 'number' && height > 0 ? height : 0);
+    });
+    const hideSub = Keyboard?.addListener?.('keyboardDidHide', () => {
+      setKeyboardHeight(0);
+      updateFocus(false);
       // Desfoca o EditText nativo no Android para que o próximo toque dispare onFocus novamente
       searchInputRef.current?.blur?.();
     });
     return () => {
-      sub?.remove?.();
+      showSub?.remove?.();
+      hideSub?.remove?.();
     };
   }, []);
 
   useBackHandler(
     isFocused,
     () => {
-      setIsFocused(false);
+      updateFocus(false);
       searchInputRef.current?.blur?.();
       Keyboard?.dismiss?.();
       return true;
@@ -170,14 +224,13 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
   const filteredRecentQueries = useMemo(() => {
     if (!isFocused || recentQueries.length === 0) return [];
     const normalized = query.trim().toLowerCase();
-    const matches = normalized
+    return normalized
       ? recentQueries.filter((item) => item.toLowerCase().includes(normalized))
       : recentQueries;
-    return matches.slice(0, 8);
   }, [isFocused, query, recentQueries]);
 
   const handleSubmit = () => {
-    setIsFocused(false);
+    updateFocus(false);
     searchInputRef.current?.blur?.();
     Keyboard?.dismiss?.();
     onSearch();
@@ -185,7 +238,7 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
 
   const handleLeadingPress = () => {
     if (isFocused) {
-      setIsFocused(false);
+      updateFocus(false);
       searchInputRef.current?.blur?.();
       Keyboard?.dismiss?.();
       return;
@@ -197,90 +250,116 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
 
   const handleSelectRecent = (item: string) => {
     onChangeQuery(item);
-    setIsFocused(false);
+    updateFocus(false);
     searchInputRef.current?.blur?.();
     Keyboard?.dismiss?.();
     onSearch(item);
   };
 
   return (
-    <View style={styles.wrapper}>
+    <View style={[styles.wrapper, isFocused && styles.wrapperFocused]}>
       <View style={styles.searchContainer}>
-        <View style={styles.searchBarSlot}>
-          <SearchPillInput
-            inputRef={searchInputRef}
-            value={query}
-            onChangeText={onChangeQuery}
-            placeholder="Buscar faixas, artistas ou álbuns..."
-            accessibilityLabel="Campo de busca de músicas"
-            clearAccessibilityLabel="Limpar busca"
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => setIsFocused(false)}
-            onSubmitEditing={handleSubmit}
-            showBackArrow={showBackArrow}
-            onBackPress={handleLeadingPress}
-            backAccessibilityLabel={
-              isFocused ? 'Fechar sugestões de busca' : 'Voltar para descoberta'
-            }
-          />
-        </View>
-
-        <TouchableOpacity
-          style={[
-            styles.searchButton,
-            hasQuery ? styles.searchButtonActive : styles.searchButtonIdle,
-            isSearching && styles.searchButtonDisabled,
-          ]}
-          onPress={handleSubmit}
-          disabled={isSearching}
-          accessibilityRole="button"
-          accessibilityLabel="Buscar músicas"
-          activeOpacity={0.75}
-        >
-          {isSearching ? (
-            <ActivityIndicator
-              color={hasQuery ? theme.colors.textInverse : theme.colors.textPrimary}
-              size="small"
-            />
-          ) : (
-            <Search
-              color={hasQuery ? '#030303' : '#FFFFFF'}
-              size={20}
-            />
-          )}
-        </TouchableOpacity>
+        <SearchPillInput
+          inputRef={searchInputRef}
+          value={query}
+          onChangeText={onChangeQuery}
+          placeholder="Buscar faixas, artistas ou álbuns..."
+          accessibilityLabel="Campo de busca de músicas"
+          clearAccessibilityLabel="Limpar busca"
+          onFocus={() => updateFocus(true)}
+          onBlur={() => updateFocus(false)}
+          onSubmitEditing={handleSubmit}
+          onSearchPress={handleSubmit}
+          isSearching={isSearching}
+          searchAccessibilityLabel="Buscar músicas"
+          showBackArrow={showBackArrow}
+          onBackPress={handleLeadingPress}
+          backAccessibilityLabel={
+            isFocused ? 'Fechar sugestões de busca' : 'Voltar para descoberta'
+          }
+        />
       </View>
 
-      {filteredRecentQueries.length > 0 && (
-        <View style={styles.recentList} testID="search-history-list">
-          {filteredRecentQueries.map((item) => (
-            <TouchableOpacity
-              key={item}
-              style={styles.recentRow}
-              onPress={() => handleSelectRecent(item)}
-              activeOpacity={0.65}
-              accessibilityRole="button"
-              accessibilityLabel={`Buscar novamente ${item}`}
-            >
-              <History color="#D4D4D4" size={20} />
-              <Text style={styles.recentQueryText} numberOfLines={1}>
-                {item}
-              </Text>
+      {isFocused && (
+        <ScrollView
+          style={styles.recentList}
+          contentContainerStyle={[
+            styles.recentListContent,
+            { paddingBottom: Math.max(140, keyboardHeight + 24) },
+          ]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={true}
+          testID="search-history-list"
+        >
+          {recentQueries.length > 0 && (
+            <View style={styles.recentHeader}>
+              <Text style={styles.recentHeaderTitle}>Buscas recentes</Text>
+              {onClearHistory && (
+                <TouchableOpacity
+                  style={styles.clearAllButton}
+                  onPress={onClearHistory}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel="Limpar histórico de buscas"
+                >
+                  <Text style={styles.clearAllText}>Limpar tudo</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+
+          {filteredRecentQueries.length > 0 ? (
+            filteredRecentQueries.map((item) => (
               <TouchableOpacity
-                style={styles.fillArrowButton}
-                onPress={(e) => {
-                  e?.stopPropagation?.();
-                  onChangeQuery(item);
-                }}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                key={item}
+                style={styles.recentRow}
+                onPress={() => handleSelectRecent(item)}
+                activeOpacity={0.65}
                 accessibilityRole="button"
-                accessibilityLabel={`Preencher busca com ${item}`}
+                accessibilityLabel={`Buscar novamente ${item}`}
               >
-                <ArrowUpLeft color="#D4D4D4" size={20} />
+                <History color="#8E8E93" size={20} />
+                <Text style={styles.recentQueryText} numberOfLines={1}>
+                  {item}
+                </Text>
+                <TouchableOpacity
+                  style={styles.rowActionButton}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    onChangeQuery(item);
+                  }}
+                  hitSlop={{ top: 10, bottom: 10, left: 8, right: 6 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Preencher busca com ${item}`}
+                >
+                  <ArrowUpLeft color="#8E8E93" size={20} />
+                </TouchableOpacity>
+                {onRemoveRecentQuery && (
+                  <TouchableOpacity
+                    style={styles.rowActionButton}
+                    onPress={(e) => {
+                      e?.stopPropagation?.();
+                      onRemoveRecentQuery(item);
+                    }}
+                    hitSlop={{ top: 10, bottom: 10, left: 6, right: 10 }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Remover busca ${item}`}
+                  >
+                    <X color="#8E8E93" size={18} />
+                  </TouchableOpacity>
+                )}
               </TouchableOpacity>
-            </TouchableOpacity>
-          ))}
-        </View>
+            ))
+          ) : (
+            <View style={styles.emptyHistoryBox} testID="search-history-empty">
+              <Text style={styles.emptyHistoryText}>
+                {recentQueries.length === 0
+                  ? 'Suas buscas recentes aparecerão aqui'
+                  : 'Nenhuma busca recente correspondente'}
+              </Text>
+            </View>
+          )}
+        </ScrollView>
       )}
     </View>
   );
@@ -290,16 +369,13 @@ const styles = StyleSheet.create({
   wrapper: {
     backgroundColor: 'transparent',
   },
+  wrapperFocused: {
+    flex: 1,
+  },
   searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
     paddingHorizontal: 16,
     paddingVertical: 10,
     backgroundColor: 'transparent',
-  },
-  searchBarSlot: {
-    flex: 1,
   },
   searchBar: {
     width: '100%',
@@ -311,7 +387,11 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.06)',
     paddingHorizontal: 14,
     height: 48,
-    gap: 12,
+    gap: 10,
+  },
+  searchBarWithInlineAction: {
+    paddingLeft: 16,
+    paddingRight: 8,
   },
   searchBarFocused: {
     borderColor: 'rgba(255, 255, 255, 0.14)',
@@ -340,39 +420,54 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  searchButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+  inlineSearchButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  searchButtonActive: {
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  searchButtonIdle: {
-    backgroundColor: '#212121',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
   },
   searchButtonDisabled: {
     opacity: 0.7,
   },
   recentList: {
-    paddingTop: 4,
-    paddingBottom: 6,
+    flex: 1,
+  },
+  recentListContent: {
+    paddingTop: 6,
+  },
+  recentHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingTop: 6,
+    paddingBottom: 10,
+  },
+  recentHeaderTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+  clearAllButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  clearAllText: {
+    color: '#AAAAAA',
+    fontSize: 12,
+    fontWeight: '600',
   },
   recentRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 18,
-    paddingVertical: 13,
-    gap: 18,
+    paddingVertical: 14,
+    gap: 16,
   },
   recentQueryText: {
     flex: 1,
@@ -380,10 +475,19 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '400',
   },
-  fillArrowButton: {
+  rowActionButton: {
     padding: 4,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  emptyHistoryBox: {
+    paddingHorizontal: 18,
+    paddingVertical: 28,
+    alignItems: 'center',
+  },
+  emptyHistoryText: {
+    color: '#717171',
+    fontSize: 14,
   },
 });
 

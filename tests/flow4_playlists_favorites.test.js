@@ -95,7 +95,7 @@ test('Flow 4: AddToPlaylistModal adds track to existing playlist and creates new
       React.createElement(AddToPlaylistModal, {
         visible: true,
         track: sampleTrack,
-        onClose: () => {},
+        onClose: () => { },
         onTrackAdded: (plId, plName) => {
           trackAdded = true;
           assert.strictEqual(plId, existingPl.id);
@@ -145,7 +145,7 @@ test('Flow 4: AddToPlaylistModal alerts when track is duplicate and allows confi
       React.createElement(AddToPlaylistModal, {
         visible: true,
         track,
-        onClose: () => {},
+        onClose: () => { },
       })
     );
   });
@@ -226,7 +226,7 @@ test('Flow 4: PlaylistDetailModal displays tracks, allows playback, editing, and
         playlistId: pl.id,
         currentActiveTrackId: 'jazz_1',
         isPlaying: true,
-        onClose: () => {},
+        onClose: () => { },
         onPlayAll: (tracks) => {
           playAllCalled = true;
           assert.strictEqual(tracks.length, 2);
@@ -450,8 +450,8 @@ test('Flow 4: PlaylistDetailModal renders 3-dots track context menu matching Bai
         visible: true,
         playlistId: pl.id,
         downloadedTrackIds: new Set(['indie_2']),
-        onClose: () => {},
-        onPlayAll: () => {},
+        onClose: () => { },
+        onPlayAll: () => { },
         onPlayTrack: (track) => calls.push(['play', track.trackId]),
         onPlayNext: (track) => calls.push(['playNext', track.id]),
         onAddToQueue: (track) => calls.push(['queue', track.id]),
@@ -491,7 +491,7 @@ test('Flow 4: PlaylistDetailModal renders 3-dots track context menu matching Bai
     );
     assert.ok(moreBtn, `3-dots menu button should exist for ${title}`);
     await actAsync(async () => {
-      moreBtn.props.onPress({ stopPropagation: () => {} });
+      moreBtn.props.onPress({ stopPropagation: () => { } });
     });
   };
 
@@ -501,8 +501,21 @@ test('Flow 4: PlaylistDetailModal renders 3-dots track context menu matching Bai
     0
   );
 
-  // Downloaded badge reflects downloadedTrackIds for Lake Missoula
-  assert.ok(getAllText(root).includes('Baixada'));
+  // Downloaded & Stream icon-only badges reflect downloadedTrackIds
+  const downloadedBadge = root.find(
+    (n) => n.type === 'View' && n.props.accessibilityLabel === 'Baixada'
+  );
+  assert.ok(
+    downloadedBadge.findAll((n) => n.type === 'LucideIcon' && n.props.name === 'Folder').length === 1,
+    'Downloaded track must display Folder icon without text'
+  );
+  const streamBadge = root.find(
+    (n) => n.type === 'View' && n.props.accessibilityLabel === 'Stream'
+  );
+  assert.ok(
+    streamBadge.findAll((n) => n.type === 'LucideIcon' && n.props.name === 'Globe').length === 1,
+    'Online track must display Globe icon without text'
+  );
 
   // Tocar a seguir
   await openMenuFor('Evergreen');
@@ -620,9 +633,9 @@ test('Flow 4: PlaylistDetailModal renders atmospheric glow, 1:1 cropped cover, a
       React.createElement(PlaylistDetailModal, {
         visible: true,
         playlistId: pl.id,
-        onClose: () => {},
-        onPlayTrack: () => {},
-        onPlayAll: () => {},
+        onClose: () => { },
+        onPlayTrack: () => { },
+        onPlayAll: () => { },
       })
     );
   });
@@ -725,9 +738,9 @@ test('Flow 4: PlaylistDetailModal renders atmospheric glow, 1:1 cropped cover, a
       React.createElement(PlaylistDetailModal, {
         visible: true,
         playlistId: '__favorites__',
-        onClose: () => {},
-        onPlayTrack: () => {},
-        onPlayAll: () => {},
+        onClose: () => { },
+        onPlayTrack: () => { },
+        onPlayAll: () => { },
       })
     );
   });
@@ -750,9 +763,9 @@ test('Flow 4: PlaylistDetailModal renders atmospheric glow, 1:1 cropped cover, a
       React.createElement(PlaylistDetailModal, {
         visible: true,
         playlistId: emptyPl.id,
-        onClose: () => {},
-        onPlayTrack: () => {},
-        onPlayAll: () => {},
+        onClose: () => { },
+        onPlayTrack: () => { },
+        onPlayAll: () => { },
       })
     );
   });
@@ -856,9 +869,9 @@ test('Flow 4: PlaylistDetailModal opens Bottom Sheet menu, supports gallery cove
       React.createElement(PlaylistDetailModal, {
         visible: true,
         playlistId: pl.id,
-        onClose: () => {},
-        onPlayTrack: () => {},
-        onPlayAll: () => {},
+        onClose: () => { },
+        onPlayTrack: () => { },
+        onPlayAll: () => { },
         onPlaylistUpdated: () => {
           updatedEvents += 1;
         },

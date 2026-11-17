@@ -4,10 +4,16 @@ const documentDirectory = 'file:///data/user/0/com.sonarypro/files/';
 
 const files = new Map();
 let _generation = 0;
+let customCreateDownloadResumable = null;
 
 function resetFileSystem() {
   _generation += 1;
   files.clear();
+  customCreateDownloadResumable = null;
+}
+
+function setCreateDownloadResumable(fn) {
+  customCreateDownloadResumable = typeof fn === 'function' ? fn : null;
 }
 
 function getFileSystemGeneration() {
@@ -53,6 +59,9 @@ async function getFreeDiskStorageAsync() {
 }
 
 function createDownloadResumable(url, fileUri, options, callback) {
+  if (customCreateDownloadResumable) {
+    return customCreateDownloadResumable(url, fileUri, options, callback);
+  }
   return {
     downloadAsync: async () => {
       if (callback) callback({ totalBytesWritten: 1024 * 1024 * 3, totalBytesExpectedToWrite: 1024 * 1024 * 3 });
@@ -86,5 +95,6 @@ module.exports = {
   downloadAsync,
   getFreeDiskStorageAsync,
   createDownloadResumable,
+  setCreateDownloadResumable,
   readDirectoryAsync,
 };

@@ -12,6 +12,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import Svg, { Circle } from 'react-native-svg';
 import {
   CheckCircle2,
   Download,
@@ -27,10 +28,75 @@ import {
   X,
 } from 'lucide-react-native';
 import { getEaseOutCubic, theme } from '../theme';
-import { MarqueeText } from './MarqueeText';
+import { DownloadedTrackBadge, MarqueeText, TrackMetaRow } from './MarqueeText';
 import { useBottomSheetController } from './sheetMotion';
 import { PlayingEqualizer } from './PlayingEqualizer';
 import { useBackModalLock } from '../services/backNavigation';
+
+export interface CircularDownloadProgressProps {
+  progress: number;
+  size?: number;
+  strokeWidth?: number;
+}
+
+/**
+ * Indicador circular de progresso com arco branco dinâmico e percentual centralizado.
+ */
+export const CircularDownloadProgress: React.FC<CircularDownloadProgressProps> = ({
+  progress,
+  size = 36,
+  strokeWidth = 2.5,
+}) => {
+  const clamped = Math.max(0, Math.min(100, Math.round(progress)));
+  if (clamped <= 0) {
+    return (
+      <View style={[styles.ringContainer, { width: size, height: size }]}>
+        <ActivityIndicator color={theme.colors.textPrimary} size="small" />
+      </View>
+    );
+  }
+
+  const center = size / 2;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference * (1 - clamped / 100);
+
+  return (
+    <View style={[styles.ringContainer, { width: size, height: size }]}>
+      <Svg
+        width={size}
+        height={size}
+        style={styles.ringSvg}
+        accessible={false}
+      >
+        <Circle
+          cx={center}
+          cy={center}
+          r={radius}
+          stroke="rgba(255, 255, 255, 0.18)"
+          strokeWidth={strokeWidth}
+          fill="none"
+        />
+        <Circle
+          cx={center}
+          cy={center}
+          r={radius}
+          stroke="#FFFFFF"
+          strokeWidth={strokeWidth}
+          strokeDasharray={`${circumference} ${circumference}`}
+          strokeDashoffset={strokeDashoffset}
+          strokeLinecap="round"
+          fill="none"
+        />
+      </Svg>
+      <View style={styles.ringLabelOverlay} pointerEvents="none">
+        <Text style={styles.downloadProgressText} numberOfLines={1}>
+          {`${clamped}%`}
+        </Text>
+      </View>
+    </View>
+  );
+};
 
 export interface TrackCardProps {
   id: string;
@@ -115,218 +181,218 @@ export const TrackContextSheet: React.FC<TrackContextSheetProps> = ({
           activeOpacity={1}
           onPress={() => dismissSheet()}
         >
-        <Animated.View
-          renderToHardwareTextureAndroid
-          style={[
-            styles.sheetContainer,
-            {
-              transform: [{ translateY }],
-            },
-          ]}
-          onStartShouldSetResponder={() => true}
-          onTouchEnd={(e) => e?.stopPropagation?.()}
-        >
-          {/* Área de arrasto superior acessível com PanResponder para recolher */}
-          <View
-            style={styles.sheetDragArea}
-            {...panResponder.panHandlers}
-            accessibilityRole="adjustable"
-            accessibilityLabel="Arraste para baixo para recolher o menu"
+          <Animated.View
+            renderToHardwareTextureAndroid
+            style={[
+              styles.sheetContainer,
+              {
+                transform: [{ translateY }],
+              },
+            ]}
+            onStartShouldSetResponder={() => true}
+            onTouchEnd={(e) => e?.stopPropagation?.()}
           >
-            <View style={styles.sheetDragHandle} />
-          </View>
-
-          {/* Cabeçalho com Título, Artista, Duração e Botão Fechar */}
-          <View style={styles.sheetHeader}>
-            <View style={styles.sheetHeaderInfo} {...panResponder.panHandlers}>
-              <Text style={styles.sheetTitle} numberOfLines={1}>
-                {title}
-              </Text>
-              <Text style={styles.sheetSubtitle} numberOfLines={1}>
-                {artist}
-                {durationText ? ` • ${durationText}` : ''}
-              </Text>
+            {/* Área de arrasto superior acessível com PanResponder para recolher */}
+            <View
+              style={styles.sheetDragArea}
+              {...panResponder.panHandlers}
+              accessibilityRole="adjustable"
+              accessibilityLabel="Arraste para baixo para recolher o menu"
+            >
+              <View style={styles.sheetDragHandle} />
             </View>
 
-            <TouchableOpacity
-              style={styles.sheetCloseButton}
-              onPress={() => dismissSheet()}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              accessibilityRole="button"
-              accessibilityLabel="Fechar menu"
-            >
-              <X color="#FFFFFF" size={22} />
-            </TouchableOpacity>
-          </View>
+            {/* Cabeçalho com Título, Artista, Duração e Botão Fechar */}
+            <View style={styles.sheetHeader}>
+              <View style={styles.sheetHeaderInfo} {...panResponder.panHandlers}>
+                <Text style={styles.sheetTitle} numberOfLines={1}>
+                  {title}
+                </Text>
+                <Text style={styles.sheetSubtitle} numberOfLines={1}>
+                  {artist}
+                  {durationText ? ` • ${durationText}` : ''}
+                </Text>
+              </View>
 
-          <View style={styles.sheetDivider} />
+              <TouchableOpacity
+                style={styles.sheetCloseButton}
+                onPress={() => dismissSheet()}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                accessibilityRole="button"
+                accessibilityLabel="Fechar menu"
+              >
+                <X color="#FFFFFF" size={22} />
+              </TouchableOpacity>
+            </View>
 
-          {/* 3 Blocos de Ação Rápida no Topo (YouTube Music Tiles) */}
-          <View style={styles.quickTilesRow}>
-            {onPlayNext && (
+            <View style={styles.sheetDivider} />
+
+            {/* 3 Blocos de Ação Rápida no Topo (YouTube Music Tiles) */}
+            <View style={styles.quickTilesRow}>
+              {onPlayNext && (
+                <TouchableOpacity
+                  style={styles.quickTile}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    onClose();
+                    onPlayNext();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Tocar a seguir"
+                >
+                  <ListPlus color="#FFFFFF" size={22} />
+                  <Text style={styles.quickTileText} numberOfLines={1}>
+                    Tocar a seguir
+                  </Text>
+                </TouchableOpacity>
+              )}
+
               <TouchableOpacity
                 style={styles.quickTile}
                 onPress={(e) => {
                   e?.stopPropagation?.();
                   onClose();
-                  onPlayNext();
+                  onPress();
                 }}
                 accessibilityRole="button"
-                accessibilityLabel="Tocar a seguir"
+                accessibilityLabel="Iniciar rádio"
               >
-                <ListPlus color="#FFFFFF" size={22} />
+                <Radio color="#FFFFFF" size={22} />
                 <Text style={styles.quickTileText} numberOfLines={1}>
-                  Tocar a seguir
+                  Iniciar rádio
                 </Text>
               </TouchableOpacity>
-            )}
 
-            <TouchableOpacity
-              style={styles.quickTile}
-              onPress={(e) => {
-                e?.stopPropagation?.();
-                onClose();
-                onPress();
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="Iniciar rádio"
-            >
-              <Radio color="#FFFFFF" size={22} />
-              <Text style={styles.quickTileText} numberOfLines={1}>
-                Iniciar rádio
-              </Text>
-            </TouchableOpacity>
+              {onAddToPlaylist ? (
+                <TouchableOpacity
+                  style={styles.quickTile}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    onClose();
+                    onAddToPlaylist();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Adicionar à playlist"
+                >
+                  <Plus color="#FFFFFF" size={22} />
+                  <Text style={styles.quickTileText} numberOfLines={1}>
+                    Playlist
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={styles.quickTile}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    onClose();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Compartilhar"
+                >
+                  <Share2 color="#FFFFFF" size={22} />
+                  <Text style={styles.quickTileText} numberOfLines={1}>
+                    Compartilhar
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
 
-            {onAddToPlaylist ? (
-              <TouchableOpacity
-                style={styles.quickTile}
-                onPress={(e) => {
-                  e?.stopPropagation?.();
-                  onClose();
-                  onAddToPlaylist();
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Adicionar à playlist"
-              >
-                <Plus color="#FFFFFF" size={22} />
-                <Text style={styles.quickTileText} numberOfLines={1}>
-                  Playlist
-                </Text>
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                style={styles.quickTile}
-                onPress={(e) => {
-                  e?.stopPropagation?.();
-                  onClose();
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Compartilhar"
-              >
-                <Share2 color="#FFFFFF" size={22} />
-                <Text style={styles.quickTileText} numberOfLines={1}>
-                  Compartilhar
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
+            {/* Lista Vertical de Opções */}
+            <View style={styles.sheetActionsList}>
+              {onAddToQueue && (
+                <TouchableOpacity
+                  style={styles.sheetActionRow}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    onClose();
+                    onAddToQueue();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Adicionar ao fim da fila"
+                >
+                  <ListMusic color="#FFFFFF" size={22} />
+                  <Text style={styles.sheetActionText}>Adicionar ao fim da fila</Text>
+                </TouchableOpacity>
+              )}
 
-          {/* Lista Vertical de Opções */}
-          <View style={styles.sheetActionsList}>
-            {onAddToQueue && (
-              <TouchableOpacity
-                style={styles.sheetActionRow}
-                onPress={(e) => {
-                  e?.stopPropagation?.();
-                  onClose();
-                  onAddToQueue();
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Adicionar ao fim da fila"
-              >
-                <ListMusic color="#FFFFFF" size={22} />
-                <Text style={styles.sheetActionText}>Adicionar ao fim da fila</Text>
-              </TouchableOpacity>
-            )}
+              {!isOfflineList && onDownload && (
+                <TouchableOpacity
+                  style={styles.sheetActionRow}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    onClose();
+                    if (!isDownloaded) {
+                      onDownload();
+                    }
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Salvar offline"
+                >
+                  {isDownloaded ? (
+                    <CheckCircle2 color="#2BA640" size={22} />
+                  ) : (
+                    <Download color="#FFFFFF" size={22} />
+                  )}
+                  <Text style={styles.sheetActionText}>
+                    {isDownloaded ? 'Música já baixada' : 'Salvar offline'}
+                  </Text>
+                </TouchableOpacity>
+              )}
 
-            {!isOfflineList && onDownload && (
-              <TouchableOpacity
-                style={styles.sheetActionRow}
-                onPress={(e) => {
-                  e?.stopPropagation?.();
-                  onClose();
-                  if (!isDownloaded) {
-                    onDownload();
-                  }
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Salvar offline"
-              >
-                {isDownloaded ? (
-                  <CheckCircle2 color="#2BA640" size={22} />
-                ) : (
-                  <Download color="#FFFFFF" size={22} />
-                )}
-                <Text style={styles.sheetActionText}>
-                  {isDownloaded ? 'Música já baixada' : 'Salvar offline'}
-                </Text>
-              </TouchableOpacity>
-            )}
+              {onAddToPlaylist && (
+                <TouchableOpacity
+                  style={styles.sheetActionRow}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    onClose();
+                    onAddToPlaylist();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Adicionar à playlist"
+                >
+                  <Plus color="#FFFFFF" size={22} />
+                  <Text style={styles.sheetActionText}>Adicionar à playlist</Text>
+                </TouchableOpacity>
+              )}
 
-            {onAddToPlaylist && (
-              <TouchableOpacity
-                style={styles.sheetActionRow}
-                onPress={(e) => {
-                  e?.stopPropagation?.();
-                  onClose();
-                  onAddToPlaylist();
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Adicionar à playlist"
-              >
-                <Plus color="#FFFFFF" size={22} />
-                <Text style={styles.sheetActionText}>Adicionar à playlist</Text>
-              </TouchableOpacity>
-            )}
+              {isOfflineList && onDeleteOffline && (
+                <TouchableOpacity
+                  style={styles.sheetActionRow}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    onClose();
+                    onDeleteOffline();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Remover dos baixados"
+                >
+                  <Trash2 color="#FF4E45" size={22} />
+                  <Text style={[styles.sheetActionText, { color: '#FF4E45' }]}>
+                    Remover dos downloads
+                  </Text>
+                </TouchableOpacity>
+              )}
 
-            {isOfflineList && onDeleteOffline && (
-              <TouchableOpacity
-                style={styles.sheetActionRow}
-                onPress={(e) => {
-                  e?.stopPropagation?.();
-                  onClose();
-                  onDeleteOffline();
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Remover dos baixados"
-              >
-                <Trash2 color="#FF4E45" size={22} />
-                <Text style={[styles.sheetActionText, { color: '#FF4E45' }]}>
-                  Remover dos downloads
-                </Text>
-              </TouchableOpacity>
-            )}
-
-            {onRemoveFromPlaylist && (
-              <TouchableOpacity
-                style={styles.sheetActionRow}
-                onPress={(e) => {
-                  e?.stopPropagation?.();
-                  onClose();
-                  onRemoveFromPlaylist();
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Remover da playlist"
-              >
-                <Trash2 color="#FF4E45" size={22} />
-                <Text style={[styles.sheetActionText, { color: '#FF4E45' }]}>
-                  Remover da playlist
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </Animated.View>
-      </TouchableOpacity>
+              {onRemoveFromPlaylist && (
+                <TouchableOpacity
+                  style={styles.sheetActionRow}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    onClose();
+                    onRemoveFromPlaylist();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Remover da playlist"
+                >
+                  <Trash2 color="#FF4E45" size={22} />
+                  <Text style={[styles.sheetActionText, { color: '#FF4E45' }]}>
+                    Remover da playlist
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </Animated.View>
+        </TouchableOpacity>
       </Animated.View>
     </Modal>
   );
@@ -370,11 +436,7 @@ const TrackCardInner: React.FC<TrackCardProps> = ({
   const isWeb = Platform.OS === 'web';
   const showActions = !isWeb || isHovered || isActive;
 
-  const metaParts: string[] = [artist];
-  if (album) metaParts.push(album);
-  if (durationText) metaParts.push(durationText);
-  if (isOfflineList) metaParts.push('Offline');
-  const metaText = metaParts.join(' • ');
+  const artistMetaText = album ? `${artist} • ${album}` : artist;
 
   return (
     <TouchableOpacity
@@ -446,10 +508,23 @@ const TrackCardInner: React.FC<TrackCardProps> = ({
         >
           {title}
         </MarqueeText>
-        <MarqueeText active={Boolean(isActive)} style={styles.trackArtist}>
-          {metaText}
-        </MarqueeText>
+        <TrackMetaRow
+          active={Boolean(isActive)}
+          leading={isDownloaded && !isOfflineList ? <DownloadedTrackBadge /> : undefined}
+          artistText={artistMetaText}
+          textStyle={styles.trackArtist}
+        />
       </View>
+
+      {isDownloading && !showDirectActions ? (
+        <View style={styles.inlineDownloadingBadge} accessibilityLabel="Baixando música">
+          <CircularDownloadProgress progress={downloadProgress} />
+        </View>
+      ) : durationText ? (
+        <Text style={styles.trackDuration} numberOfLines={1}>
+          {durationText}
+        </Text>
+      ) : null}
 
       {/* Grupo de Ações com Revelação Progressiva (Zero Layout Shift) */}
       <View
@@ -504,13 +579,7 @@ const TrackCardInner: React.FC<TrackCardProps> = ({
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
             {isDownloading ? (
-              downloadProgress > 0 ? (
-                <Text style={styles.downloadProgressText}>
-                  {downloadProgress}%
-                </Text>
-              ) : (
-                <ActivityIndicator color={theme.colors.textPrimary} size="small" />
-              )
+              <CircularDownloadProgress progress={downloadProgress} />
             ) : isDownloaded ? (
               <CheckCircle2 color={theme.colors.success} size={20} />
             ) : (
@@ -644,6 +713,13 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.fontSize.caption,
     color: theme.colors.textSecondary,
   },
+  trackDuration: {
+    fontSize: theme.typography.fontSize.caption,
+    color: theme.colors.textSecondary,
+    fontVariant: ['tabular-nums'],
+    flexShrink: 0,
+    marginLeft: 8,
+  },
   cardActionGroup: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -663,10 +739,32 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minWidth: 36,
   },
+  ringContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  ringSvg: {
+    transform: [{ rotate: '-90deg' }],
+  },
+  ringLabelOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   downloadProgressText: {
-    fontSize: 11,
+    fontSize: 9.5,
     fontWeight: '700',
     color: theme.colors.textPrimary,
+    fontVariant: ['tabular-nums'],
+    textAlign: 'center',
+    includeFontPadding: false,
+  },
+  inlineDownloadingBadge: {
+    marginLeft: 8,
+    marginRight: -4,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   deleteButton: {
     padding: 8,

@@ -48,13 +48,18 @@ import { PlaylistCover } from './components/PlaylistCover';
 import { getEaseOutCubic, theme } from './theme';
 import {
   AlertCircle,
+  Coffee,
+  Disc3,
   Download,
+  Dumbbell,
   FolderDown,
   Globe,
+  Guitar,
   Headphones,
   Heart,
   ListMusic,
   ListPlus,
+  Moon,
   Music2,
   Pause,
   Play,
@@ -62,8 +67,10 @@ import {
   Search,
   SkipBack,
   SkipForward,
+  Sun,
   Trash2,
   X,
+  Zap,
 } from 'lucide-react-native';
 import {
   TrackSummary,
@@ -114,6 +121,7 @@ import {
   syncAndCleanStorage,
   registerLocalTrackIfMissing,
   enqueueDownload,
+  getDownloadQueue,
   subscribeDownloadQueue,
 } from './services/storage';
 import {
@@ -137,6 +145,8 @@ import {
   PlaybackSessionState,
   getSearchHistory,
   recordSearchHistory,
+  removeSearchHistoryItem,
+  clearSearchHistory,
   incrementDailySupportPlayCount,
 } from './services/database';
 import {
@@ -165,6 +175,7 @@ export default function App() {
   const activeGlowColor = '#6E000D';
   const [query, setQuery] = useState('');
   const [recentSearchQueries, setRecentSearchQueries] = useState<string[]>([]);
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [searchResults, setSearchResults] = useState<TrackSummary[]>([]);
   const [searchContinuationToken, setSearchContinuationToken] = useState<string | null>(null);
   const [lastSearchedQuery, setLastSearchedQuery] = useState<string>('');
@@ -235,6 +246,14 @@ export default function App() {
   );
   const originalQueueRef = React.useRef<Track[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastVariant, setToastVariant] = useState<'success' | 'error'>('success');
+  const showToast = useCallback(
+    (msg: string, variant: 'success' | 'error' = 'success') => {
+      setToastVariant(variant);
+      setToastMessage(msg);
+    },
+    []
+  );
   const [isLoadingRadio, setIsLoadingRadio] = useState<boolean>(false);
   const radioContinuationRef = React.useRef<string | undefined>(undefined);
 
@@ -559,6 +578,7 @@ export default function App() {
 
   const lastSavedSessionRef = React.useRef<{ trackId: string; position: number } | null>(null);
   const syncedCompletedIdsRef = React.useRef<Set<string>>(new Set());
+  const reportedDownloadErrorMapRef = React.useRef<Map<string, string>>(new Map());
 
   // Persistência periódica de sessão (TASK-006)
   useEffect(() => {
@@ -607,15 +627,21 @@ export default function App() {
   // Auto-dismiss do toast de feedback
   useEffect(() => {
     if (!toastMessage) return;
-    const timeoutMs = toastMessage === EXIT_PROMPT_MESSAGE ? EXIT_PROMPT_MS : 3000;
+    const timeoutMs =
+      toastMessage === EXIT_PROMPT_MESSAGE
+        ? EXIT_PROMPT_MS
+        : toastVariant === 'error'
+          ? 4500
+          : 3000;
     const timer = setTimeout(() => {
       setToastMessage(null);
+      setToastVariant('success');
     }, timeoutMs);
     if (timer && typeof (timer as any).unref === 'function') {
       (timer as any).unref();
     }
     return () => clearTimeout(timer);
-  }, [toastMessage]);
+  }, [toastMessage, toastVariant]);
 
   // Tratamento resiliente de erro de reprodução nativo (ExoPlayer 403 / IO) e sincronização de eventos
   useTrackPlayerEvents(
@@ -910,6 +936,9 @@ export default function App() {
       isPlaylistDetailVisibleRef.current = false;
       setIsPlaylistDetailVisible(false);
 
+      if (nextTab !== 'search') {
+        setIsSearchFocused(false);
+      }
       if (nextTab === 'playlists') {
         loadPlaylists();
       } else if (nextTab === 'downloads') {
@@ -1395,10 +1424,10 @@ export default function App() {
       setSearchResults(page.tracks);
       setSearchContinuationToken(page.continuationToken);
 
-      // Consulta em lote no SQLite (Zero jank na UI Thread)
+      // Consulta em lote no SQLite sem descartar IDs já carregados de playlists/aba Baixadas
       const resultIds = page.tracks.map((t) => t.id);
       const downloadedSet = await getDownloadedTrackIds(resultIds);
-      setDownloadedIds(downloadedSet);
+      setDownloadedIds((prev) => new Set([...prev, ...downloadedSet]));
 
       const favoriteSet = await getFavoriteTrackIds(resultIds);
       setFavoriteTrackIds(favoriteSet);
@@ -1960,7 +1989,7 @@ export default function App() {
     };
   }, [isNowPlayingVisible, volume, isLoadingAudio, nativeActiveTrack?.id, restoredSession]);
 
-  // Sincroniza a fila de downloads com a UI e com a lista offline
+  // Sincroniza a fila de downloads com a UI, lista offline e erros
   useEffect(() => {
     const unsubscribe = subscribeDownloadQueue((queue) => {
       const active = queue.find((i) => i.status === 'downloading');
@@ -1971,23 +2000,58 @@ export default function App() {
         setDownloadingId(null);
         setDownloadProgress(0);
       }
-      const completedIds = queue
-        .filter((i) => i.status === 'completed')
-        .map((i) => i.track.id);
-      const hasNewCompleted = completedIds.some(
-        (id) => !syncedCompletedIdsRef.current.has(id)
+
+      // Limpa registro de erros para faixas re-enfileiradas ou concluídas
+      for (const item of queue) {
+        if (item.status !== 'error') {
+          reportedDownloadErrorMapRef.current.delete(item.track.id);
+        }
+      }
+
+      const completedItems = queue.filter((i) => i.status === 'completed');
+      const completedIds = completedItems.map((i) => i.track.id);
+      const newlyCompleted = completedItems.filter(
+        (i) => !syncedCompletedIdsRef.current.has(i.track.id)
       );
       syncedCompletedIdsRef.current = new Set(completedIds);
-      if (hasNewCompleted) {
-        loadOfflineTracks();
+      if (newlyCompleted.length > 0) {
+        void loadOfflineTracks();
+        const lastCompleted = newlyCompleted[newlyCompleted.length - 1];
+        if (lastCompleted?.track?.title) {
+          showToast(`"${lastCompleted.track.title}" salva em Baixadas`, 'success');
+        }
+      }
+
+      const failedItem = queue.find((i) => {
+        if (i.status !== 'error') return false;
+        const msg = i.error || 'Erro desconhecido';
+        return reportedDownloadErrorMapRef.current.get(i.track.id) !== msg;
+      });
+      if (failedItem) {
+        const reason = failedItem.error || 'Não foi possível concluir o download.';
+        reportedDownloadErrorMapRef.current.set(failedItem.track.id, reason);
+        const friendlyMsg = `Falha ao baixar "${failedItem.track.title}": ${reason}`;
+        setErrorMessage(friendlyMsg);
+        showToast(friendlyMsg, 'error');
       }
     });
     return () => unsubscribe();
-  }, []);
+  }, [showToast]);
 
   const handleDownload = (track: TrackSummary) => {
-    if (downloadedIds.has(track.id)) return;
+    if (!track || !track.id) return;
+    if (downloadedIds.has(track.id)) {
+      showToast(`"${track.title}" já está salva em Baixadas`, 'success');
+      return;
+    }
+    const existing = getDownloadQueue().find((i) => i.track.id === track.id);
+    if (existing && (existing.status === 'pending' || existing.status === 'downloading')) {
+      showToast(`"${track.title}" já está na fila de downloads`, 'success');
+      return;
+    }
     setErrorMessage(null);
+    reportedDownloadErrorMapRef.current.delete(track.id);
+    showToast(`Baixando "${track.title}"...`, 'success');
     enqueueDownload(track);
   };
 
@@ -2124,6 +2188,19 @@ export default function App() {
                   isSearching={isSearching}
                   recentQueries={recentSearchQueries}
                   hasResults={searchResults.length > 0}
+                  onFocusChange={setIsSearchFocused}
+                  onRemoveRecentQuery={async (item) => {
+                    try {
+                      const next = await removeSearchHistoryItem(item);
+                      setRecentSearchQueries(next);
+                    } catch {}
+                  }}
+                  onClearHistory={async () => {
+                    try {
+                      await clearSearchHistory();
+                      setRecentSearchQueries([]);
+                    } catch {}
+                  }}
                   onClearSearch={() => {
                     lastBackExitPressRef.current = 0;
                     setQuery('');
@@ -2134,7 +2211,8 @@ export default function App() {
                   }}
                 />
 
-                {/* Lista de Resultados Online */}
+                {/* Lista de Resultados Online / Descoberta (oculta durante o modo busca focado) */}
+                {!isSearchFocused && (
                 <FlatList
                   data={searchResults}
                   keyExtractor={(item) => item.id}
@@ -2154,6 +2232,7 @@ export default function App() {
                           }))}
                           activeTrackId={activeTrack?.id}
                           isPlaying={isPlaying}
+                          downloadedTrackIds={downloadedIds}
                           onSelectTrack={(track, index) => {
                             const found = searchResults.find((r) => r.id === track.id);
                             if (found) handleSelectTrack(found, index);
@@ -2192,25 +2271,25 @@ export default function App() {
                             testID="genre-chips-carousel"
                           >
                             {[
-                              { label: 'Lo-Fi', icon: '☕' },
-                              { label: 'Pop', icon: '🎧' },
-                              { label: 'Rock', icon: '🎸' },
-                              { label: 'Acústico', icon: '🌙' },
-                              { label: 'MPB', icon: '🇧🇷' },
-                              { label: 'Eletrônica', icon: '⚡' },
-                              { label: 'Jazz', icon: '🎷' },
-                              { label: 'Treino', icon: '🔥' },
-                            ].map((g) => (
+                              { label: 'Lo-Fi', Icon: Coffee },
+                              { label: 'Pop', Icon: Headphones },
+                              { label: 'Rock', Icon: Guitar },
+                              { label: 'Acústico', Icon: Moon },
+                              { label: 'MPB', Icon: Sun },
+                              { label: 'Eletrônica', Icon: Zap },
+                              { label: 'Jazz', Icon: Disc3 },
+                              { label: 'Treino', Icon: Dumbbell },
+                            ].map(({ label, Icon }) => (
                               <TouchableOpacity
-                                key={g.label}
+                                key={label}
                                 style={styles.genreChip}
-                                onPress={() => handleSearch(g.label)}
+                                onPress={() => handleSearch(label)}
                                 activeOpacity={0.7}
                                 accessibilityRole="button"
-                                accessibilityLabel={`Explorar gênero ${g.label}`}
+                                accessibilityLabel={`Explorar gênero ${label}`}
                               >
-                                <Text style={styles.genreChipIcon}>{g.icon}</Text>
-                                <Text style={styles.genreChipText}>{g.label}</Text>
+                                <Icon color="#D4D4D8" size={14} strokeWidth={2} />
+                                <Text style={styles.genreChipText}>{label}</Text>
                               </TouchableOpacity>
                             ))}
                           </ScrollView>
@@ -2322,6 +2401,7 @@ export default function App() {
                     ) : null
                   }
                 />
+                )}
               </View>
             )}
 
@@ -2558,8 +2638,12 @@ export default function App() {
               await syncPlayerQueue();
             }}
             isDownloaded={activeTrack ? downloadedIds.has(activeTrack.id) : false}
+            isDownloading={activeTrack ? downloadingId === activeTrack.id : false}
+            downloadProgress={
+              activeTrack && downloadingId === activeTrack.id ? downloadProgress : 0
+            }
             onDownload={
-              activeTrack && !downloadedIds.has(activeTrack.id)
+              activeTrack
                 ? () => {
                   const summary: TrackSummary = {
                     id: activeTrack.id,
@@ -2586,7 +2670,11 @@ export default function App() {
               handleAddToQueue(relTrack);
             }}
             toastMessage={toastMessage}
-            onDismissToast={() => setToastMessage(null)}
+            toastVariant={toastVariant}
+            onDismissToast={() => {
+              setToastMessage(null);
+              setToastVariant('success');
+            }}
           />
         )}
 
@@ -2614,7 +2702,11 @@ export default function App() {
         {/* Toast de Feedback no topo da tela para não cobrir o player */}
         <ToastBanner
           message={!isNowPlayingVisible ? toastMessage : null}
-          onDismiss={() => setToastMessage(null)}
+          variant={toastVariant}
+          onDismiss={() => {
+            setToastMessage(null);
+            setToastVariant('success');
+          }}
           topOffset={
             Platform.OS === 'android'
               ? (StatusBar.currentHeight ?? 0) + 12
@@ -2931,9 +3023,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 13,
     paddingVertical: 8,
     borderRadius: 20,
-  },
-  genreChipIcon: {
-    fontSize: 13,
   },
   genreChipText: {
     fontSize: 13,

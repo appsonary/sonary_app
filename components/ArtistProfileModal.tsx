@@ -29,6 +29,7 @@ import {
   TrackSummary,
 } from '../services/api';
 import { ToastBanner } from './ToastBanner';
+import { TrackMetaRow } from './MarqueeText';
 import { SHEET_ENTER_MS, useModalEnterAnimation } from './sheetMotion';
 import { getEaseOutCubic, theme } from '../theme';
 import { useBackModalLock } from '../services/backNavigation';
@@ -280,10 +281,22 @@ export function ArtistProfileModal({
                       <Text style={styles.topTrackTitle} numberOfLines={1}>
                         {item.title}
                       </Text>
-                      <Text style={styles.topTrackSub} numberOfLines={1}>
-                        {item.artist} • {item.formattedDuration || '3:30'}
-                      </Text>
+                      <TrackMetaRow
+                        style={styles.topTrackMetaRow}
+                        artistText={item.artist}
+                        textStyle={styles.topTrackSub}
+                      />
                     </View>
+
+                    <Text
+                      style={[
+                        styles.topTrackDuration,
+                        !onAddToQueue && styles.topTrackDurationFlush,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {item.formattedDuration || '3:30'}
+                    </Text>
 
                     {onAddToQueue && (
                       <TouchableOpacity
@@ -606,6 +619,7 @@ const styles = StyleSheet.create({
   },
   topTrackMeta: {
     flex: 1,
+    minWidth: 0,
     marginRight: 8,
   },
   topTrackTitle: {
@@ -613,10 +627,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  topTrackMetaRow: {
+    marginTop: 2,
+  },
   topTrackSub: {
     color: '#AAAAAA',
     fontSize: 12,
-    marginTop: 2,
+  },
+  topTrackDuration: {
+    color: '#AAAAAA',
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+    flexShrink: 0,
+    marginRight: 6,
+  },
+  topTrackDurationFlush: {
+    marginRight: 0,
   },
   queueTrackBtn: {
     padding: 8,

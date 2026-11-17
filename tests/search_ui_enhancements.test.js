@@ -55,11 +55,29 @@ test('Search UI: BrandHeader has balanced YouTube Music layout and refined statu
     'BrandHeader logo image must maintain horizontal aspect ratio'
   );
 
-  // Verify user avatar is rendered and Cast button is omitted (no unlinked device pairing)
-  const avatar = root.find(
+  // Verify notifications bell icon replaces legacy profile avatar cleanly (no pill background) and Cast button is omitted
+  const notificationsIcon = root.find(
+    (n) => n.props && n.props.accessibilityLabel === 'Notificações'
+  );
+  assert.ok(notificationsIcon, 'Notifications bell button must be present');
+  assert.ok(
+    !notificationsIcon.props.style || !notificationsIcon.props.style.backgroundColor,
+    'Notifications bell button must stay clean without a background pill'
+  );
+  assert.ok(
+    !notificationsIcon.props.style || !notificationsIcon.props.style.borderWidth,
+    'Notifications bell button must stay clean without a border'
+  );
+
+  const bellIcon = notificationsIcon.find(
+    (n) => n.type === 'LucideIcon' && n.props && n.props.name === 'Bell'
+  );
+  assert.ok(bellIcon, 'BrandHeader must render Bell icon inside notifications slot');
+
+  const legacyProfileAvatar = root.findAll(
     (n) => n.props && n.props.accessibilityLabel === 'Perfil do usuário'
   );
-  assert.ok(avatar, 'User profile avatar must be present');
+  assert.strictEqual(legacyProfileAvatar.length, 0, 'Legacy profile avatar must be removed');
 
   const castBtn = root.findAll(
     (n) => n.props && n.props.accessibilityLabel === 'Transmitir áudio para dispositivo'
@@ -109,17 +127,24 @@ test('Search UI: SearchBarSection renders YouTube Music pill bar, circular searc
 
   const root = tree.root;
 
-  // Verify search input & circular search button
+  // Verify search input, single magnifying glass, & inline search button inside pill
   const input = root.findByType('TextInput');
   assert.ok(input, 'TextInput must exist');
   assert.strictEqual(input.props.returnKeyType, 'search');
 
+  const searchIcons = root.findAll(
+    (node) => node.type === 'LucideIcon' && node.props.name === 'Search'
+  );
+  assert.strictEqual(searchIcons.length, 1, 'Must render only one Search icon (no duplicate outer button)');
+
   const searchBtn = findSearchActionButton(root);
-  assert.ok(searchBtn, 'Search action button must exist');
+  assert.ok(searchBtn, 'Inline search action button must exist');
   const btnStyle = StyleSheet.flatten(searchBtn.props.style) || {};
-  assert.strictEqual(btnStyle.width, 48);
-  assert.strictEqual(btnStyle.height, 48);
-  assert.strictEqual(btnStyle.borderRadius, 24);
+  assert.strictEqual(btnStyle.width, 32);
+  assert.strictEqual(btnStyle.height, 32);
+  assert.strictEqual(btnStyle.borderRadius, 16);
+  assert.strictEqual(btnStyle.backgroundColor, '#FFFFFF');
+  assert.strictEqual(searchIcons[0].props.color, '#030303');
 
   // Focusing input reveals back arrow & recent search history rows
   await actAsync(async () => {
@@ -154,6 +179,58 @@ test('Search UI: SearchBarSection renders YouTube Music pill bar, circular searc
   assert.strictEqual(submittedQuery, 'metallica', 'Pressing circular search button must trigger onSearch');
 });
 
+test('Search UI: Focused search mode renders dedicated Buscas recentes screen with Clear All, item removal, and hides Discovery in App', async () => {
+  const { Keyboard, ScrollView } = require('react-native');
+  const { recordSearchHistory } = require('../services/database');
+  await recordSearchHistory('wanna be yours');
+  await recordSearchHistory('yukon');
+  await recordSearchHistory('kate bush');
+
+  let tree;
+  await actAsync(async () => {
+    tree = renderer.create(React.createElement(App));
+  });
+
+  const root = tree.root;
+  assert.ok(root.findByProps({ testID: 'genre-chips-carousel' }), 'Discovery chips visible before focus');
+
+  const input = findInputByPlaceholder(root, 'Buscar faixas, artistas ou álbuns...');
+  await actAsync(async () => {
+    input.props.onFocus();
+  });
+
+  // Discovery and Playlists are hidden while search is focused
+  assert.strictEqual(root.findAllByProps({ testID: 'genre-chips-carousel' }).length, 0);
+  assert.strictEqual(root.findAllByProps({ testID: 'search-playlists-catalog' }).length, 0);
+
+  const historyList = root.findByProps({ testID: 'search-history-list' });
+  assert.strictEqual(historyList.type, ScrollView, 'History list must be a ScrollView');
+  assert.strictEqual(historyList.props.keyboardShouldPersistTaps, 'handled');
+  assert.ok(getAllText(historyList).includes('Buscas recentes'));
+  assert.ok(getAllText(historyList).includes('kate bush'));
+
+  // Remove single query item
+  const removeBtn = root.findByProps({ accessibilityLabel: 'Remover busca yukon' });
+  await actAsync(async () => {
+    removeBtn.props.onPress({ stopPropagation: () => {} });
+  });
+  assert.strictEqual(getAllText(root.findByProps({ testID: 'search-history-list' })).includes('yukon'), false);
+  assert.ok(getAllText(root.findByProps({ testID: 'search-history-list' })).includes('wanna be yours'));
+
+  // Clear all history
+  const clearAllBtn = root.findByProps({ accessibilityLabel: 'Limpar histórico de buscas' });
+  await actAsync(async () => {
+    clearAllBtn.props.onPress();
+  });
+  assert.ok(root.findByProps({ testID: 'search-history-empty' }));
+
+  // Closing focus restores Discovery screen
+  await actAsync(async () => {
+    Keyboard.__emit('keyboardDidHide');
+  });
+  assert.ok(root.findByProps({ testID: 'genre-chips-carousel' }), 'Discovery chips return when focus closes');
+});
+
 test('Search UI: Initial state displays genre explore chips that trigger search on tap', async () => {
   let searchedQuery = null;
   api.searchTracks = async (q) => {
@@ -185,6 +262,10 @@ test('Search UI: Initial state displays genre explore chips that trigger search 
     (n) => n.props && n.props.accessibilityLabel === 'Explorar gênero Lo-Fi'
   );
   assert.ok(lofiChip, 'Lo-Fi explore chip must be present in discovery section');
+  const lofiIcon = lofiChip.find(
+    (n) => n.type === 'LucideIcon' && n.props.name === 'Coffee'
+  );
+  assert.ok(lofiIcon, 'Lo-Fi explore chip must render Lucide Coffee icon instead of emoji');
 
   // Tap Lo-Fi chip
   await actAsync(async () => {

@@ -10,6 +10,7 @@ import {
   View,
   ViewStyle,
 } from 'react-native';
+import { Folder } from 'lucide-react-native';
 
 export interface MarqueeTextProps {
   children: string;
@@ -19,6 +20,17 @@ export interface MarqueeTextProps {
   gap?: number;
   speedPxPerSec?: number;
   pauseMs?: number;
+}
+
+export interface TrackMetaRowProps {
+  artistText: string;
+  durationText?: string;
+  active?: boolean;
+  leading?: React.ReactNode;
+  style?: StyleProp<ViewStyle>;
+  artistContainerStyle?: StyleProp<ViewStyle>;
+  textStyle?: StyleProp<TextStyle>;
+  durationStyle?: StyleProp<TextStyle>;
 }
 
 const DEFAULT_GAP = 48;
@@ -113,6 +125,15 @@ export const MarqueeText: React.FC<MarqueeTextProps> = ({
   };
 
   if (!active) {
+    if (containerStyle) {
+      return (
+        <View style={[styles.container, containerStyle]}>
+          <Text style={style} numberOfLines={1} ellipsizeMode="tail">
+            {text}
+          </Text>
+        </View>
+      );
+    }
     return (
       <Text style={style} numberOfLines={1} ellipsizeMode="tail">
         {text}
@@ -177,11 +198,81 @@ export const MarqueeText: React.FC<MarqueeTextProps> = ({
   );
 };
 
+/**
+ * Ícone padrão de faixa salva offline (pastinha verde compartilhada entre playlists e busca).
+ */
+export const DownloadedTrackBadge: React.FC = () => (
+  <View style={styles.downloadedBadge} accessibilityLabel="Baixada">
+    <Folder color="#2BA640" size={12} />
+  </View>
+);
+
+/**
+ * Linha padronizada de metadados de faixa: artista flexível (truncado com "..." quando inativo
+ * ou carrossel quando ativo) à esquerda e duração fixa alinhada à direita.
+ */
+export const TrackMetaRow: React.FC<TrackMetaRowProps> = ({
+  artistText,
+  durationText,
+  active = false,
+  leading,
+  style,
+  artistContainerStyle,
+  textStyle,
+  durationStyle,
+}) => (
+  <View style={[styles.metaRow, style]}>
+    {leading}
+    <MarqueeText
+      active={active}
+      containerStyle={[
+        styles.metaArtistContainer,
+        leading ? styles.metaArtistWithLeading : null,
+        artistContainerStyle,
+      ]}
+      style={textStyle}
+    >
+      {artistText}
+    </MarqueeText>
+    {durationText ? (
+      <Text
+        style={[textStyle, styles.metaDuration, durationStyle]}
+        numberOfLines={1}
+      >
+        {durationText}
+      </Text>
+    ) : null}
+  </View>
+);
+
 const styles = StyleSheet.create({
   container: {
     overflow: 'hidden',
     position: 'relative',
     minWidth: 0,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minWidth: 0,
+  },
+  downloadedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  metaArtistContainer: {
+    flex: 1,
+    minWidth: 0,
+  },
+  metaArtistWithLeading: {
+    marginLeft: 5,
+  },
+  metaDuration: {
+    flexShrink: 0,
+    marginLeft: 8,
+    fontVariant: ['tabular-nums'],
   },
   hiddenPlaceholder: {
     opacity: 0,

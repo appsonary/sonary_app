@@ -127,6 +127,23 @@ function syncAndroidAppName(androidDir, appConfig) {
   return changed;
 }
 
+function syncMainActivityManifestAttrs(manifestContent) {
+  return manifestContent.replace(
+    /<activity\b[^>]*android:name="\.MainActivity"[^>]*>/,
+    (tag) => {
+      let nextTag = /android:theme="[^"]*"/.test(tag)
+        ? tag.replace(/android:theme="[^"]*"/, 'android:theme="@style/AppTheme"')
+        : tag.replace(/>$/, ' android:theme="@style/AppTheme">');
+
+      nextTag = /android:windowSoftInputMode="[^"]*"/.test(nextTag)
+        ? nextTag.replace(/android:windowSoftInputMode="[^"]*"/, 'android:windowSoftInputMode="adjustNothing"')
+        : nextTag.replace(/>$/, ' android:windowSoftInputMode="adjustNothing">');
+
+      return nextTag;
+    }
+  );
+}
+
 function runPatchAndroid() {
 console.log('\n[SonaryPro] 🛡️ Verificando e aplicando blindagem nativa Android...');
 
@@ -291,14 +308,11 @@ if (fs.existsSync(manifestPath)) {
     );
   }
 
-  // Garante android:theme="@style/AppTheme" na MainActivity
-  if (content.includes('activity android:name=".MainActivity"')) {
-    if (!content.includes('android:name=".MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:theme="@style/AppTheme"')) {
-      content = content.replace(
-        /(<activity[^>]*name="\.MainActivity"[^>]*?)android:theme="[^"]*"/,
-        `$1android:theme="@style/AppTheme"`
-      );
-    }
+  // Garante android:theme="@style/AppTheme" e android:windowSoftInputMode="adjustNothing" na MainActivity
+  const updatedManifest = syncMainActivityManifestAttrs(content);
+  if (updatedManifest !== content) {
+    content = updatedManifest;
+    modified = true;
   }
 
   if (modified) {
@@ -371,6 +385,7 @@ module.exports = {
   computeAndroidAssetsHash,
   syncGradleVersions,
   syncAndroidAppName,
+  syncMainActivityManifestAttrs,
   runPatchAndroid,
 };
 

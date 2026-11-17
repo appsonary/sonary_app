@@ -399,3 +399,176 @@ test('Flow 2: UI renders "Carregar mais" button after search and appends non-dup
     '"Carregar mais" button hides once continuationToken is exhausted'
   );
 });
+
+test('Flow 2: "Salvar offline" downloads track into Baixadas tab, preserves downloadedIds across searches, and surfaces download errors', async () => {
+  const { setAudioStreamResolver, clearStorageCache } = require('../services/storage');
+  const { saveDownloadedTrack } = require('../services/database');
+  const fileSystemMock = require('./mocks/fileSystemMock');
+
+  await saveDownloadedTrack({
+    id: 'pre_existing_dl',
+    title: 'Pre Existing Offline',
+    artist: 'Old Artist',
+    duration: 200,
+    thumbnailUrl: 'https://example.com/old.jpg',
+    localUri: `${fileSystemMock.documentDirectory}tracks/pre_existing_dl.m4a`,
+    downloadedAt: Date.now(),
+  });
+  fileSystemMock.files.set(
+    `${fileSystemMock.documentDirectory}tracks/pre_existing_dl.m4a`,
+    { isDirectory: false, size: 1024 * 1024 }
+  );
+
+  api.searchTracksPage = async () => ({
+    tracks: [
+      {
+        id: 'save_offline_1',
+        title: 'Save Me Offline',
+        artist: 'Offline Hero',
+        duration: 210,
+        formattedDuration: '3:30',
+        thumbnailUrl: 'https://example.com/save.jpg',
+      },
+      {
+        id: 'save_offline_fail',
+        title: 'Broken Stream Track',
+        artist: 'Fail Hero',
+        duration: 190,
+        formattedDuration: '3:10',
+        thumbnailUrl: 'https://example.com/fail.jpg',
+      },
+    ],
+    continuationToken: null,
+  });
+
+  setAudioStreamResolver(async (id) => {
+    if (id === 'save_offline_fail') {
+      throw new Error('HTTP 403 Forbidden');
+    }
+    return {
+      streamUrl: `https://stream.example.com/${id}.m4a`,
+      headers: {
+        'User-Agent': 'SonaryTest/1.0',
+        Referer: 'https://www.youtube.com/',
+        Origin: 'https://www.youtube.com',
+      },
+    };
+  });
+
+  try {
+    let tree;
+    await actAsync(async () => {
+      tree = renderer.create(React.createElement(App));
+    });
+    const root = tree.root;
+
+    const input = findInputByPlaceholder(root, 'Buscar faixas');
+    await actAsync(async () => {
+      input.props.onChangeText('Offline Hero');
+    });
+    await actAsync(async () => {
+      findSearchActionButton(root).props.onPress();
+    });
+
+    // Open 3-dots menu on first search result and tap "Salvar offline"
+    const moreBtn = root.find(
+      (n) =>
+        n.type === 'TouchableOpacity' &&
+        n.props.accessibilityLabel === 'Mais opções para Save Me Offline'
+    );
+    await actAsync(async () => {
+      moreBtn.props.onPress({ stopPropagation: () => {} });
+    });
+
+    const saveBtn = root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Salvar offline'
+    );
+    await actAsync(async () => {
+      saveBtn.props.onPress({ stopPropagation: () => {} });
+      await new Promise((r) => setTimeout(r, 40));
+    });
+
+    // Switch to Baixadas tab and verify both tracks appear
+    const downloadsTabBtn = findButtonByText(root, 'Baixadas');
+    await actAsync(async () => {
+      downloadsTabBtn.props.onPress();
+    });
+    const downloadsText = getAllText(root);
+    assert.ok(
+      downloadsText.includes('Save Me Offline'),
+      'Track saved via "Salvar offline" must appear in Baixadas tab'
+    );
+    assert.ok(
+      downloadsText.includes('Pre Existing Offline'),
+      'Pre-existing downloaded track must remain preserved after search'
+    );
+
+    // Go back to Buscar and verify downloaded track badge + trigger a failing download
+    const searchTabBtn = findButtonByText(root, 'Buscar');
+    await actAsync(async () => {
+      searchTabBtn.props.onPress();
+    });
+
+    const searchDownloadedBadges = root.findAll(
+      (n) => n.type === 'View' && n.props.accessibilityLabel === 'Baixada'
+    );
+    assert.ok(
+      searchDownloadedBadges.length >= 2,
+      'Search screen (QuickPicks and TrackCard) must show green Folder badge for downloaded tracks'
+    );
+    assert.strictEqual(
+      searchDownloadedBadges[0].find((n) => n.type === 'LucideIcon' && n.props.name === 'Folder').props.color,
+      '#2BA640'
+    );
+
+    const failMoreBtn = root.find(
+      (n) =>
+        n.type === 'TouchableOpacity' &&
+        n.props.accessibilityLabel === 'Mais opções para Broken Stream Track'
+    );
+    await actAsync(async () => {
+      failMoreBtn.props.onPress({ stopPropagation: () => {} });
+    });
+    const failSaveBtn = root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Salvar offline'
+    );
+    await actAsync(async () => {
+      failSaveBtn.props.onPress({ stopPropagation: () => {} });
+      await new Promise((r) => setTimeout(r, 40));
+    });
+
+    const errorUiText = getAllText(root);
+    assert.ok(
+      errorUiText.includes('Falha ao baixar "Broken Stream Track"'),
+      'Failed download must surface explicit error message in UI'
+    );
+
+    // Verify CircularDownloadProgress renders white circular SVG ring + % label
+    const { TrackCard, CircularDownloadProgress } = require('../components/TrackCard');
+    let ringTree;
+    await actAsync(async () => {
+      ringTree = renderer.create(
+        React.createElement(TrackCard, {
+          id: 'ring_1',
+          title: 'Self Aware',
+          artist: 'Temper City',
+          durationText: '3:15',
+          isDownloading: true,
+          downloadProgress: 20,
+          onPress: () => {},
+          onPlayNext: () => {},
+        })
+      );
+    });
+    const ringComp = ringTree.root.findByType(CircularDownloadProgress);
+    assert.strictEqual(ringComp.props.progress, 20);
+    const circles = ringComp.findAll((n) => n.type === 'SvgElement' && n.props.tag === 'Circle');
+    assert.strictEqual(circles.length, 2, 'Should render background track and white progress arc');
+    assert.strictEqual(circles[1].props.stroke, '#FFFFFF');
+    assert.ok(getAllText(ringComp).includes('20%'));
+  } finally {
+    setAudioStreamResolver();
+    fileSystemMock.resetFileSystem();
+    clearStorageCache();
+  }
+});

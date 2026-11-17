@@ -1167,6 +1167,20 @@ export async function getSearchHistory(limit: number = MAX_SEARCH_HISTORY): Prom
   }
 }
 
+async function writeSearchHistory(list: string[]): Promise<string[]> {
+  await initDatabase();
+  const normalizedList = list.slice(0, MAX_SEARCH_HISTORY);
+  const db = await getDatabase();
+  await db.runAsync(
+    `INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?);`,
+    [SEARCH_HISTORY_KEY, JSON.stringify(normalizedList)]
+  );
+  cacheEpoch += 1;
+  searchHistoryCache = [...normalizedList];
+  searchHistoryInFlight = null;
+  return normalizedList;
+}
+
 /**
  * Salva uma busca recente no topo da lista (sem duplicatas) no SQLite.
  */
@@ -1178,16 +1192,26 @@ export async function recordSearchHistory(query: string): Promise<string[]> {
   const next = [
     trimmed,
     ...existing.filter((item) => item.trim().toLowerCase() !== normalized),
-  ].slice(0, MAX_SEARCH_HISTORY);
-  const db = await getDatabase();
-  await db.runAsync(
-    `INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?);`,
-    [SEARCH_HISTORY_KEY, JSON.stringify(next)]
-  );
-  cacheEpoch += 1;
-  searchHistoryCache = [...next];
-  searchHistoryInFlight = null;
-  return next;
+  ];
+  return writeSearchHistory(next);
+}
+
+/**
+ * Remove um item específico do histórico de buscas recente.
+ */
+export async function removeSearchHistoryItem(query: string): Promise<string[]> {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return getSearchHistory();
+  const existing = await getSearchHistory(MAX_SEARCH_HISTORY);
+  const next = existing.filter((item) => item.trim().toLowerCase() !== normalized);
+  return writeSearchHistory(next);
+}
+
+/**
+ * Limpa todo o histórico de buscas recente salvo no SQLite.
+ */
+export async function clearSearchHistory(): Promise<void> {
+  await writeSearchHistory([]);
 }
 
 /* ==========================================================================

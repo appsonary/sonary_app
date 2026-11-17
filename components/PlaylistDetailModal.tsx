@@ -19,7 +19,6 @@ import {
 import {
   ArrowLeft,
   ArrowUpDown,
-  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Download,
@@ -51,9 +50,9 @@ import {
   DownloadQueueItem,
 } from '../services/storage';
 import { TrackSummary } from '../services/api';
-import { TrackContextSheet } from './TrackCard';
+import { CircularDownloadProgress, TrackContextSheet } from './TrackCard';
 import { PlayingEqualizer } from './PlayingEqualizer';
-import { MarqueeText } from './MarqueeText';
+import { DownloadedTrackBadge, MarqueeText, TrackMetaRow } from './MarqueeText';
 import { SearchPillInput } from './SearchBarSection';
 import { AmbientGlowBackground } from './AmbientGlowBackground';
 import { AtmosphericGradient } from './AtmosphericGradient';
@@ -120,6 +119,8 @@ interface PlaylistTrackRowProps {
   isActive: boolean;
   isPlaying: boolean;
   isDownloaded: boolean;
+  isDownloading: boolean;
+  downloadProgress: number;
   isReordering: boolean;
   onPressTrack: (item: PlaylistTrackItem, index: number) => void;
   onMoveTrack: (fromIndex: number, toIndex: number) => void;
@@ -134,6 +135,8 @@ const PlaylistTrackRow = React.memo<PlaylistTrackRowProps>(
     isActive,
     isPlaying,
     isDownloaded,
+    isDownloading,
+    downloadProgress,
     isReordering,
     onPressTrack,
     onMoveTrack,
@@ -187,27 +190,33 @@ const PlaylistTrackRow = React.memo<PlaylistTrackRowProps>(
           >
             {item.title}
           </MarqueeText>
-          <View style={styles.trackMetaRow}>
-            {isDownloaded ? (
-              <View style={styles.downloadBadge}>
-                <CheckCircle2 color="#2BA640" size={13} />
-                <Text style={styles.downloadBadgeText}>Baixada</Text>
-              </View>
-            ) : (
-              <View style={styles.streamBadge}>
-                <Globe color="#AAAAAA" size={13} />
-                <Text style={styles.streamBadgeText}>Stream</Text>
-              </View>
-            )}
-            <MarqueeText
-              active={isActive}
-              containerStyle={styles.trackArtistMarqueeContainer}
-              style={styles.trackArtist}
-            >
-              {`• ${item.artist} • ${formatSeconds(item.duration)}`}
-            </MarqueeText>
-          </View>
+          <TrackMetaRow
+            style={styles.trackMetaRow}
+            active={isActive}
+            leading={
+              isDownloaded ? (
+                <DownloadedTrackBadge />
+              ) : (
+                <View style={styles.statusBadge} accessibilityLabel="Stream">
+                  <Globe color="#AAAAAA" size={12} />
+                </View>
+              )
+            }
+            artistText={item.artist}
+            textStyle={styles.trackArtist}
+          />
         </View>
+
+        {/* Progresso de download ativo ou duração da música centralizada verticalmente */}
+        {isDownloading ? (
+          <View style={styles.downloadingIndicator} accessibilityLabel="Baixando música">
+            <CircularDownloadProgress progress={downloadProgress} />
+          </View>
+        ) : (
+          <Text style={styles.trackDuration} numberOfLines={1}>
+            {formatSeconds(item.duration)}
+          </Text>
+        )}
 
         {/* Botão Menu Contextual 3-pontinhos (mesma experiência da aba Baixadas) */}
         <View collapsable={false}>
@@ -677,26 +686,39 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
 
   const totalTracksCount = playlist?.tracks.length ?? 0;
 
+  const activeDownloadingItem = useMemo(
+    () => downloadQueue.find((item) => item.status === 'downloading') ?? null,
+    [downloadQueue]
+  );
+
   const renderTrackItem = useCallback(
-    ({ item, index }: { item: PlaylistTrackItem; index: number }) => (
-      <PlaylistTrackRow
-        item={item}
-        index={index}
-        totalTracks={totalTracksCount}
-        isActive={currentActiveTrackId === item.trackId}
-        isPlaying={Boolean(isPlaying)}
-        isDownloaded={isTrackDownloaded(item)}
-        isReordering={isReordering}
-        onPressTrack={handlePressTrack}
-        onMoveTrack={handleMoveTrack}
-        onOpenMenu={handleOpenTrackMenu}
-      />
-    ),
+    ({ item, index }: { item: PlaylistTrackItem; index: number }) => {
+      const isRowDownloading = activeDownloadingItem?.track.id === item.trackId;
+      return (
+        <PlaylistTrackRow
+          item={item}
+          index={index}
+          totalTracks={totalTracksCount}
+          isActive={currentActiveTrackId === item.trackId}
+          isPlaying={Boolean(isPlaying)}
+          isDownloaded={isTrackDownloaded(item)}
+          isDownloading={isRowDownloading}
+          downloadProgress={
+            isRowDownloading ? Math.round((activeDownloadingItem?.progress || 0) * 100) : 0
+          }
+          isReordering={isReordering}
+          onPressTrack={handlePressTrack}
+          onMoveTrack={handleMoveTrack}
+          onOpenMenu={handleOpenTrackMenu}
+        />
+      );
+    },
     [
       totalTracksCount,
       currentActiveTrackId,
       isPlaying,
       isTrackDownloaded,
+      activeDownloadingItem,
       isReordering,
       handlePressTrack,
       handleMoveTrack,
@@ -1262,38 +1284,29 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   trackMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
     marginTop: 3,
   },
-  downloadBadge: {
+  statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
-  },
-  downloadBadgeText: {
-    color: '#2BA640',
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  streamBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-  },
-  streamBadgeText: {
-    color: '#AAAAAA',
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  trackArtistMarqueeContainer: {
-    flex: 1,
-    minWidth: 0,
-    marginLeft: 4,
+    flexShrink: 0,
   },
   trackArtist: {
     color: '#AAAAAA',
     fontSize: 11,
+  },
+  trackDuration: {
+    color: '#AAAAAA',
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+    flexShrink: 0,
+    marginLeft: 8,
+  },
+  downloadingIndicator: {
+    marginLeft: 8,
+    marginRight: -4,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   removeTrackButton: {
     padding: 8,

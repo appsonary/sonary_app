@@ -74,7 +74,7 @@ import { ArtistProfileModal } from './ArtistProfileModal';
 import { TrackRowSkeleton } from './TrackRowSkeleton';
 import { PlayingEqualizer } from './PlayingEqualizer';
 import { AmbientGlowBackground } from './AmbientGlowBackground';
-import { MarqueeText } from './MarqueeText';
+import { MarqueeText, TrackMetaRow } from './MarqueeText';
 import { ToastBanner } from './ToastBanner';
 import {
   SHEET_ENTER_MS,
@@ -105,6 +105,8 @@ export interface NowPlayingModalProps {
   isFavorite?: boolean;
   onToggleFavorite?: () => void;
   isDownloaded?: boolean;
+  isDownloading?: boolean;
+  downloadProgress?: number;
   onDownload?: () => void;
   onAddToPlaylist?: () => void;
   onOpenQueue?: () => void;
@@ -128,6 +130,7 @@ export interface NowPlayingModalProps {
   onStartArtistRadio?: (artistName: string, channelId?: string) => void;
   isLoadingRadio?: boolean;
   toastMessage?: string | null;
+  toastVariant?: 'success' | 'error';
   onDismissToast?: () => void;
 }
 
@@ -800,6 +803,8 @@ export default function NowPlayingModal({
   isFavorite = false,
   onToggleFavorite,
   isDownloaded = false,
+  isDownloading = false,
+  downloadProgress = 0,
   onDownload,
   onAddToPlaylist,
   onOpenQueue,
@@ -823,6 +828,7 @@ export default function NowPlayingModal({
   onStartArtistRadio,
   isLoadingRadio = false,
   toastMessage = null,
+  toastVariant = 'success',
   onDismissToast,
 }: NowPlayingModalProps) {
   const [isScrubbing, setIsScrubbing] = useState(false);
@@ -2535,14 +2541,24 @@ export default function NowPlayingModal({
                         </View>
                       )}
                       <View style={styles.spotifyRelatedInfo}>
-                        <Text style={styles.spotifyRelatedTrackTitle} numberOfLines={1}>
+                        <MarqueeText
+                          active={track?.id === relTrack.id}
+                          style={styles.spotifyRelatedTrackTitle}
+                        >
                           {relTrack.title}
-                        </Text>
-                        <Text style={styles.spotifyRelatedSubtitle} numberOfLines={1}>
-                          {`${relTrack.artist} • ${relTrack.formattedDuration || '3:30'}`}
-                        </Text>
+                        </MarqueeText>
+                        <TrackMetaRow
+                          style={styles.spotifyRelatedMetaRow}
+                          active={track?.id === relTrack.id}
+                          artistText={relTrack.artist}
+                          textStyle={styles.spotifyRelatedSubtitle}
+                        />
                       </View>
                     </View>
+
+                    <Text style={styles.relatedDurationText} numberOfLines={1}>
+                      {relTrack.formattedDuration || '3:30'}
+                    </Text>
 
                     {onAddRelatedToQueue ? (
                       <TouchableOpacity
@@ -2735,20 +2751,32 @@ export default function NowPlayingModal({
                       onPress={(e) => {
                         e?.stopPropagation?.();
                         dismissMenuSheet();
-                        if (!isDownloaded) {
+                        if (!isDownloaded && !isDownloading) {
                           onDownload();
                         }
                       }}
                       accessibilityRole="button"
-                      accessibilityLabel={isDownloaded ? 'Música salva offline' : 'Salvar offline'}
+                      accessibilityLabel={
+                        isDownloaded
+                          ? 'Música salva offline'
+                          : isDownloading
+                            ? 'Baixando música'
+                            : 'Salvar offline'
+                      }
                     >
                       {isDownloaded ? (
                         <CheckCircle2 color="#2BA640" size={22} />
+                      ) : isDownloading ? (
+                        <ActivityIndicator color="#FFFFFF" size="small" />
                       ) : (
                         <Download color="#FFFFFF" size={22} />
                       )}
                       <Text style={styles.sheetActionText}>
-                        {isDownloaded ? 'Música já baixada' : 'Salvar offline'}
+                        {isDownloaded
+                          ? 'Música já baixada'
+                          : isDownloading
+                            ? `Baixando${downloadProgress > 0 ? ` (${downloadProgress}%)` : '...'}`
+                            : 'Salvar offline'}
                       </Text>
                     </TouchableOpacity>
                   )}
@@ -3018,6 +3046,7 @@ export default function NowPlayingModal({
         {/* Toast flutuante dentro do Modal (Dialog Window do Android fica acima do App) */}
         <ToastBanner
           message={!isArtistModalVisible ? toastMessage : null}
+          variant={toastVariant}
           onDismiss={onDismissToast}
           topOffset={Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 12 : 54}
         />
@@ -3404,6 +3433,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     flex: 1,
+    minWidth: 0,
     marginRight: 10,
   },
   spotifyRelatedIconBadge: {
@@ -3416,16 +3446,26 @@ const styles = StyleSheet.create({
   },
   spotifyRelatedInfo: {
     flex: 1,
+    minWidth: 0,
   },
   spotifyRelatedTrackTitle: {
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '600',
   },
+  spotifyRelatedMetaRow: {
+    marginTop: 2,
+  },
   spotifyRelatedSubtitle: {
     color: '#AAAAAA',
     fontSize: 12,
-    marginTop: 2,
+  },
+  relatedDurationText: {
+    color: '#AAAAAA',
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+    flexShrink: 0,
+    marginRight: 10,
   },
   spotifyPlayCircle: {
     width: 36,

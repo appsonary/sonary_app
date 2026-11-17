@@ -34,6 +34,8 @@ const {
   isTrackInPlaylist,
   getSearchHistory,
   recordSearchHistory,
+  removeSearchHistoryItem,
+  clearSearchHistory,
 } = require('../services/database');
 const {
   enqueueDownload,
@@ -41,6 +43,7 @@ const {
   getDownloadQueue,
   setAudioStreamResolver,
   getLocalTrackUri,
+  deleteDownloadedTrack: removeOfflineTrackFromStorage,
   clearStorageCache,
   savePlaylistCover,
   deletePlaylistCover,
@@ -698,5 +701,120 @@ test('Playlist Covers: database computes coverThumbnails (up to 4) and persists 
   } finally {
     delete global.__imagePickerMock;
     fileSystemMock.resetFileSystem();
+  }
+});
+
+test('Database: recordSearchHistory, removeSearchHistoryItem, and clearSearchHistory manage recent queries', async () => {
+  await initDatabase();
+  await recordSearchHistory('Lo-Fi');
+  await recordSearchHistory('Kate Bush');
+  await recordSearchHistory('Yukon');
+
+  let list = await getSearchHistory();
+  assert.deepStrictEqual(list, ['Yukon', 'Kate Bush', 'Lo-Fi']);
+
+  list = await removeSearchHistoryItem('kate bush');
+  assert.deepStrictEqual(list, ['Yukon', 'Lo-Fi']);
+
+  await clearSearchHistory();
+  list = await getSearchHistory();
+  assert.deepStrictEqual(list, []);
+});
+
+test('Storage: processQueue forwards stream headers, retries once on transient failure, registers existing files and clears queue on delete', async () => {
+  await initDatabase();
+  fileSystemMock.resetFileSystem();
+  clearStorageCache();
+
+  let capturedHeaders = null;
+  let resolverCalls = 0;
+
+  fileSystemMock.setCreateDownloadResumable((url, fileUri, options) => {
+    capturedHeaders = options?.headers || null;
+    if (url.includes('expired')) {
+      return {
+        downloadAsync: async () => ({ uri: fileUri, status: 403 }),
+      };
+    }
+    return {
+      downloadAsync: async () => {
+        fileSystemMock.files.set(fileUri, { isDirectory: false, url, size: 1024 * 1024 * 3 });
+        return { uri: fileUri, status: 200 };
+      },
+    };
+  });
+
+  setAudioStreamResolver(async (id) => {
+    resolverCalls += 1;
+    if (resolverCalls === 1) {
+      return {
+        streamUrl: `https://mock.example.com/${id}_expired.m4a`,
+        headers: {
+          'User-Agent': 'CustomTestUA/1.0',
+          Referer: 'https://www.youtube.com/',
+          Origin: 'https://www.youtube.com',
+        },
+      };
+    }
+    return {
+      streamUrl: `https://mock.example.com/${id}_fresh.m4a`,
+      headers: {
+        'User-Agent': 'CustomTestUA/1.0',
+        Referer: 'https://www.youtube.com/',
+        Origin: 'https://www.youtube.com',
+      },
+    };
+  });
+
+  try {
+    const track = {
+      id: 'dl_retry_1',
+      title: 'Retry Track',
+      artist: 'Retry Artist',
+      duration: 215,
+      formattedDuration: '3:35',
+      thumbnailUrl: 'https://ex.com/retry.jpg',
+    };
+
+    enqueueDownload(track);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    assert.strictEqual(resolverCalls, 2, 'Should retry once after 403 on first stream URL');
+    assert.strictEqual(capturedHeaders?.Referer, 'https://www.youtube.com/');
+    assert.strictEqual(capturedHeaders?.Origin, 'https://www.youtube.com');
+    assert.strictEqual(capturedHeaders?.['User-Agent'], 'CustomTestUA/1.0');
+
+    const saved = await getDownloadedTrackById('dl_retry_1');
+    assert.ok(saved, 'Retried download must be saved to SQLite');
+
+    // Deleting offline track must also remove it from downloadQueue so it can be re-downloaded
+    await removeOfflineTrackFromStorage('dl_retry_1');
+    assert.strictEqual(await getDownloadedTrackById('dl_retry_1'), null);
+    assert.strictEqual(
+      getDownloadQueue().some((i) => i.track.id === 'dl_retry_1'),
+      false,
+      'Deleted offline track must be cleared from downloadQueue'
+    );
+
+    // If .m4a already exists on disk without SQLite entry, enqueueDownload registers it into SQLite
+    const orphanUri = `${fileSystemMock.documentDirectory}tracks/orphan_ok.m4a`;
+    fileSystemMock.files.set(orphanUri, { isDirectory: false, size: 1024 * 500 });
+    enqueueDownload({
+      id: 'orphan_ok',
+      title: 'Orphan Track',
+      artist: 'Orphan Artist',
+      duration: 180,
+      formattedDuration: '3:00',
+      thumbnailUrl: '',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const registered = await getDownloadedTrackById('orphan_ok');
+    assert.ok(registered, 'Existing on-disk file must be registered into SQLite when enqueued');
+  } finally {
+    fileSystemMock.setCreateDownloadResumable(null);
+    setAudioStreamResolver();
+    fileSystemMock.resetFileSystem();
+    clearStorageCache();
   }
 });

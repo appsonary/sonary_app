@@ -8,11 +8,12 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { CheckCircle2 } from 'lucide-react-native';
+import { AlertCircle, CheckCircle2 } from 'lucide-react-native';
 import { getEaseOutCubic, theme } from '../theme';
 
 export interface ToastBannerProps {
   message: string | null | undefined;
+  variant?: 'success' | 'error';
   onDismiss?: () => void;
   topOffset?: number;
 }
@@ -24,9 +25,11 @@ export interface ToastBannerProps {
  */
 export function ToastBanner({
   message,
+  variant = 'success',
   onDismiss,
   topOffset = Platform.OS === 'android' ? 12 : 10,
 }: ToastBannerProps) {
+  const isError = variant === 'error';
   const translateY = useRef(new Animated.Value(-16)).current;
   const opacity = useRef(new Animated.Value(0)).current;
 
@@ -68,6 +71,7 @@ export function ToastBanner({
       <Animated.View
         style={[
           styles.toastBox,
+          isError && styles.toastBoxError,
           {
             opacity,
             transform: [{ translateY }],
@@ -79,10 +83,16 @@ export function ToastBanner({
           activeOpacity={0.85}
           onPress={onDismiss}
           accessibilityRole="button"
-          accessibilityLabel="Fechar notificação de sucesso"
+          accessibilityLabel={
+            isError ? 'Fechar notificação de erro' : 'Fechar notificação de sucesso'
+          }
         >
-          <View style={styles.toastIconBadge}>
-            <CheckCircle2 color="#2BA640" size={15} />
+          <View style={[styles.toastIconBadge, isError && styles.toastIconBadgeError]}>
+            {isError ? (
+              <AlertCircle color="#FF4E45" size={15} />
+            ) : (
+              <CheckCircle2 color="#2BA640" size={15} />
+            )}
           </View>
           <Text style={styles.toastText} numberOfLines={1} ellipsizeMode="tail">
             {message}
@@ -106,6 +116,9 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     elevation: 10,
   },
+  toastBoxError: {
+    borderColor: 'rgba(255, 78, 69, 0.45)',
+  },
   toastTouchable: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -121,6 +134,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(43, 166, 64, 0.16)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  toastIconBadgeError: {
+    backgroundColor: 'rgba(255, 78, 69, 0.18)',
   },
   toastText: {
     color: '#FFFFFF',

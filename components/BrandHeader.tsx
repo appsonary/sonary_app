@@ -1,6 +1,6 @@
 import React from 'react';
 import { Image, Platform, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Code2 } from 'lucide-react-native';
+import { Bell, Code2 } from 'lucide-react-native';
 import { isDevMenuEnabled } from './DevMenuModal';
 
 const HEADER_LOGO = require('../assets/brand-logo-header.png');
@@ -36,7 +36,7 @@ export const BrandHeader: React.FC<BrandHeaderProps> = ({ subtitle, onOpenDevMen
           </View>
         </View>
 
-        {/* Perfil e botão exclusivo de desenvolvimento */}
+        {/* Notificações e botão exclusivo de desenvolvimento */}
         <View style={styles.headerRightActions}>
           {showDevButton && (
             <TouchableOpacity
@@ -50,8 +50,8 @@ export const BrandHeader: React.FC<BrandHeaderProps> = ({ subtitle, onOpenDevMen
               <Code2 color="#FFFFFF" size={16} />
             </TouchableOpacity>
           )}
-          <View style={styles.profileAvatar} accessibilityLabel="Perfil do usuário">
-            <Text style={styles.avatarInitial}>S</Text>
+          <View style={styles.notificationsButton} accessibilityLabel="Notificações">
+            <Bell color="#FFFFFF" size={22} />
           </View>
         </View>
       </View>
@@ -104,20 +104,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.14)',
   },
-  profileAvatar: {
+  notificationsButton: {
     width: 32,
     height: 32,
-    borderRadius: 16,
-    backgroundColor: '#262628',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.14)',
-  },
-  avatarInitial: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '700',
   },
   brandSubtitle: {
     fontSize: 12,

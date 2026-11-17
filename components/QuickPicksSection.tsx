@@ -14,7 +14,7 @@ import {
   Play,
 } from 'lucide-react-native';
 import { theme } from '../theme';
-import { MarqueeText } from './MarqueeText';
+import { DownloadedTrackBadge, MarqueeText, TrackMetaRow } from './MarqueeText';
 import { PlayingEqualizer } from './PlayingEqualizer';
 
 export interface QuickPickItem {
@@ -31,6 +31,7 @@ export interface QuickPicksSectionProps {
   tracks: QuickPickItem[];
   activeTrackId?: string;
   isPlaying?: boolean;
+  downloadedTrackIds?: Set<string>;
   onSelectTrack: (track: QuickPickItem, index: number) => void;
   onAddToPlaylist?: (track: QuickPickItem) => void;
 }
@@ -39,6 +40,7 @@ interface QuickPickRowProps {
   track: QuickPickItem;
   isActive: boolean;
   isPlaying: boolean;
+  isDownloaded: boolean;
   onSelect: () => void;
   onAdd?: () => void;
 }
@@ -47,6 +49,7 @@ const QuickPickRow: React.FC<QuickPickRowProps> = ({
   track,
   isActive,
   isPlaying,
+  isDownloaded,
   onSelect,
   onAdd,
 }) => {
@@ -100,10 +103,20 @@ const QuickPickRow: React.FC<QuickPickRowProps> = ({
         >
           {track.title}
         </MarqueeText>
-        <MarqueeText active={Boolean(isActive)} style={styles.trackArtist}>
-          {`${track.artist}${track.formattedDuration ? ` • ${track.formattedDuration}` : ''}`}
-        </MarqueeText>
+        <TrackMetaRow
+          style={styles.trackMetaRow}
+          active={Boolean(isActive)}
+          leading={isDownloaded ? <DownloadedTrackBadge /> : undefined}
+          artistText={track.artist}
+          textStyle={styles.trackArtist}
+        />
       </View>
+
+      {track.formattedDuration ? (
+        <Text style={styles.trackDuration} numberOfLines={1}>
+          {track.formattedDuration}
+        </Text>
+      ) : null}
 
       {/* Ação rápida com revelação progressiva sem layout shift */}
       <View style={[styles.actionContainer, { opacity: showAction ? 1 : 0 }]}>
@@ -130,6 +143,7 @@ export const QuickPicksSection: React.FC<QuickPicksSectionProps> = ({
   tracks,
   activeTrackId,
   isPlaying = false,
+  downloadedTrackIds,
   onSelectTrack,
   onAddToPlaylist,
 }) => {
@@ -167,6 +181,7 @@ export const QuickPicksSection: React.FC<QuickPicksSectionProps> = ({
                   track={track}
                   isActive={isActive}
                   isPlaying={isPlaying}
+                  isDownloaded={Boolean(downloadedTrackIds?.has(track.id))}
                   onSelect={() => onSelectTrack(track, globalIdx)}
                   onAdd={onAddToPlaylist ? () => onAddToPlaylist(track) : undefined}
                 />
@@ -268,10 +283,18 @@ const styles = StyleSheet.create({
   trackTitleActive: {
     color: theme.colors.brandPrimary,
   },
+  trackMetaRow: {
+    marginTop: 2,
+  },
   trackArtist: {
     fontSize: theme.typography.fontSize.caption,
     color: theme.colors.textSecondary,
-    marginTop: 2,
+  },
+  trackDuration: {
+    fontSize: theme.typography.fontSize.caption,
+    color: theme.colors.textSecondary,
+    fontVariant: ['tabular-nums'],
+    flexShrink: 0,
   },
   actionContainer: {
     minWidth: 32,

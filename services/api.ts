@@ -629,6 +629,17 @@ interface CachedStream {
 const streamCache = new Map<string, CachedStream>();
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hora de TTL
 
+export function invalidateStreamCache(videoId?: string): void {
+  if (!videoId) {
+    streamCache.clear();
+    return;
+  }
+  const cleanId = extractVideoId(videoId);
+  if (cleanId) {
+    streamCache.delete(cleanId);
+  }
+}
+
 interface CachedVisitor {
   visitorData: string;
   timestamp: number;
