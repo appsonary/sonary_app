@@ -64,6 +64,7 @@ import { EditPlaylistModal, EditPlaylistSavePayload } from './EditPlaylistModal'
 import { CoverCropModal } from './CoverCropModal';
 import { scheduleNextFrame } from './sheetMotion';
 import { getEaseOutCubic, theme } from '../theme';
+import { BACK_PRIORITY, useBackHandler } from '../services/backNavigation';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const COVER_SIZE = Math.min(SCREEN_WIDTH * 0.48, 200);
@@ -395,6 +396,29 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
       }
     });
   };
+
+  useBackHandler(
+    Boolean(
+      visible &&
+        !showOptionsSheet &&
+        !showEditModal &&
+        !pendingCropAsset &&
+        !menuItem
+    ),
+    () => {
+      if (isReordering) {
+        setIsReordering(false);
+        return true;
+      }
+      if (searchQuery.trim().length > 0) {
+        setSearchQuery('');
+        return true;
+      }
+      handleClose();
+      return true;
+    },
+    BACK_PRIORITY.SUBSCREEN
+  );
 
   const handleMoveTrack = useCallback(
     async (fromIndex: number, toIndex: number) => {

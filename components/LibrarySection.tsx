@@ -23,6 +23,7 @@ import {
 import { SearchPillInput } from './SearchBarSection';
 import { PlaylistCover } from './PlaylistCover';
 import { theme } from '../theme';
+import { BACK_PRIORITY, useBackHandler } from '../services/backNavigation';
 
 export const FAVORITES_SURFACE_COLORS = ['#2E0B12', '#17090D', '#101012'] as const;
 export const FAVORITES_BADGE_COLORS = ['#D91B2C', '#7A0B1B'] as const;
@@ -65,6 +66,15 @@ export const LibrarySection: React.FC<LibrarySectionProps> = ({
   onPrefetchPlaylist,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+
+  useBackHandler(
+    searchQuery.trim().length > 0,
+    () => {
+      setSearchQuery('');
+      return true;
+    },
+    BACK_PRIORITY.SUBSCREEN_MODE
+  );
 
   const filteredPlaylists = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();

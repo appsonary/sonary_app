@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Keyboard,
@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { ArrowLeft, ArrowUpLeft, History, Search, X } from 'lucide-react-native';
 import { theme } from '../theme';
+import { BACK_PRIORITY, useBackHandler } from '../services/backNavigation';
 
 export interface SearchPillInputProps {
   value: string;
@@ -27,6 +28,7 @@ export interface SearchPillInputProps {
   backAccessibilityLabel?: string;
   returnKeyType?: 'search' | 'done' | 'go' | 'next' | 'send';
   style?: StyleProp<ViewStyle>;
+  inputRef?: React.RefObject<TextInput | null>;
 }
 
 /** Barra de pesquisa em pílula padronizada do tema YouTube Music. */
@@ -44,6 +46,7 @@ export const SearchPillInput: React.FC<SearchPillInputProps> = ({
   backAccessibilityLabel = 'Voltar',
   returnKeyType = 'search',
   style,
+  inputRef,
 }) => {
   const [internalFocused, setInternalFocused] = useState(false);
 
@@ -70,6 +73,7 @@ export const SearchPillInput: React.FC<SearchPillInputProps> = ({
       )}
 
       <TextInput
+        ref={inputRef as React.Ref<TextInput>}
         style={styles.searchInput}
         placeholder={placeholder}
         placeholderTextColor="#9A9A9A"
@@ -128,8 +132,40 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
   onClearSearch,
 }) => {
   const [isFocused, setIsFocused] = useState(false);
+  const searchInputRef = useRef<TextInput | null>(null);
   const hasQuery = query.trim().length > 0;
   const showBackArrow = isFocused || hasResults;
+
+  useEffect(() => {
+    const sub = Keyboard?.addListener?.('keyboardDidHide', () => {
+      setIsFocused(false);
+      // Desfoca o EditText nativo no Android para que o próximo toque dispare onFocus novamente
+      searchInputRef.current?.blur?.();
+    });
+    return () => {
+      sub?.remove?.();
+    };
+  }, []);
+
+  useBackHandler(
+    isFocused,
+    () => {
+      setIsFocused(false);
+      searchInputRef.current?.blur?.();
+      Keyboard?.dismiss?.();
+      return true;
+    },
+    BACK_PRIORITY.INLINE_OVERLAY
+  );
+
+  useBackHandler(
+    Boolean(hasResults && !isFocused && onClearSearch),
+    () => {
+      onClearSearch?.();
+      return true;
+    },
+    BACK_PRIORITY.SUBSCREEN_MODE
+  );
 
   const filteredRecentQueries = useMemo(() => {
     if (!isFocused || recentQueries.length === 0) return [];
@@ -142,6 +178,7 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
 
   const handleSubmit = () => {
     setIsFocused(false);
+    searchInputRef.current?.blur?.();
     Keyboard?.dismiss?.();
     onSearch();
   };
@@ -149,6 +186,7 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
   const handleLeadingPress = () => {
     if (isFocused) {
       setIsFocused(false);
+      searchInputRef.current?.blur?.();
       Keyboard?.dismiss?.();
       return;
     }
@@ -160,6 +198,7 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
   const handleSelectRecent = (item: string) => {
     onChangeQuery(item);
     setIsFocused(false);
+    searchInputRef.current?.blur?.();
     Keyboard?.dismiss?.();
     onSearch(item);
   };
@@ -169,6 +208,7 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
       <View style={styles.searchContainer}>
         <View style={styles.searchBarSlot}>
           <SearchPillInput
+            inputRef={searchInputRef}
             value={query}
             onChangeText={onChangeQuery}
             placeholder="Buscar faixas, artistas ou álbuns..."

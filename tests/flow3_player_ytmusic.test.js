@@ -462,8 +462,13 @@ test('YouTube Music Player: NowPlayingModal 3-Tab system (FILA, LETRAS, RELACION
     'Related tab should show artist hero and recommendations'
   );
   assert.ok(
-    textContent.includes('Smart Radio') || textContent.includes('YouTube Music'),
-    'Related tab should show smart radio badge'
+    textContent.includes('Sonary Smart Radio'),
+    'Related tab should show Sonary Smart Radio badge'
+  );
+  assert.strictEqual(
+    textContent.includes('YouTube Music'),
+    false,
+    'Related tab must not expose YouTube Music branding'
   );
 });
 

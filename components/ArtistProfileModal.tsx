@@ -31,6 +31,7 @@ import {
 import { ToastBanner } from './ToastBanner';
 import { SHEET_ENTER_MS, useModalEnterAnimation } from './sheetMotion';
 import { getEaseOutCubic, theme } from '../theme';
+import { useBackModalLock } from '../services/backNavigation';
 
 export interface ArtistProfileModalProps {
   visible: boolean;
@@ -62,6 +63,7 @@ export function ArtistProfileModal({
   const [discographyTab, setDiscographyTab] = useState<'albums' | 'singles'>('albums');
   const modalOpacity = useRef(new Animated.Value(0)).current;
   const modalTranslateY = useRef(new Animated.Value(18)).current;
+  useBackModalLock(visible);
 
   const { onModalShow } = useModalEnterAnimation({
     visible,
@@ -201,7 +203,7 @@ export function ArtistProfileModal({
 
               <Text style={styles.artistTitle}>{displayName}</Text>
               <Text style={styles.listenersSubtitle}>
-                {profile?.monthlyListenersText || 'YouTube Music Artist Hub'}
+                {profile?.monthlyListenersText || 'Sonary Artist Hub'}
               </Text>
 
               {/* Ações Principais do Artista */}

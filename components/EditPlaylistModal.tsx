@@ -23,6 +23,7 @@ import { PlaylistCover } from './PlaylistCover';
 import { CoverCropModal } from './CoverCropModal';
 import { SHEET_ENTER_MS, useModalEnterAnimation } from './sheetMotion';
 import { getEaseOutCubic, theme } from '../theme';
+import { useBackModalLock } from '../services/backNavigation';
 
 type CoverDraft =
   | { type: 'keep' }
@@ -58,6 +59,7 @@ export const EditPlaylistModal: React.FC<EditPlaylistModalProps> = ({
   const cardOpacity = useRef(new Animated.Value(0)).current;
   const cardTranslateY = useRef(new Animated.Value(24)).current;
   const isDialogVisible = Boolean(visible && playlist && !pendingCropAsset);
+  useBackModalLock(Boolean(visible && playlist));
 
   const { onModalShow } = useModalEnterAnimation({
     visible: isDialogVisible,

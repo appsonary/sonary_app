@@ -27,6 +27,7 @@ import { AtmosphericGradient } from './AtmosphericGradient';
 import { cropPlaylistCoverImage, PickedCoverAsset } from '../services/storage';
 import { useModalEnterAnimation } from './sheetMotion';
 import { getEaseOutCubic, theme } from '../theme';
+import { useBackModalLock } from '../services/backNavigation';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const CROP_BOX_SIZE = Math.min(SCREEN_WIDTH - 40, 340);
@@ -166,6 +167,8 @@ export const CoverCropModal: React.FC<CoverCropModalProps> = ({
     panX: 0,
     panY: 0,
   });
+
+  useBackModalLock(Boolean(visible && asset));
 
   const { onModalShow } = useModalEnterAnimation({
     visible: Boolean(visible && asset),

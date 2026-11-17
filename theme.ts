@@ -1,14 +1,13 @@
 /**
  * theme.ts
  *
- * Sistema de Design Tokens do YouTube Music para Sonary Pro
- * Baseado na engenharia reversa do music.youtube.com e no design-system-builder.
+ * Sistema de Design Tokens do Sonary Pro
  *
  * Filosofia: "Deep Dark Mode & Atmospheric Gradients" + Detalhes Emil Kowalski
  */
 
 export const colors = {
-  // Fundos & Superfícies (YouTube Music Pitch Black OLED)
+  // Fundos & Superfícies (Pitch Black OLED)
   background: '#030303',
   surface: '#0f0f0f',
   card: '#181818',
@@ -22,7 +21,7 @@ export const colors = {
   borderSubtle: 'rgba(255, 255, 255, 0.08)',
   borderElevated: '#282828',
 
-  // Marca YouTube Music
+  // Marca Sonary
   brandPrimary: '#FF0000',
   brandPrimaryHover: '#D60000',
   brandAccent: '#FFFFFF',
@@ -52,7 +51,7 @@ export const colors = {
 
 export const typography = {
   fontFamily: {
-    base: 'Roboto, "YouTube Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    base: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   },
   fontSize: {
     display: 28,

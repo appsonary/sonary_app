@@ -20,6 +20,7 @@ import {
   SupportNotificationVariant,
   triggerSupportNotificationIfEligible,
 } from '../services/supportNotifications';
+import { useBackModalLock } from '../services/backNavigation';
 
 export interface DevMenuModalProps {
   visible: boolean;
@@ -45,6 +46,7 @@ export const DevMenuModal: React.FC<DevMenuModalProps> = ({
   const [notifState, setNotifState] = useState<SupportNotificationState | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  useBackModalLock(Boolean(visible && isDev));
 
   const refreshState = useCallback(async () => {
     try {

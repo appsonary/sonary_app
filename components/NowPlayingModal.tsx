@@ -83,6 +83,7 @@ import {
   useModalEnterAnimation,
 } from './sheetMotion';
 import { getEaseOutCubic, theme } from '../theme';
+import { useBackModalLock } from '../services/backNavigation';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const ARTWORK_SIZE = Math.min(SCREEN_WIDTH - 64, 340);
@@ -1252,6 +1253,7 @@ export default function NowPlayingModal({
   const openQueueSheet = () => {
     setActivePlayerTab('upnext');
     setIsEditingQueue(false);
+    isDismissingQueueRef.current = false;
     queueScrollOffsetRef.current = 0;
     resetQueueDrag();
     queueSheetTranslateY.setValue(400);
@@ -1289,6 +1291,8 @@ export default function NowPlayingModal({
   }, [isQueueSheetVisible, queueSheetTranslateY, queueBackdropOpacity]);
 
   const dismissQueueSheet = () => {
+    if (isDismissingQueueRef.current) return;
+    isDismissingQueueRef.current = true;
     resetQueueDrag();
     Animated.parallel([
       Animated.timing(queueSheetTranslateY, {
@@ -1303,15 +1307,19 @@ export default function NowPlayingModal({
         easing: sheetEaseOut,
         useNativeDriver: true,
       }),
-    ]).start(() => {
-      setIsQueueSheetVisible(false);
-      setIsEditingQueue(false);
-      setActivePlayerTab('cover');
-      queueSheetTranslateY.setValue(0);
+    ]).start(({ finished }) => {
+      isDismissingQueueRef.current = false;
+      if (finished) {
+        setIsQueueSheetVisible(false);
+        setIsEditingQueue(false);
+        setActivePlayerTab('cover');
+        queueSheetTranslateY.setValue(0);
+      }
     });
   };
 
   const openMenuSheet = () => {
+    isDismissingMenuRef.current = false;
     sheetTranslateY.setValue(360);
     sheetBackdropOpacity.setValue(0);
     setShowContextMenu(true);
@@ -1345,7 +1353,9 @@ export default function NowPlayingModal({
     };
   }, [showContextMenu, sheetTranslateY, sheetBackdropOpacity]);
 
-  const dismissMenuSheet = () => {
+  const dismissMenuSheet = (afterDismiss?: () => void) => {
+    if (isDismissingMenuRef.current) return;
+    isDismissingMenuRef.current = true;
     Animated.parallel([
       Animated.timing(sheetTranslateY, {
         toValue: 600,
@@ -1359,9 +1369,15 @@ export default function NowPlayingModal({
         easing: sheetEaseOut,
         useNativeDriver: true,
       }),
-    ]).start(() => {
-      setShowContextMenu(false);
-      sheetTranslateY.setValue(0);
+    ]).start(({ finished }) => {
+      isDismissingMenuRef.current = false;
+      if (finished) {
+        setShowContextMenu(false);
+        sheetTranslateY.setValue(0);
+        if (typeof afterDismiss === 'function') {
+          afterDismiss();
+        }
+      }
     });
   };
 
@@ -1409,6 +1425,9 @@ export default function NowPlayingModal({
   const isScrubbingRef = useRef(false);
   const isNativePanActiveRef = useRef(false);
   const isClosingRef = useRef(false);
+  const isDismissingMenuRef = useRef(false);
+  const isDismissingQueueRef = useRef(false);
+  useBackModalLock(Boolean(visible && track));
   const modalTranslateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const swipeTranslateX = useRef(new Animated.Value(0)).current;
   const swipeFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1446,6 +1465,12 @@ export default function NowPlayingModal({
       setIsAtTop(true);
       isNativePanActiveRef.current = false;
       isClosingRef.current = false;
+      isDismissingMenuRef.current = false;
+      isDismissingQueueRef.current = false;
+      setShowContextMenu(false);
+      setIsLyricsExpanded(false);
+      setIsArtistModalVisible(false);
+      setActivePlayerTab('cover');
       setIsQueueSheetVisible(false);
       setIsEditingQueue(false);
       setOptimisticQueueMove(null);
@@ -1524,6 +1549,37 @@ export default function NowPlayingModal({
       modalTranslateY.setValue(0);
     });
   }, [modalTranslateY, onClose, sheetEaseOut]);
+
+  const handleModalRequestClose = React.useCallback(() => {
+    if (isArtistModalVisible) {
+      setIsArtistModalVisible(false);
+      return;
+    }
+    if (showContextMenu) {
+      dismissMenuSheet();
+      return;
+    }
+    if (isQueueSheetVisible) {
+      if (isEditingQueue) {
+        setIsEditingQueue(false);
+      } else {
+        dismissQueueSheet();
+      }
+      return;
+    }
+    if (isLyricsExpanded) {
+      setIsLyricsExpanded(false);
+      return;
+    }
+    closeWithSlide();
+  }, [
+    isArtistModalVisible,
+    showContextMenu,
+    isQueueSheetVisible,
+    isEditingQueue,
+    isLyricsExpanded,
+    closeWithSlide,
+  ]);
 
   const finishDragTranslate = React.useCallback(
     (dy: number, vyPerMs: number) => {
@@ -1865,7 +1921,7 @@ export default function NowPlayingModal({
       statusBarTranslucent={true}
       hardwareAccelerated={true}
       onShow={onNowPlayingModalShow}
-      onRequestClose={closeWithSlide}
+      onRequestClose={handleModalRequestClose}
     >
       <GestureHandlerRootView style={{ flex: 1 }}>
         <View style={styles.safeContainer}>
@@ -2383,7 +2439,7 @@ export default function NowPlayingModal({
                       {`Mix Especial de ${resolvedTrackMeta.cleanTitle || track.title || 'Músicas'}`}
                     </Text>
                     <Text style={styles.spotifyRelatedSubtitle}>
-                      YouTube Music Smart Radio
+                      Sonary Smart Radio
                     </Text>
                   </View>
                 </View>
@@ -2522,7 +2578,7 @@ export default function NowPlayingModal({
             <TouchableOpacity
               style={styles.sheetBackdrop}
               activeOpacity={1}
-              onPress={dismissMenuSheet}
+              onPress={() => dismissMenuSheet()}
             >
               <Animated.View
                 renderToHardwareTextureAndroid
@@ -2562,7 +2618,7 @@ export default function NowPlayingModal({
 
                   <TouchableOpacity
                     style={styles.sheetCloseButton}
-                    onPress={dismissMenuSheet}
+                    onPress={() => dismissMenuSheet()}
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     accessibilityRole="button"
                     accessibilityLabel="Fechar menu"
@@ -2596,8 +2652,7 @@ export default function NowPlayingModal({
                       style={styles.quickTile}
                       onPress={(e) => {
                         e?.stopPropagation?.();
-                        dismissMenuSheet();
-                        openQueueSheet();
+                        dismissMenuSheet(openQueueSheet);
                       }}
                       accessibilityRole="button"
                       accessibilityLabel="Ver fila"
@@ -2613,8 +2668,7 @@ export default function NowPlayingModal({
                     style={styles.quickTile}
                     onPress={(e) => {
                       e?.stopPropagation?.();
-                      dismissMenuSheet();
-                      openQueueSheet();
+                      dismissMenuSheet(openQueueSheet);
                     }}
                     accessibilityRole="button"
                     accessibilityLabel="Fila / Rádio"
@@ -2666,8 +2720,7 @@ export default function NowPlayingModal({
                     style={styles.sheetActionRow}
                     onPress={(e) => {
                       e?.stopPropagation?.();
-                      dismissMenuSheet();
-                      openQueueSheet();
+                      dismissMenuSheet(openQueueSheet);
                     }}
                     accessibilityRole="button"
                     accessibilityLabel="Ver fila de reprodução"

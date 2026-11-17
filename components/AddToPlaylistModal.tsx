@@ -32,6 +32,7 @@ import {
 import { PlaylistCover } from './PlaylistCover';
 import { useBottomSheetController } from './sheetMotion';
 import { getEaseOutCubic, theme } from '../theme';
+import { useBackModalLock } from '../services/backNavigation';
 
 export interface AddToPlaylistModalProps {
   visible: boolean;
@@ -58,6 +59,8 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
   const [duplicateWarningPlaylist, setDuplicateWarningPlaylist] = useState<PlaylistSummary | null>(null);
   const listOpacity = useRef(new Animated.Value(0)).current;
   const fadeRef = useRef<Animated.CompositeAnimation | null>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useBackModalLock(visible);
   const {
     translateY: sheetTranslateY,
     backdropOpacity,
@@ -68,6 +71,13 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
     onClose,
     initialOffset: 320,
   });
+
+  const clearCloseTimer = () => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  };
 
   const fetchPlaylists = async () => {
     try {
@@ -91,6 +101,7 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
 
   useEffect(() => {
     fadeRef.current?.stop();
+    clearCloseTimer();
     if (visible) {
       const cached = getCachedPlaylists();
       if (cached && cached.length > 0) {
@@ -107,6 +118,7 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
     }
     return () => {
       fadeRef.current?.stop();
+      clearCloseTimer();
     };
   }, [visible]);
 
@@ -120,7 +132,9 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
       onTrackAdded?.(playlist.id, playlist.name);
 
       // Feedback visual rápido de sucesso antes de fechar
-      setTimeout(() => {
+      clearCloseTimer();
+      closeTimerRef.current = setTimeout(() => {
+        closeTimerRef.current = null;
         setIsSubmitting(false);
         onClose();
       }, 500);
@@ -159,7 +173,9 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
       onTrackAdded?.(newPl.id, newPl.name);
       setAddedPlaylistId(newPl.id);
 
-      setTimeout(() => {
+      clearCloseTimer();
+      closeTimerRef.current = setTimeout(() => {
+        closeTimerRef.current = null;
         setIsSubmitting(false);
         onClose();
       }, 500);
@@ -167,6 +183,21 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
       console.error('[AddToPlaylistModal] Falha ao criar playlist:', err);
       setIsSubmitting(false);
     }
+  };
+
+  const handleRequestClose = () => {
+    if (duplicateWarningPlaylist) {
+      setDuplicateWarningPlaylist(null);
+      return;
+    }
+    if (isCreating && addedPlaylistId === null) {
+      setIsCreating(false);
+      setNewPlaylistName('');
+      return;
+    }
+    clearCloseTimer();
+    setIsSubmitting(false);
+    dismissSheet();
   };
 
   if (!visible) return null;
@@ -179,7 +210,7 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
       statusBarTranslucent={true}
       hardwareAccelerated={true}
       onShow={onModalShow}
-      onRequestClose={() => dismissSheet()}
+      onRequestClose={handleRequestClose}
     >
       <Animated.View style={{ flex: 1, opacity: backdropOpacity }}>
       <KeyboardAvoidingView

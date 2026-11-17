@@ -144,8 +144,12 @@ import {
   RealPlaytimeTracker,
   triggerSupportNotificationIfEligible,
 } from './services/supportNotifications';
+import { BACK_PRIORITY, useBackHandler } from './services/backNavigation';
 
 type PlayableTrack = TrackSummary | DownloadedTrack | PlaylistTrackItem;
+type NavHistoryEntry = { tab: MainTab; playlistId: string | null };
+const EXIT_PROMPT_MS = 2000;
+const EXIT_PROMPT_MESSAGE = 'Pressione voltar novamente para sair';
 
 export default function App() {
   const { width, height: windowHeight } = useWindowDimensions();
@@ -603,9 +607,10 @@ export default function App() {
   // Auto-dismiss do toast de feedback
   useEffect(() => {
     if (!toastMessage) return;
+    const timeoutMs = toastMessage === EXIT_PROMPT_MESSAGE ? EXIT_PROMPT_MS : 3000;
     const timer = setTimeout(() => {
       setToastMessage(null);
-    }, 3000);
+    }, timeoutMs);
     if (timer && typeof (timer as any).unref === 'function') {
       (timer as any).unref();
     }
@@ -805,14 +810,41 @@ export default function App() {
 
   // Carrega histórico recente e ouvintes de resposta à notificação de apoio
   const playtimeTrackerRef = React.useRef<RealPlaytimeTracker>(new RealPlaytimeTracker());
+  const navHistoryRef = useRef<NavHistoryEntry[]>([]);
+  const lastBackExitPressRef = useRef<number>(0);
+  const isPlaylistDetailVisibleRef = useRef<boolean>(false);
+  isPlaylistDetailVisibleRef.current = isPlaylistDetailVisible;
+  const isOpeningPlaylistRef = useRef<boolean>(false);
+
+  const pushNavHistory = useCallback((entry: NavHistoryEntry) => {
+    lastBackExitPressRef.current = 0;
+    const stack = navHistoryRef.current;
+    const top = stack[stack.length - 1];
+    if (top && top.tab === entry.tab && top.playlistId === entry.playlistId) {
+      return;
+    }
+    stack.push(entry);
+    if (stack.length > 20) {
+      stack.shift();
+    }
+  }, []);
 
   const openSupportFromNotification = React.useCallback(() => {
+    const visibleTab = pendingTab ?? activeTab;
+    if (visibleTab !== 'support' || isPlaylistDetailVisible) {
+      pushNavHistory({
+        tab: visibleTab,
+        playlistId: isPlaylistDetailVisible ? selectedPlaylistId : null,
+      });
+    }
     tabTransitionRef.current?.stop();
     tabTransitionRef.current = null;
     shellTransitionRef.current?.stop();
     shellTransitionRef.current = null;
+    isOpeningPlaylistRef.current = false;
     setIsDevMenuVisible(false);
     setIsNowPlayingVisible(false);
+    isPlaylistDetailVisibleRef.current = false;
     setIsPlaylistDetailVisible(false);
     setIsAddToPlaylistVisible(false);
     setIsQuickCreateVisible(false);
@@ -820,7 +852,15 @@ export default function App() {
     setActiveTab('support');
     tabContentOpacity.setValue(1);
     shellOpacity.setValue(1);
-  }, [tabContentOpacity, shellOpacity]);
+  }, [
+    pendingTab,
+    activeTab,
+    isPlaylistDetailVisible,
+    selectedPlaylistId,
+    pushNavHistory,
+    tabContentOpacity,
+    shellOpacity,
+  ]);
 
   const fadeOpacity = useCallback(
     (
@@ -849,14 +889,25 @@ export default function App() {
   );
 
   const handleTabChange = useCallback(
-    (nextTab: MainTab) => {
+    (nextTab: MainTab, options?: { skipHistory?: boolean }) => {
       const visibleTab = pendingTab ?? activeTab;
       if (nextTab === visibleTab && !isPlaylistDetailVisible) {
         return;
       }
 
+      if (!options?.skipHistory) {
+        pushNavHistory({
+          tab: visibleTab,
+          playlistId: isPlaylistDetailVisible ? selectedPlaylistId : null,
+        });
+      } else {
+        lastBackExitPressRef.current = 0;
+      }
+
       const wasInPlaylistDetail = isPlaylistDetailVisible;
       shellTransitionRef.current?.stop();
+      isOpeningPlaylistRef.current = false;
+      isPlaylistDetailVisibleRef.current = false;
       setIsPlaylistDetailVisible(false);
 
       if (nextTab === 'playlists') {
@@ -912,7 +963,16 @@ export default function App() {
         }
       );
     },
-    [pendingTab, activeTab, isPlaylistDetailVisible, tabContentOpacity, shellOpacity, fadeOpacity]
+    [
+      pendingTab,
+      activeTab,
+      isPlaylistDetailVisible,
+      selectedPlaylistId,
+      pushNavHistory,
+      tabContentOpacity,
+      shellOpacity,
+      fadeOpacity,
+    ]
   );
 
   const handlePrefetchPlaylist = useCallback((playlistId: string) => {
@@ -921,29 +981,81 @@ export default function App() {
 
   const openPlaylistDetail = useCallback(
     (playlistId: string) => {
+      if (isPlaylistDetailVisible && selectedPlaylistId === playlistId) {
+        return;
+      }
+      const visibleTab = pendingTab ?? activeTab;
+      pushNavHistory({
+        tab: visibleTab,
+        playlistId: isPlaylistDetailVisible ? selectedPlaylistId : null,
+      });
       tabTransitionRef.current?.stop();
       shellTransitionRef.current?.stop();
+      isOpeningPlaylistRef.current = false;
       setPendingTab(null);
       void getPlaylistById(playlistId).catch(() => {});
       if (isPlaylistDetailVisible) {
         setSelectedPlaylistId(playlistId);
         return;
       }
+      isOpeningPlaylistRef.current = true;
       fadeOpacity(
         shellOpacity,
         shellTransitionRef,
         0,
         theme.transitions.screenOutMs,
         () => {
+          isOpeningPlaylistRef.current = false;
           setSelectedPlaylistId(playlistId);
+          isPlaylistDetailVisibleRef.current = true;
           setIsPlaylistDetailVisible(true);
         }
       );
     },
-    [isPlaylistDetailVisible, shellOpacity, fadeOpacity]
+    [
+      isPlaylistDetailVisible,
+      selectedPlaylistId,
+      pendingTab,
+      activeTab,
+      pushNavHistory,
+      shellOpacity,
+      fadeOpacity,
+    ]
   );
 
   const closePlaylistDetail = useCallback(() => {
+    isOpeningPlaylistRef.current = false;
+    if (!isPlaylistDetailVisibleRef.current) {
+      return;
+    }
+    lastBackExitPressRef.current = 0;
+
+    const stack = navHistoryRef.current;
+    const top = stack[stack.length - 1];
+    if (top && top.playlistId) {
+      stack.pop();
+      setActiveTab(top.tab);
+      setPendingTab(null);
+      setSelectedPlaylistId(top.playlistId);
+      isPlaylistDetailVisibleRef.current = true;
+      setIsPlaylistDetailVisible(true);
+      return;
+    }
+
+    if (top && top.playlistId === null) {
+      stack.pop();
+      if (top.tab !== activeTab) {
+        setActiveTab(top.tab);
+        setPendingTab(null);
+        if (top.tab === 'playlists') {
+          loadPlaylists();
+        } else if (top.tab === 'downloads') {
+          loadOfflineTracks();
+        }
+      }
+    }
+
+    isPlaylistDetailVisibleRef.current = false;
     setIsPlaylistDetailVisible(false);
     tabContentOpacity.setValue(1);
     shellOpacity.setValue(0);
@@ -953,7 +1065,102 @@ export default function App() {
       1,
       theme.transitions.screenInMs
     );
-  }, [tabContentOpacity, shellOpacity, fadeOpacity]);
+  }, [activeTab, tabContentOpacity, shellOpacity, fadeOpacity]);
+
+  useEffect(() => {
+    if (isNowPlayingVisible && !activeTrack) {
+      setIsNowPlayingVisible(false);
+    }
+  }, [isNowPlayingVisible, activeTrack]);
+
+  const hasBlockingModalOpen = Boolean(
+    (isNowPlayingVisible && activeTrack) ||
+      isAddToPlaylistVisible ||
+      (isDevMode && isDevMenuVisible)
+  );
+
+  useBackHandler(
+    !isPlaylistDetailVisible &&
+      !hasBlockingModalOpen &&
+      activeTab === 'playlists' &&
+      isQuickCreateVisible,
+    () => {
+      setIsQuickCreateVisible(false);
+      setQuickCreateName('');
+      return true;
+    },
+    BACK_PRIORITY.INLINE_OVERLAY
+  );
+
+  useBackHandler(
+    !isPlaylistDetailVisible &&
+      !hasBlockingModalOpen &&
+      activeTab === 'downloads' &&
+      downloadsSearchQuery.trim().length > 0,
+    () => {
+      setDownloadsSearchQuery('');
+      return true;
+    },
+    BACK_PRIORITY.SUBSCREEN_MODE
+  );
+
+  useBackHandler(
+    !isPlaylistDetailVisible && !hasBlockingModalOpen,
+    () => {
+      if (isOpeningPlaylistRef.current) {
+        isOpeningPlaylistRef.current = false;
+        shellTransitionRef.current?.stop();
+        shellTransitionRef.current = null;
+        const stack = navHistoryRef.current;
+        if (stack.length > 0 && stack[stack.length - 1].playlistId === null) {
+          stack.pop();
+        }
+        lastBackExitPressRef.current = 0;
+        fadeOpacity(
+          shellOpacity,
+          shellTransitionRef,
+          1,
+          theme.transitions.screenInMs
+        );
+        return true;
+      }
+
+      const stack = navHistoryRef.current;
+      if (stack.length > 0) {
+        const prev = stack.pop()!;
+        lastBackExitPressRef.current = 0;
+        if (prev.playlistId) {
+          setActiveTab(prev.tab);
+          setPendingTab(null);
+          setSelectedPlaylistId(prev.playlistId);
+          isPlaylistDetailVisibleRef.current = true;
+          setIsPlaylistDetailVisible(true);
+        } else {
+          handleTabChange(prev.tab, { skipHistory: true });
+        }
+        return true;
+      }
+
+      const currentTab = pendingTab ?? activeTab;
+      if (currentTab !== 'search') {
+        lastBackExitPressRef.current = 0;
+        handleTabChange('search', { skipHistory: true });
+        return true;
+      }
+
+      const now = Date.now();
+      if (now - lastBackExitPressRef.current < EXIT_PROMPT_MS) {
+        lastBackExitPressRef.current = 0;
+        setToastMessage(null);
+        return false;
+      }
+
+      lastBackExitPressRef.current = now;
+      setToastMessage(EXIT_PROMPT_MESSAGE);
+      return true;
+    },
+    BACK_PRIORITY.TAB_HISTORY
+  );
 
   useEffect(() => {
     return () => {
@@ -1167,6 +1374,7 @@ export default function App() {
     const targetQuery = typeof overrideQuery === 'string' ? overrideQuery : query;
     const trimmed = targetQuery.trim();
     if (!trimmed) return;
+    lastBackExitPressRef.current = 0;
 
     if (typeof overrideQuery === 'string') {
       setQuery(overrideQuery);
@@ -1861,9 +2069,17 @@ export default function App() {
                 onAddToPlaylist={handleOpenAddToPlaylist}
                 onDownloadTrack={handleDownload}
                 onPlaylistUpdated={() => loadPlaylists()}
-                onPlaylistDeleted={() => {
+                onPlaylistDeleted={(deletedId) => {
+                  const filtered = navHistoryRef.current.filter(
+                    (entry) => entry.playlistId !== deletedId
+                  );
+                  navHistoryRef.current = filtered.filter(
+                    (entry, idx) =>
+                      idx === 0 ||
+                      entry.tab !== filtered[idx - 1].tab ||
+                      entry.playlistId !== filtered[idx - 1].playlistId
+                  );
                   loadPlaylists();
-                  closePlaylistDetail();
                 }}
               />
             ) : (
@@ -1909,6 +2125,7 @@ export default function App() {
                   recentQueries={recentSearchQueries}
                   hasResults={searchResults.length > 0}
                   onClearSearch={() => {
+                    lastBackExitPressRef.current = 0;
                     setQuery('');
                     setSearchResults([]);
                     setSearchContinuationToken(null);
@@ -2228,7 +2445,10 @@ export default function App() {
               repeatMode={repeatMode}
               isShuffleActive={isShuffleActive}
               volume={volume}
-              onExpand={() => setIsNowPlayingVisible(true)}
+              onExpand={() => {
+                lastBackExitPressRef.current = 0;
+                setIsNowPlayingVisible(true);
+              }}
               onTogglePlay={handleTogglePlay}
               onSkipNext={handleSkipNext}
               onSkipPrevious={handleSkipPrevious}

@@ -383,6 +383,11 @@ test('LRA-005 & LRA-006: NowPlayingModal renders real relatedTracks, triggers ra
     modalTextAfterOpen.includes('Perfil do Artista') && modalTextAfterOpen.includes('Discografia'),
     'ArtistProfileModal must open displaying Perfil do Artista and Discografia'
   );
+  assert.strictEqual(
+    modalTextAfterOpen.includes('YouTube Music'),
+    false,
+    'ArtistProfileModal and NowPlayingModal must not expose YouTube Music branding'
+  );
 });
 
 test('LRA-007: getRelatedTracks sends RDAMVM playlistId, extracts real artist from channel titles (e.g. COLORS), filters out YouTube Shorts, and falls back to artist/style search instead of raw videoId', async () => {

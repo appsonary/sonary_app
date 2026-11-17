@@ -1,6 +1,6 @@
 # Sonary Pro - Streaming & Offline Audio Player
 
-> Aplicativo Android de streaming e download offline de áudio com a identidade visual e experiência do **YouTube Music**, desenvolvido com arquitetura **Client-Side Pura (Zero-Backend / Zero-Cost)** sobre **Expo SDK 51+**, **React Native Track Player** e os subsistemas de mídia nativos do **Android 14+ (API 34)**.
+> Aplicativo Android de streaming e download offline de áudio com interface escura OLED imersiva, desenvolvido com arquitetura **Client-Side Pura (Zero-Backend / Zero-Cost)** sobre **Expo SDK 51+**, **React Native Track Player** e os subsistemas de mídia nativos do **Android 14+ (API 34)**.
 
 ---
 
@@ -51,7 +51,7 @@ O **Sonary Pro** foi projetado para operar sem servidores dedicados, bancos de d
 │                                                                        │
 │   ┌───────────────────┐    ┌─────────────────────┐    ┌─────────────┐  │
 │   │    App.tsx (UI)   │    │  services/player.ts │    │  index.ts   │  │
-│   │  Dark Spotify UX  │───>│ Singleton Idempot.  │───>│ Entry Point │  │
+│   │  Dark OLED UX     │───>│ Singleton Idempot.  │───>│ Entry Point │  │
 │   │  usePlaybackState │    │ autoInterruptions   │    │ Pre-register│  │
 │   └───────────────────┘    └─────────────────────┘    └─────────────┘  │
 │        │        │                     │                      │         │
@@ -92,11 +92,11 @@ O **Sonary Pro** foi projetado para operar sem servidores dedicados, bancos de d
 | [`plugins/withTrackPlayerFGS.js`](./plugins/withTrackPlayerFGS.js) | **Expo Config Plugin Local.** Modifica o `AndroidManifest.xml` durante o prebuild, injetando `android:foregroundServiceType="mediaPlayback"` e `android:exported="true"` no `MusicService`. |
 | [`plugins/withAndroidStartupFix.js`](./plugins/withAndroidStartupFix.js) | **Expo Config Plugin Local.** Ajusta `MainActivity.kt` e `MainApplication.kt` para desativar a sobreposição de debug `DevLoadingView`, prevenindo deadlocks de janela no Android 14. |
 | [`app.json`](./app.json) | Configuração nativa Expo com permissões Android 14+ (`FOREGROUND_SERVICE_MEDIA_PLAYBACK`, `FOREGROUND_SERVICE`, `POST_NOTIFICATIONS`, `WAKE_LOCK`, `INTERNET`), plugins `expo-build-properties` (Target/Compile SDK 34) e plugins locais. |
-| [`theme.ts`](./theme.ts) | Sistema de tokens de design baseado na engenharia reversa do YouTube Music (cores `#030303`, `#121212`, `#FF0000`, escalas de espaçamento e tipografia). |
-| [`DESIGN.md`](./DESIGN.md) | Especificação visual e técnica detalhada do design system do YouTube Music aplicado ao Sonary Pro. |
-| [`components/YouTubeMusicSidebar.tsx`](./components/YouTubeMusicSidebar.tsx) | Sidebar retrátil estilo YouTube Music para telas maiores/desktop com seções de navegação, biblioteca e playlists fixadas. |
+| [`theme.ts`](./theme.ts) | Sistema de tokens de design do Sonary Pro (cores `#030303`, `#121212`, `#FF0000`, escalas de espaçamento e tipografia). |
+| [`DESIGN.md`](./DESIGN.md) | Especificação visual e técnica detalhada do design system escuro do Sonary Pro. |
+| [`components/YouTubeMusicSidebar.tsx`](./components/YouTubeMusicSidebar.tsx) | Sidebar retrátil para telas maiores/desktop com seções de navegação, biblioteca e playlists fixadas. |
 | [`components/QuickPicksSection.tsx`](./components/QuickPicksSection.tsx) | Seção "Escolhas rápidas" em grid de 4 linhas com paginação horizontal, cards densos e equalizador animado na faixa ativa. |
-| [`components/PersistentMiniPlayer.tsx`](./components/PersistentMiniPlayer.tsx) | Barra de reprodução persistente estilo YouTube Music com barra vermelha superior de progresso (`#FF0000`), botões de Like, Shuffle, Repeat e expansão da gaveta. |
+| [`components/PersistentMiniPlayer.tsx`](./components/PersistentMiniPlayer.tsx) | Barra de reprodução persistente com barra vermelha superior de progresso (`#FF0000`), botões de Like, Shuffle, Repeat e expansão da gaveta. |
 | [`components/NowPlayingModal.tsx`](./components/NowPlayingModal.tsx) | Gaveta imersiva "Tocando Agora" com sistema de 3 abas ("A SEGUIR", "LETRAS", "RELACIONADOS"), capa expandida, scrubber interativo e atalhos de teclado. |
 | [`components/LibrarySection.tsx`](./components/LibrarySection.tsx) | Seção de biblioteca do usuário com visualização de playlists personalizadas, faixas curtidas e histórico offline. |
 | [`components/AddToPlaylistModal.tsx`](./components/AddToPlaylistModal.tsx) | Modal para inclusão rápida de músicas em playlists existentes ou criação de uma nova lista na hora. |
@@ -108,7 +108,7 @@ O **Sonary Pro** foi projetado para operar sem servidores dedicados, bancos de d
 | [`services/storage.ts`](./services/storage.ts) | Gerenciador de Scoped Storage (`tracks/` e `thumbnails/`), download atômico (`.part` ➔ `.m4a`), validação estrita de `Content-Length`, checagem prévia de espaço em disco (mínimo 25 MB) e limpeza profunda de arquivos órfãos. |
 | [`services/player.ts`](./services/player.ts) | Módulo Singleton com trava de concorrência (`setupPlayerPromise`), proteção contra reentrância de inicialização, configuração de capacidades de notificação e funções utilitárias (`playTrack`, `togglePlayback`, `seekTo`, `resetPlayer`). |
 | [`services/api.ts`](./services/api.ts) | Camada de resiliência de rede com motor primário InnerTube client-side e fallback federado (Piped + Invidious), timeout de 10.000ms (`AbortController`), failover automático para HTTP 429/5xx e classe de erro tipada `AllInstancesFailedError`. |
-| [`App.tsx`](./App.tsx) | Interface principal do YouTube Music com navegação responsiva, atalhos globais de teclado, streaming instantâneo, auto-advance e integração total com SQLite. |
+| [`App.tsx`](./App.tsx) | Interface principal do Sonary Pro com navegação responsiva, atalhos globais de teclado, streaming instantâneo, auto-advance e integração total com SQLite. |
 | [`AUDITORIA_RESILIENCIA_UX.md`](./AUDITORIA_RESILIENCIA_UX.md) | Relatório técnico completo de auditoria de estresse operacional, resiliência de UX, lifecycles e matriz de gaps de I/O e concorrência. |
 
 ---
@@ -238,7 +238,7 @@ Em [`services/player.ts`](./services/player.ts), [`services/api.ts`](./services/
 
 ### 3.9. Modal Now Playing & Navegação Temporal (Scrubber Interativo)
 Em [`components/NowPlayingModal.tsx`](./components/NowPlayingModal.tsx):
-- **Player em Tela Cheia:** O mini-player na base da tela agora possui uma barra fina de progresso de 2px e é totalmente expansível ao toque, abrindo o modal completo no padrão Spotify.
+- **Player em Tela Cheia:** O mini-player na base da tela agora possui uma barra fina de progresso de 2px e é totalmente expansível ao toque, abrindo o modal completo de reprodução.
 - **Scrubber de Alta Precisão:** Utiliza o hook nativo `useProgress(250)` do `react-native-track-player` para renderizar uma barra deslizante interativa, permitindo que o usuário avance ou recue para qualquer ponto da música (Seek interativo).
 - **Controles de Transporte Expandidos:** Inclui Play/Pause, avançar para próxima faixa (Skip Next), voltar para faixa anterior (Skip Previous) e saltos rápidos de ±15 segundos.
 - **Indicador de Tempo Dinâmico:** Exibe tanto o tempo já percorrido (`01:23`) quanto o tempo restante decrescente (`-02:45`).
@@ -447,7 +447,7 @@ npx expo start --clear
 | **BLOCO 3:** Resiliência de API | ✅ Aprovado | `services/api.ts` (motor primário InnerTube client-side sem bloqueio geográfico, fallback federado Piped + Invidious, timeout de 10s e classe `AllInstancesFailedError`). |
 | **BLOCO 4:** Persistência SQLite & Player Offline | ✅ Aprovado | `services/database.ts` (SQLite v14 com queries em lote), `services/storage.ts` (Scoped Storage integrado) e `App.tsx` (reprodução local imediata + aba offline + `GestureHandlerRootView`). |
 | **BLOCO 5:** Resiliência de I/O e Auditoria de UX | ✅ Aprovado | Gravação atômica (`.part` ➔ `.m4a`), validação de `Content-Length`, checagem prévia de disco livre (mínimo 25 MB), permissão em runtime (`POST_NOTIFICATIONS`) e relatório [`AUDITORIA_RESILIENCIA_UX.md`](./AUDITORIA_RESILIENCIA_UX.md). |
-| **BLOCO 6:** Redesign Visual YouTube Music | ✅ Aprovado | Reengenharia completa do design do YouTube Music: Sidebar retrátil, Topbar com blur, Chips de humor/energia, Escolhas rápidas em grid 4xN, Mini-player persistente com barra vermelha (`#FF0000`), Modal "Tocando Agora" com 3 abas (A Seguir, Letras, Relacionados) e atalhos de teclado. Zero regressão na camada de áudio e SQLite. |
+| **BLOCO 6:** Redesign Visual Dark OLED | ✅ Aprovado | Redesign completo do Sonary Pro: Sidebar retrátil, Topbar com blur, Chips de humor/energia, Escolhas rápidas em grid 4xN, Mini-player persistente com barra vermelha (`#FF0000`), Modal "Tocando Agora" com 3 abas (A Seguir, Letras, Relacionados) e atalhos de teclado. Zero regressão na camada de áudio e SQLite. |
 | **BLOCO 7:** Automação do Dev & Blindagem CNG | ✅ Aprovado | Scripts `clean.js`, `setup.js`, `patch-android.js`, `run-android.js` e plugins Expo locais (`withAndroidStartupFix.js`, `withTrackPlayerFGS.js`). Eliminação de telas pretas e brancas com inicialização 100% determinística sem necessidade de versionar a pasta `android/`. Suíte de 44 testes passando com 100% de sucesso. |
 
 ---

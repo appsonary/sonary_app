@@ -1671,7 +1671,7 @@ export async function getArtistProfile(
     bannerUrl,
     bio:
       bio ||
-      `Explore a discografia oficial, principais lançamentos e mix contínuo de ${cleanName} no YouTube Music.`,
+      `Explore a discografia, principais lançamentos e mix contínuo de ${cleanName} no Sonary.`,
     subscriberCountText: subscriberCountText || 'Artista Verificado',
     monthlyListenersText:
       topTracks.length > 0 ? `${topTracks.length} faixas em destaque` : 'Artista no Sonary',

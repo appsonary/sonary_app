@@ -4,10 +4,11 @@ const renderer = require('react-test-renderer');
 const { mockPlayer } = require('../mocks/trackPlayerMock');
 const { dbInstance } = require('../mocks/sqliteMock');
 const { resetFileSystem } = require('../mocks/fileSystemMock');
-const { Clipboard, Linking } = require('../mocks/reactNativeMock');
+const { BackHandler, Clipboard, Keyboard, Linking } = require('../mocks/reactNativeMock');
 const notificationsMock = require('../mocks/notificationsMock');
 const { invalidateDatabaseCaches } = require('../../services/database');
 const { clearStorageCache } = require('../../services/storage');
+const { resetBackHandlersForTest } = require('../../services/backNavigation');
 
 /**
  * Flush all microtasks, timers and pending promises within act()
@@ -160,6 +161,9 @@ function resetAllMocks() {
   clearStorageCache();
   Clipboard.reset();
   Linking.__reset();
+  BackHandler.__reset();
+  Keyboard.__reset();
+  resetBackHandlersForTest();
   notificationsMock.__reset();
 }
 

@@ -30,6 +30,7 @@ import { getEaseOutCubic, theme } from '../theme';
 import { MarqueeText } from './MarqueeText';
 import { useBottomSheetController } from './sheetMotion';
 import { PlayingEqualizer } from './PlayingEqualizer';
+import { useBackModalLock } from '../services/backNavigation';
 
 export interface TrackCardProps {
   id: string;
@@ -85,6 +86,7 @@ export const TrackContextSheet: React.FC<TrackContextSheetProps> = ({
   onDeleteOffline,
   onRemoveFromPlaylist,
 }) => {
+  useBackModalLock(true);
   const {
     translateY,
     backdropOpacity,

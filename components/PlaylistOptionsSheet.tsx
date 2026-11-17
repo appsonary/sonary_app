@@ -19,6 +19,7 @@ import {
 import { PlaylistDetail } from '../services/database';
 import { PlaylistCover } from './PlaylistCover';
 import { useBottomSheetController } from './sheetMotion';
+import { useBackModalLock } from '../services/backNavigation';
 
 export interface PlaylistOptionsSheetProps {
   visible: boolean;
@@ -48,6 +49,7 @@ export const PlaylistOptionsSheet: React.FC<PlaylistOptionsSheetProps> = ({
   onDeletePlaylist,
 }) => {
   const isSheetVisible = Boolean(visible && playlist && !playlist.isSystem);
+  useBackModalLock(isSheetVisible);
   const {
     translateY,
     backdropOpacity,

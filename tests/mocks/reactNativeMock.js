@@ -23,12 +23,13 @@ const TouchableOpacity = (props) => {
 };
 TouchableOpacity.displayName = 'TouchableOpacity';
 
-const TextInput = (props) => {
+const TextInput = React.forwardRef((props, ref) => {
   const { value, onChangeText, onSubmitEditing, placeholder, ...rest } = props;
   return React.createElement(
     'TextInput',
     {
       ...rest,
+      ref,
       value,
       placeholder,
       onChangeText,
@@ -36,7 +37,7 @@ const TextInput = (props) => {
     },
     value
   );
-};
+});
 TextInput.displayName = 'TextInput';
 
 const Image = (props) => React.createElement('Image', props, null);
@@ -330,6 +331,69 @@ const AppState = {
   },
 };
 
+const _backListeners = [];
+const BackHandler = {
+  addEventListener: (event, listener) => {
+    if (event === 'hardwareBackPress' && typeof listener === 'function') {
+      _backListeners.push(listener);
+    }
+    return {
+      remove: () => {
+        const idx = _backListeners.indexOf(listener);
+        if (idx !== -1) {
+          _backListeners.splice(idx, 1);
+        }
+      },
+    };
+  },
+  removeEventListener: (event, listener) => {
+    if (event === 'hardwareBackPress') {
+      const idx = _backListeners.indexOf(listener);
+      if (idx !== -1) {
+        _backListeners.splice(idx, 1);
+      }
+    }
+  },
+  exitApp: () => {},
+  __emitHardwareBackPress: () => {
+    for (let i = _backListeners.length - 1; i >= 0; i--) {
+      if (_backListeners[i]() === true) {
+        return true;
+      }
+    }
+    return false;
+  },
+  __reset: () => {
+    _backListeners.length = 0;
+  },
+};
+
+const _keyboardListeners = new Map();
+const Keyboard = {
+  dismiss: () => {},
+  addListener: (event, listener) => {
+    if (!_keyboardListeners.has(event)) {
+      _keyboardListeners.set(event, new Set());
+    }
+    if (typeof listener === 'function') {
+      _keyboardListeners.get(event).add(listener);
+    }
+    return {
+      remove: () => {
+        _keyboardListeners.get(event)?.delete(listener);
+      },
+    };
+  },
+  __emit: (event, payload) => {
+    for (const listener of Array.from(_keyboardListeners.get(event) || [])) {
+      listener(payload);
+    }
+  },
+  __reset: () => {
+    _keyboardListeners.clear();
+  },
+};
+
 module.exports = {
   __esModule: true,
   View,
@@ -353,6 +417,8 @@ module.exports = {
   Clipboard,
   Linking,
   AppState,
+  BackHandler,
+  Keyboard,
   NativeModules: { Clipboard },
   Animated,
   useWindowDimensions: () => Dimensions.get('window'),
