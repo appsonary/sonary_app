@@ -11,7 +11,6 @@ import {
   SafeAreaView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   useWindowDimensions,
   View,
@@ -31,6 +30,7 @@ import {
   PlaylistSummary,
   TrackInput,
 } from '../services/database';
+import { MaterialTextInput } from './MaterialTextInput';
 import { PlaylistCover } from './PlaylistCover';
 import { useBottomSheetController } from './sheetMotion';
 import { getEaseOutCubic, theme } from '../theme';
@@ -291,16 +291,17 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
             </TouchableOpacity>
           ) : (
             <View style={styles.createForm}>
-              <TextInput
-                style={styles.createInput}
+              <MaterialTextInput
+                label="NOVA PLAYLIST"
                 placeholder="Dê um nome para a sua playlist"
-                placeholderTextColor="#717171"
                 value={newPlaylistName}
                 onChangeText={setNewPlaylistName}
+                maxLength={50}
                 autoFocus={true}
                 returnKeyType="done"
                 onSubmitEditing={handleCreateAndAdd}
                 accessibilityLabel="Nome da nova playlist"
+                clearAccessibilityLabel="Limpar nome da playlist"
               />
               <View style={styles.createFormActions}>
                 <TouchableOpacity
@@ -510,16 +511,6 @@ const styles = StyleSheet.create({
   createForm: {
     paddingHorizontal: 20,
     paddingVertical: 8,
-  },
-  createInput: {
-    backgroundColor: '#141414',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: '#FFFFFF',
-    fontSize: 14,
   },
   createFormActions: {
     flexDirection: 'row',

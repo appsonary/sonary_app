@@ -104,12 +104,12 @@ test('BackNavigation: Multi-tab + PlaylistDetailModal history walks back in orde
   await actAsync(async () => {
     novaBtn.props.onPress();
   });
-  assert.ok(findInputByPlaceholder(root, 'Nome da nova playlist...'));
+  assert.ok(findInputByPlaceholder(root, 'Dê um nome à playlist...'));
 
   await actAsync(async () => {
     assert.strictEqual(BackHandler.__emitHardwareBackPress(), true);
   });
-  assert.strictEqual(findInputByPlaceholder(root, 'Nome da nova playlist...'), null);
+  assert.strictEqual(findInputByPlaceholder(root, 'Dê um nome à playlist...'), null);
   assert.ok(getAllText(root).includes('Sua Biblioteca'), 'Must stay on Playlists tab after closing quick-create');
 
   // Navigate to downloads tab

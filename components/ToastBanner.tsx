@@ -8,12 +8,14 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { AlertCircle, CheckCircle2 } from 'lucide-react-native';
+import { AlertCircle, CheckCircle2, Info } from 'lucide-react-native';
 import { getEaseOutCubic, theme } from '../theme';
+
+export type ToastVariant = 'success' | 'error' | 'info';
 
 export interface ToastBannerProps {
   message: string | null | undefined;
-  variant?: 'success' | 'error';
+  variant?: ToastVariant;
   onDismiss?: () => void;
   topOffset?: number;
 }
@@ -30,6 +32,7 @@ export function ToastBanner({
   topOffset = Platform.OS === 'android' ? 12 : 10,
 }: ToastBannerProps) {
   const isError = variant === 'error';
+  const isInfo = variant === 'info';
   const translateY = useRef(new Animated.Value(-16)).current;
   const opacity = useRef(new Animated.Value(0)).current;
 
@@ -72,6 +75,7 @@ export function ToastBanner({
         style={[
           styles.toastBox,
           isError && styles.toastBoxError,
+          isInfo && styles.toastBoxInfo,
           {
             opacity,
             transform: [{ translateY }],
@@ -84,12 +88,24 @@ export function ToastBanner({
           onPress={onDismiss}
           accessibilityRole="button"
           accessibilityLabel={
-            isError ? 'Fechar notificação de erro' : 'Fechar notificação de sucesso'
+            isError
+              ? 'Fechar notificação de erro'
+              : isInfo
+                ? 'Fechar notificação informativa'
+                : 'Fechar notificação de sucesso'
           }
         >
-          <View style={[styles.toastIconBadge, isError && styles.toastIconBadgeError]}>
+          <View
+            style={[
+              styles.toastIconBadge,
+              isError && styles.toastIconBadgeError,
+              isInfo && styles.toastIconBadgeInfo,
+            ]}
+          >
             {isError ? (
               <AlertCircle color="#FF4E45" size={15} />
+            ) : isInfo ? (
+              <Info color="#60A5FA" size={15} />
             ) : (
               <CheckCircle2 color="#2BA640" size={15} />
             )}
@@ -119,6 +135,9 @@ const styles = StyleSheet.create({
   toastBoxError: {
     borderColor: 'rgba(255, 78, 69, 0.45)',
   },
+  toastBoxInfo: {
+    borderColor: 'rgba(96, 165, 250, 0.35)',
+  },
   toastTouchable: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -137,6 +156,9 @@ const styles = StyleSheet.create({
   },
   toastIconBadgeError: {
     backgroundColor: 'rgba(255, 78, 69, 0.18)',
+  },
+  toastIconBadgeInfo: {
+    backgroundColor: 'rgba(96, 165, 250, 0.16)',
   },
   toastText: {
     color: '#FFFFFF',

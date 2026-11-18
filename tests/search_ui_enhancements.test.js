@@ -28,7 +28,7 @@ test.afterEach(() => {
   api.searchTracks = originalSearchTracks;
 });
 
-test('Search UI: BrandHeader has balanced YouTube Music layout and refined status pill', async () => {
+test('Search UI: BrandHeader has balanced layout with logo and single hamburger menu button', async () => {
   let tree;
   await actAsync(async () => {
     tree = renderer.create(React.createElement(BrandHeader));
@@ -55,83 +55,48 @@ test('Search UI: BrandHeader has balanced YouTube Music layout and refined statu
     'BrandHeader logo image must maintain horizontal aspect ratio'
   );
 
-  // Verify updates icon replaces legacy profile avatar cleanly (no pill background) and Cast button is omitted
-  const updatesButton = root.find(
-    (n) => n.props && n.props.accessibilityLabel === 'Atualizações do aplicativo'
+  // Verify single hamburger menu button replaces legacy 3-button cluster cleanly
+  const menuButton = root.find(
+    (n) => n.type === 'TouchableOpacity' && n.props && n.props.accessibilityLabel === 'Abrir menu'
   );
-  assert.ok(updatesButton, 'App updates button must be present');
+  assert.ok(menuButton, 'Hamburger menu button must be present');
   assert.ok(
-    !updatesButton.props.style || !updatesButton.props.style.backgroundColor,
-    'App updates button must stay clean without a background pill'
+    !menuButton.props.style || !menuButton.props.style.backgroundColor,
+    'Menu button must stay clean without a background pill'
   );
   assert.ok(
-    !updatesButton.props.style || !updatesButton.props.style.borderWidth,
-    'App updates button must stay clean without a border'
+    !menuButton.props.style || !menuButton.props.style.borderWidth,
+    'Menu button must stay clean without a border'
   );
 
-  const updateIcon = updatesButton.find(
-    (n) => n.type === 'LucideIcon' && n.props && n.props.name === 'RefreshCw'
+  const menuIcon = menuButton.find(
+    (n) => n.type === 'LucideIcon' && n.props && n.props.name === 'Menu'
   );
-  assert.ok(updateIcon, 'BrandHeader must render RefreshCw icon inside updates slot');
+  assert.ok(menuIcon, 'BrandHeader must render Menu icon inside menu button');
+  assert.strictEqual(menuIcon.props.size, 24);
+  assert.strictEqual(menuIcon.props.color, '#FFFFFF');
 
-  // Verify clean download queue button exists between dev button (when enabled) and updates button
-  const queueBtn = root.find(
-    (n) => n.type === 'TouchableOpacity' && n.props && n.props.accessibilityLabel === 'Fila de downloads'
-  );
-  assert.ok(queueBtn, 'BrandHeader must render clean download queue button');
-  assert.ok(
-    !queueBtn.props.style || !queueBtn.props.style.backgroundColor,
-    'Download queue button must stay clean without a background pill'
-  );
-  assert.ok(
-    !queueBtn.props.style || !queueBtn.props.style.borderWidth,
-    'Download queue button must stay clean without a border'
+  assert.strictEqual(
+    root.findAll((n) => n.type === 'View' && n.props && n.props.testID === 'header-menu-dot').length,
+    0,
+    'Notification dot must be hidden when no update/queue/error exists'
   );
 
-  const prevDev = global.__DEV__;
-  global.__DEV__ = true;
-  let devHeaderTree;
-  try {
+  // Notification dot appears when downloads are queued, errors occur, or update is available
+  for (const badgeProps of [
+    { downloadQueueCount: 3 },
+    { hasDownloadErrors: true },
+    { hasAvailableUpdate: true },
+  ]) {
+    let badgedTree;
     await actAsync(async () => {
-      devHeaderTree = renderer.create(
-        React.createElement(BrandHeader, {
-          onOpenDevMenu: () => {},
-          onOpenDownloadQueue: () => {},
-          downloadQueueCount: 3,
-        })
-      );
+      badgedTree = renderer.create(React.createElement(BrandHeader, badgeProps));
     });
-    const devRightActions = devHeaderTree.root.find(
-      (n) =>
-        n.type === 'View' &&
-        Array.isArray(n.children) &&
-        n.children.some((c) => c.props && c.props.accessibilityLabel === 'Atualizações do aplicativo')
+    const dot = badgedTree.root.find(
+      (n) => n.type === 'View' && n.props && n.props.testID === 'header-menu-dot'
     );
-    const actionLabels = devRightActions.children
-      .map((c) => c.props && c.props.accessibilityLabel)
-      .filter(Boolean);
-    assert.deepStrictEqual(
-      actionLabels,
-      ['Menu de desenvolvimento', 'Fila de downloads (3)', 'Atualizações do aplicativo'],
-      'Download queue button must sit between dev button and updates button'
-    );
-    const devBtn = devHeaderTree.root.find(
-      (n) => n.type === 'TouchableOpacity' && n.props && n.props.accessibilityLabel === 'Menu de desenvolvimento'
-    );
-    assert.ok(
-      !devBtn.props.style || !devBtn.props.style.backgroundColor,
-      'Dev button must stay clean without a background pill'
-    );
-    assert.ok(
-      !devBtn.props.style || !devBtn.props.style.borderWidth,
-      'Dev button must stay clean without a border'
-    );
-    assert.ok(
-      getAllText(devRightActions).includes('3'),
-      'BrandHeader download queue button must display active/pending count badge'
-    );
-  } finally {
-    global.__DEV__ = prevDev;
+    assert.ok(dot, 'BrandHeader must render notification dot when active condition is true');
+    assert.strictEqual(dot.props.style.backgroundColor, '#EF233C');
   }
 
   const legacyProfileAvatar = root.findAll(
@@ -200,11 +165,8 @@ test('Search UI: SearchBarSection renders YouTube Music pill bar, circular searc
   const searchBtn = findSearchActionButton(root);
   assert.ok(searchBtn, 'Inline search action button must exist');
   const btnStyle = StyleSheet.flatten(searchBtn.props.style) || {};
-  assert.strictEqual(btnStyle.width, 32);
-  assert.strictEqual(btnStyle.height, 32);
-  assert.strictEqual(btnStyle.borderRadius, 16);
-  assert.strictEqual(btnStyle.backgroundColor, '#FFFFFF');
-  assert.strictEqual(searchIcons[0].props.color, '#030303');
+  assert.strictEqual(btnStyle.backgroundColor, undefined, 'Search icon button must stay clean without white circle fill');
+  assert.strictEqual(searchIcons[0].props.color, '#9E9EA4');
 
   // Focusing input reveals back arrow & recent search history rows
   await actAsync(async () => {
@@ -650,10 +612,11 @@ test('Active track UI: NowPlayingModal Queue sheet highlights only the currently
   );
 });
 
-test('Search UI: Unified YouTube Music pill search design renders and filters across PlaylistDetailModal, LibrarySection, and Downloads tab', async () => {
+test('Search UI: Unified MaterialTextInput search design renders and filters across PlaylistDetailModal, LibrarySection, and Downloads tab', async () => {
   const { StyleSheet } = require('react-native');
   const { PlaylistDetailModal } = require('../components/PlaylistDetailModal');
   const { LibrarySection } = require('../components/LibrarySection');
+  const { MaterialTextInput } = require('../components/MaterialTextInput');
   const {
     createPlaylist,
     addTrackToPlaylist,
@@ -661,16 +624,12 @@ test('Search UI: Unified YouTube Music pill search design renders and filters ac
   } = require('../services/database');
   const { findButtonByText } = require('./helpers/testUtils');
 
-  const assertPillDesign = (inputNode, contextName) => {
-    let pillContainer = inputNode.parent;
-    while (pillContainer && pillContainer.type !== 'View') {
-      pillContainer = pillContainer.parent;
-    }
-    assert.ok(pillContainer, `${contextName}: search pill View container must exist`);
-    const pillStyle = StyleSheet.flatten(pillContainer.props.style) || {};
-    assert.strictEqual(pillStyle.borderRadius, 24, `${contextName}: search pill must have borderRadius 24`);
-    assert.strictEqual(pillStyle.height, 48, `${contextName}: search pill must have height 48`);
-    assert.strictEqual(pillStyle.backgroundColor, '#212121', `${contextName}: search pill must use #212121 fill`);
+  const assertMaterialSearchDesign = (rootNode, inputNode, contextName) => {
+    const inputStyle = StyleSheet.flatten(inputNode.props.style) || {};
+    assert.strictEqual(inputStyle.backgroundColor, 'transparent', `${contextName}: search input must be transparent`);
+    assert.strictEqual(inputStyle.borderWidth, 0, `${contextName}: search input must be borderless`);
+    const materialInputs = rootNode.findAllByType(MaterialTextInput);
+    assert.ok(materialInputs.length >= 1, `${contextName}: must render MaterialTextInput`);
   };
 
   // 1. PlaylistDetailModal
@@ -705,7 +664,7 @@ test('Search UI: Unified YouTube Music pill search design renders and filters ac
 
   const plSearchInput = findInputByPlaceholder(plTree.root, 'Buscar nesta playlist');
   assert.ok(plSearchInput, 'PlaylistDetailModal must render playlist search input');
-  assertPillDesign(plSearchInput, 'PlaylistDetailModal');
+  assertMaterialSearchDesign(plTree.root, plSearchInput, 'PlaylistDetailModal');
 
   await actAsync(async () => {
     plSearchInput.props.onChangeText('Maiden');
@@ -741,7 +700,7 @@ test('Search UI: Unified YouTube Music pill search design renders and filters ac
 
   const libSearchInput = findInputByPlaceholder(libTree.root, 'Buscar playlists');
   assert.ok(libSearchInput, 'LibrarySection must render playlist search input');
-  assertPillDesign(libSearchInput, 'LibrarySection');
+  assertMaterialSearchDesign(libTree.root, libSearchInput, 'LibrarySection');
 
   await actAsync(async () => {
     libSearchInput.props.onChangeText('Acoustic');
@@ -791,8 +750,8 @@ test('Search UI: Unified YouTube Music pill search design renders and filters ac
   });
 
   const dlSearchInput = findInputByPlaceholder(appTree.root, 'Buscar nas baixadas');
-  assert.ok(dlSearchInput, 'Downloads tab must render pill search input when offline tracks exist');
-  assertPillDesign(dlSearchInput, 'Downloads Tab');
+  assert.ok(dlSearchInput, 'Downloads tab must render search input when offline tracks exist');
+  assertMaterialSearchDesign(appTree.root, dlSearchInput, 'Downloads Tab');
 
   await actAsync(async () => {
     dlSearchInput.props.onChangeText('Metallica');

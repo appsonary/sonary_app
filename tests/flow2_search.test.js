@@ -689,16 +689,37 @@ test('Flow 2: Queuing multiple tracks shows pending state and opens DownloadQueu
       activeSaveBtn.props.onPress({ stopPropagation: () => {} });
     });
 
-    // BrandHeader button displays badge count (2) and opens DownloadQueueModal
-    const headerQueueBtn = root.find(
+    // BrandHeader shows notification dot on menu button and SideDrawerMenu displays count (2) to open DownloadQueueModal
+    const menuBtn = root.find(
       (n) =>
         n.type === 'TouchableOpacity' &&
-        n.props.accessibilityLabel === 'Fila de downloads (2)'
+        n.props.accessibilityLabel === 'Abrir menu'
     );
-    assert.ok(headerQueueBtn, 'BrandHeader must expose queue button with count (2)');
+    assert.ok(menuBtn, 'BrandHeader must expose hamburger menu button');
+    assert.ok(
+      menuBtn.findAll(
+        (n) => n.type === 'View' && n.props && n.props.testID === 'header-menu-dot'
+      ).length === 1,
+      'BrandHeader menu button must show notification dot when downloads are queued'
+    );
 
     await actAsync(async () => {
-      headerQueueBtn.props.onPress();
+      menuBtn.props.onPress();
+    });
+
+    const drawerQueueBtn = root.find(
+      (n) =>
+        n.type === 'TouchableOpacity' &&
+        n.props.accessibilityLabel === 'Fila de downloads'
+    );
+    assert.ok(drawerQueueBtn, 'SideDrawerMenu must expose Fila de downloads item');
+    assert.ok(
+      getAllText(drawerQueueBtn).includes('2'),
+      'SideDrawerMenu Fila de downloads must display count pill (2)'
+    );
+
+    await actAsync(async () => {
+      drawerQueueBtn.props.onPress();
     });
 
     const modalText = getAllText(root);

@@ -1,7 +1,6 @@
 import React from 'react';
 import { Image, Platform, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { ArrowDownToLine, Code2, RefreshCw } from 'lucide-react-native';
-import { isDevMenuEnabled } from './DevMenuModal';
+import { Menu } from 'lucide-react-native';
 
 const HEADER_LOGO = require('../assets/brand-logo-header.png');
 const ANDROID_STATUS_BAR_HEIGHT =
@@ -9,24 +8,21 @@ const ANDROID_STATUS_BAR_HEIGHT =
 
 export interface BrandHeaderProps {
   subtitle?: string;
-  onOpenDevMenu?: () => void;
-  onOpenDownloadQueue?: () => void;
+  onOpenMenu?: () => void;
   downloadQueueCount?: number;
   hasDownloadErrors?: boolean;
-  onOpenUpdates?: () => void;
   hasAvailableUpdate?: boolean;
 }
 
 export const BrandHeader: React.FC<BrandHeaderProps> = ({
   subtitle,
-  onOpenDevMenu,
-  onOpenDownloadQueue,
+  onOpenMenu,
   downloadQueueCount = 0,
   hasDownloadErrors = false,
-  onOpenUpdates,
   hasAvailableUpdate = false,
 }) => {
-  const showDevButton = isDevMenuEnabled() && typeof onOpenDevMenu === 'function';
+  const showNotificationDot =
+    hasAvailableUpdate || downloadQueueCount > 0 || hasDownloadErrors;
 
   return (
     <View style={styles.header}>
@@ -49,57 +45,21 @@ export const BrandHeader: React.FC<BrandHeaderProps> = ({
           </View>
         </View>
 
-        {/* Dev (em debug), Fila de Downloads (clean) e Atualizações */}
-        <View style={styles.headerRightActions}>
-          {showDevButton && (
-            <TouchableOpacity
-              style={styles.devButton}
-              onPress={onOpenDevMenu}
-              activeOpacity={0.75}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-              accessibilityRole="button"
-              accessibilityLabel="Menu de desenvolvimento"
-            >
-              <Code2 color="#FFFFFF" size={21} />
-            </TouchableOpacity>
-          )}
-          <TouchableOpacity
-            style={styles.downloadQueueButton}
-            onPress={onOpenDownloadQueue}
-            disabled={typeof onOpenDownloadQueue !== 'function'}
-            activeOpacity={0.75}
-            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            accessibilityRole="button"
-            accessibilityLabel={
-              downloadQueueCount > 0
-                ? `Fila de downloads (${downloadQueueCount})`
-                : 'Fila de downloads'
-            }
-          >
-            <ArrowDownToLine color="#FFFFFF" size={21} />
-            {downloadQueueCount > 0 ? (
-              <View style={styles.queueBadge}>
-                <Text style={styles.queueBadgeText}>
-                  {downloadQueueCount > 9 ? '9+' : downloadQueueCount}
-                </Text>
-              </View>
-            ) : hasDownloadErrors ? (
-              <View style={styles.queueErrorDot} />
-            ) : null}
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.updatesButton}
-            onPress={onOpenUpdates}
-            disabled={typeof onOpenUpdates !== 'function'}
-            activeOpacity={0.75}
-            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            accessibilityRole="button"
-            accessibilityLabel="Atualizações do aplicativo"
-          >
-            <RefreshCw color="#FFFFFF" size={20} />
-            {hasAvailableUpdate ? <View style={styles.queueErrorDot} /> : null}
-          </TouchableOpacity>
-        </View>
+        {/* Botão único de Menu Lateral com ponto de notificação discreto */}
+        <TouchableOpacity
+          style={styles.menuButton}
+          onPress={onOpenMenu}
+          disabled={typeof onOpenMenu !== 'function'}
+          activeOpacity={0.75}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          accessibilityRole="button"
+          accessibilityLabel="Abrir menu"
+        >
+          <Menu color="#FFFFFF" size={24} />
+          {showNotificationDot ? (
+            <View style={styles.notificationDot} testID="header-menu-dot" />
+          ) : null}
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -134,56 +94,22 @@ const styles = StyleSheet.create({
     aspectRatio: 1222 / 420,
     maxWidth: '100%',
   },
-  headerRightActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexShrink: 0,
-    gap: 8,
-  },
-  devButton: {
-    width: 32,
-    height: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  downloadQueueButton: {
+  menuButton: {
     width: 32,
     height: 32,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
+    flexShrink: 0,
   },
-  queueBadge: {
+  notificationDot: {
     position: 'absolute',
-    top: 1,
-    right: -2,
-    minWidth: 16,
-    height: 16,
-    paddingHorizontal: 3,
-    borderRadius: 8,
-    backgroundColor: '#FF0000',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  queueBadgeText: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  queueErrorDot: {
-    position: 'absolute',
-    top: 4,
+    top: 2,
     right: 2,
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    backgroundColor: '#FF4E45',
-  },
-  updatesButton: {
-    width: 32,
-    height: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#EF233C',
   },
   brandSubtitle: {
     fontSize: 12,
@@ -195,5 +121,3 @@ const styles = StyleSheet.create({
 });
 
 export default BrandHeader;
-
-

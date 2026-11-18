@@ -398,7 +398,7 @@ test('Updater UI: UpdateModal exibe estado atualizado e verificando quando relea
   assert.strictEqual(checkNowCalls, 1);
 });
 
-test('Updater App: botão do cabeçalho abre UpdateModal mesmo sem atualização disponível', async () => {
+test('Updater App: aba Apoiar acessível pelo menu lateral abre UpdateModal mesmo sem atualização disponível', async () => {
   const App = require('../App').default;
   const originalFetch = global.fetch;
   global.fetch = async () => ({
@@ -420,13 +420,29 @@ test('Updater App: botão do cabeçalho abre UpdateModal mesmo sem atualização
     await actAsync(async () => {
       appTree = renderer.create(React.createElement(App));
     });
-    const headerUpdatesBtn = appTree.root.find(
+    const menuBtn = appTree.root.find(
       (n) =>
         n.type === 'TouchableOpacity' &&
-        n.props.accessibilityLabel === 'Atualizações do aplicativo'
+        n.props.accessibilityLabel === 'Abrir menu'
     );
     await actAsync(async () => {
-      headerUpdatesBtn.props.onPress();
+      menuBtn.props.onPress();
+    });
+    const supportBtn = appTree.root.find(
+      (n) =>
+        n.type === 'TouchableOpacity' &&
+        n.props.accessibilityLabel === 'Apoiar o Sonary'
+    );
+    await actAsync(async () => {
+      supportBtn.props.onPress();
+    });
+    const checkUpdatesBtn = appTree.root.find(
+      (n) =>
+        n.type === 'TouchableOpacity' &&
+        n.props.accessibilityLabel === 'Verificar atualizações do aplicativo'
+    );
+    await actAsync(async () => {
+      checkUpdatesBtn.props.onPress();
     });
     const text = getAllText(appTree.root);
     assert.ok(text.includes('App atualizado'));

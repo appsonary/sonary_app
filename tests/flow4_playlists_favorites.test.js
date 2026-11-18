@@ -51,12 +51,25 @@ test('Flow 4: Quick create playlist in Playlists tab', async () => {
   await actAsync(async () => {
     newBtn.props.onPress();
   });
+  assert.ok(findButtonByText(root, 'Fechar'), 'Header button should switch to Fechar when open');
 
   // Type playlist name in quick create input
-  const nameInput = findInputByPlaceholder(root, 'Nome da nova playlist');
+  const nameInput = findInputByPlaceholder(root, 'Dê um nome à playlist...');
   assert.ok(nameInput, 'Quick create input should be rendered');
   await actAsync(async () => {
+    nameInput.props.onFocus();
     nameInput.props.onChangeText('Rock dos Anos 80');
+  });
+  assert.ok(getAllText(root).includes('16/50'), 'Counter should reflect typed length');
+
+  // Clear button clears input and hides itself, then re-type
+  const clearBtn = root.findByProps({ accessibilityLabel: 'Limpar nome da playlist' });
+  await actAsync(async () => {
+    clearBtn.props.onPress();
+  });
+  assert.strictEqual(findInputByPlaceholder(root, 'Dê um nome à playlist...').props.value, '');
+  await actAsync(async () => {
+    findInputByPlaceholder(root, 'Dê um nome à playlist...').props.onChangeText('Rock dos Anos 80');
   });
 
   // Click "Criar"

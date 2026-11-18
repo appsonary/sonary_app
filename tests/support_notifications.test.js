@@ -306,31 +306,48 @@ test('Notification tap on cold start opens Apoiar tab directly', async () => {
 });
 
 test('Dev menu button: hidden when __DEV__ is false/undefined, opens DevMenuModal and tests notifications when __DEV__ is true', async () => {
-  const { BrandHeader } = require('../components/BrandHeader');
+  const { SideDrawerMenu } = require('../components/SideDrawerMenu');
   const { DevMenuModal } = require('../components/DevMenuModal');
   const prevDev = global.__DEV__;
 
   try {
-    // 1. Produção (__DEV__ = false): botão e modal NÃO existem
+    // 1. Produção (__DEV__ = false): item dev no drawer e modal NÃO existem
     global.__DEV__ = false;
     let prodTree;
     await actAsync(async () => {
       prodTree = renderer.create(React.createElement(App));
     });
-    const prodDevBtns = prodTree.root.findAll(
-      (n) => n.props && n.props.accessibilityLabel === 'Menu de desenvolvimento'
+    const prodMenuBtn = prodTree.root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Abrir menu'
     );
-    assert.strictEqual(prodDevBtns.length, 0, 'Dev button must not exist in production');
-
-    let prodHeaderTree;
     await actAsync(async () => {
-      prodHeaderTree = renderer.create(
-        React.createElement(BrandHeader, { onOpenDevMenu: () => {} })
+      prodMenuBtn.props.onPress();
+    });
+    const prodDevBtns = prodTree.root.findAll(
+      (n) => n.props && n.props.accessibilityLabel === 'Modo Desenvolvedor'
+    );
+    assert.strictEqual(prodDevBtns.length, 0, 'Dev item must not exist in production');
+
+    let prodDrawerTree;
+    await actAsync(async () => {
+      prodDrawerTree = renderer.create(
+        React.createElement(SideDrawerMenu, {
+          visible: true,
+          isDevMode: false,
+          onClose: () => {},
+          onOpenDownloadQueue: () => {},
+          onOpenRecentHistory: () => {},
+          onOpenStats: () => {},
+          onOpenUpdates: () => {},
+          onOpenSettings: () => {},
+          onOpenDevMenu: () => {},
+          onOpenSupport: () => {},
+        })
       );
     });
     assert.strictEqual(
-      prodHeaderTree.root.findAll(
-        (n) => n.props && n.props.accessibilityLabel === 'Menu de desenvolvimento'
+      prodDrawerTree.root.findAll(
+        (n) => n.props && n.props.accessibilityLabel === 'Modo Desenvolvedor'
       ).length,
       0
     );
@@ -345,21 +362,28 @@ test('Dev menu button: hidden when __DEV__ is false/undefined, opens DevMenuModa
 
     await actAsync(async () => {
       prodTree.unmount();
-      prodHeaderTree.unmount();
+      prodDrawerTree.unmount();
       prodModalTree.unmount();
     });
 
-    // 2. Desenvolvimento (__DEV__ = true): botão no topo abre menu e testa notificações
+    // 2. Desenvolvimento (__DEV__ = true): item no menu lateral abre DevMenuModal e testa notificações
     global.__DEV__ = true;
     let devTree;
     await actAsync(async () => {
       devTree = renderer.create(React.createElement(App));
     });
 
-    const devBtn = devTree.root.find(
-      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Menu de desenvolvimento'
+    const devMenuOpenBtn = devTree.root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Abrir menu'
     );
-    assert.ok(devBtn, 'Dev button with Code2 icon should render when __DEV__ is true');
+    await actAsync(async () => {
+      devMenuOpenBtn.props.onPress();
+    });
+
+    const devBtn = devTree.root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Modo Desenvolvedor'
+    );
+    assert.ok(devBtn, 'Dev menu item with Code2 icon should render when __DEV__ is true');
 
     await actAsync(async () => {
       devBtn.props.onPress();
@@ -560,12 +584,18 @@ test('APK build profiles: EXPO_PUBLIC_DEV_MENU=1 enables dev button in APK dev b
     await actAsync(async () => {
       apkProdTree = renderer.create(React.createElement(App));
     });
+    const apkMenuBtn = apkProdTree.root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Abrir menu'
+    );
+    await actAsync(async () => {
+      apkMenuBtn.props.onPress();
+    });
     assert.strictEqual(
       apkProdTree.root.findAll(
-        (n) => n.props && n.props.accessibilityLabel === 'Menu de desenvolvimento'
+        (n) => n.props && n.props.accessibilityLabel === 'Modo Desenvolvedor'
       ).length,
       0,
-      'Prod APK (__DEV__=false without EXPO_PUBLIC_DEV_MENU) must hide dev button'
+      'Prod APK (__DEV__=false without EXPO_PUBLIC_DEV_MENU) must hide dev menu item'
     );
     await actAsync(async () => {
       apkProdTree.unmount();

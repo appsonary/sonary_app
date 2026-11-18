@@ -4,7 +4,6 @@ import {
   StyleProp,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
   ViewStyle,
@@ -14,16 +13,20 @@ import {
   Heart,
   ListMusic,
   Plus,
+  X,
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   FAVORITES_PLAYLIST_ID,
   PlaylistSummary,
 } from '../services/database';
+import { MaterialTextInput } from './MaterialTextInput';
 import { SearchPillInput } from './SearchBarSection';
 import { PlaylistCover } from './PlaylistCover';
 import { theme } from '../theme';
 import { BACK_PRIORITY, useBackHandler } from '../services/backNavigation';
+
+const QUICK_CREATE_MAX_LENGTH = 50;
 
 export const FAVORITES_SURFACE_COLORS = ['#2E0B12', '#17090D', '#101012'] as const;
 export const FAVORITES_BADGE_COLORS = ['#D91B2C', '#7A0B1B'] as const;
@@ -97,51 +100,70 @@ export const LibrarySection: React.FC<LibrarySectionProps> = ({
       <View style={styles.playlistTabHeader}>
         <Text style={styles.sectionHeaderTitle}>Sua Biblioteca</Text>
         <TouchableOpacity
-          style={styles.createPlaylistButton}
+          style={[
+            styles.createPlaylistButton,
+            isQuickCreateVisible && styles.createPlaylistButtonOpen,
+          ]}
           onPress={onToggleQuickCreate}
           activeOpacity={0.7}
           accessibilityRole="button"
           accessibilityLabel="Criar nova playlist"
         >
-          <Plus color="#FFFFFF" size={15} />
-          <Text style={styles.createPlaylistButtonText}>Nova</Text>
+          {isQuickCreateVisible ? (
+            <X color="#FFFFFF" size={15} />
+          ) : (
+            <Plus color="#FFFFFF" size={15} />
+          )}
+          <Text style={styles.createPlaylistButtonText}>
+            {isQuickCreateVisible ? 'Fechar' : 'Nova'}
+          </Text>
         </TouchableOpacity>
       </View>
 
-      {/* Input de Criação Rápida Inline */}
+      {/* Input de Criação Rápida Inline (Material-inspired, sem caixa de fundo) */}
       {isQuickCreateVisible && (
         <View style={styles.quickCreateBox}>
-          <TextInput
-            style={styles.quickCreateInput}
-            placeholder="Nome da nova playlist..."
-            placeholderTextColor="#757575"
+          <MaterialTextInput
+            label="NOVA PLAYLIST"
+            placeholder="Dê um nome à playlist..."
+            accessibilityLabel="Nome da nova playlist"
+            clearAccessibilityLabel="Limpar nome da playlist"
             value={quickCreateName}
             onChangeText={onChangeQuickCreateName}
+            maxLength={QUICK_CREATE_MAX_LENGTH}
             autoFocus={true}
             onSubmitEditing={onSubmitQuickCreate}
             returnKeyType="done"
           />
-          <View style={styles.quickCreateActions}>
-            <TouchableOpacity
-              style={styles.quickCreateCancelBtn}
-              onPress={onToggleQuickCreate}
-              accessibilityRole="button"
-              accessibilityLabel="Cancelar"
-            >
-              <Text style={styles.quickCreateCancelText}>Cancelar</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                styles.quickCreateConfirmBtn,
-                !quickCreateName.trim() && styles.quickCreateConfirmBtnDisabled,
-              ]}
-              onPress={onSubmitQuickCreate}
-              disabled={!quickCreateName.trim()}
-              accessibilityRole="button"
-              accessibilityLabel="Criar"
-            >
-              <Text style={styles.quickCreateConfirmText}>Criar</Text>
-            </TouchableOpacity>
+          <View style={styles.quickCreateFooter}>
+            <View style={styles.quickCreateMeta}>
+              <ListMusic color="#71717A" size={14} />
+              <Text style={styles.quickCreateCounter}>
+                {`${quickCreateName.length}/${QUICK_CREATE_MAX_LENGTH}`}
+              </Text>
+            </View>
+            <View style={styles.quickCreateActions}>
+              <TouchableOpacity
+                style={styles.quickCreateCancelBtn}
+                onPress={onToggleQuickCreate}
+                accessibilityRole="button"
+                accessibilityLabel="Cancelar"
+              >
+                <Text style={styles.quickCreateCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.quickCreateConfirmBtn,
+                  !quickCreateName.trim() && styles.quickCreateConfirmBtnDisabled,
+                ]}
+                onPress={onSubmitQuickCreate}
+                disabled={!quickCreateName.trim()}
+                accessibilityRole="button"
+                accessibilityLabel="Criar"
+              >
+                <Text style={styles.quickCreateConfirmText}>Criar</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       )}
@@ -295,6 +317,10 @@ const styles = StyleSheet.create({
     borderRadius: theme.radii.circular,
     gap: 6,
   },
+  createPlaylistButtonOpen: {
+    backgroundColor: 'rgba(217, 27, 44, 0.14)',
+    borderColor: 'rgba(255, 78, 69, 0.35)',
+  },
   createPlaylistButtonText: {
     color: '#FFFFFF',
     fontSize: 13,
@@ -302,51 +328,55 @@ const styles = StyleSheet.create({
   },
   quickCreateBox: {
     marginHorizontal: 16,
-    marginTop: 4,
+    marginTop: 6,
     marginBottom: 12,
-    padding: 12,
-    backgroundColor: theme.colors.elevated,
-    borderRadius: theme.radii.chip,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    paddingTop: 4,
+    paddingBottom: 4,
+    backgroundColor: 'transparent',
   },
-  quickCreateInput: {
-    backgroundColor: theme.colors.card,
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    color: theme.colors.textPrimary,
-    fontSize: 14,
-    borderWidth: 1,
-    borderColor: theme.colors.borderSubtle,
+  quickCreateFooter: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  quickCreateMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  quickCreateCounter: {
+    fontSize: 12,
+    color: '#71717A',
   },
   quickCreateActions: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 8,
-    marginTop: 10,
+    alignItems: 'center',
+    gap: 10,
   },
   quickCreateCancelBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
   },
   quickCreateCancelText: {
-    color: theme.colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '500',
+    color: '#9A9AA0',
+    fontSize: 13.5,
+    fontWeight: '600',
   },
   quickCreateConfirmBtn: {
-    backgroundColor: theme.colors.chipActive,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 6,
+    height: 34,
+    paddingHorizontal: 18,
+    borderRadius: 9999,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   quickCreateConfirmBtnDisabled: {
-    opacity: 0.5,
+    opacity: 0.35,
   },
   quickCreateConfirmText: {
-    color: theme.colors.textInverse,
-    fontSize: 13,
+    color: '#09090B',
+    fontSize: 13.5,
     fontWeight: '700',
   },
   listContent: {

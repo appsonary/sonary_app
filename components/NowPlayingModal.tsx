@@ -134,7 +134,7 @@ export interface NowPlayingModalProps {
   onStartArtistRadio?: (artistName: string, channelId?: string) => void;
   isLoadingRadio?: boolean;
   toastMessage?: string | null;
-  toastVariant?: 'success' | 'error';
+  toastVariant?: 'success' | 'error' | 'info';
   onDismissToast?: () => void;
   morphTranslateY?: Animated.Value;
   collapseDistance?: number;

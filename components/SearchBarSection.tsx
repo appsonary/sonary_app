@@ -11,8 +11,8 @@ import {
   View,
   ViewStyle,
 } from 'react-native';
-import { ArrowLeft, ArrowUpLeft, History, Search, X } from 'lucide-react-native';
-import { theme } from '../theme';
+import { ArrowUpLeft, History, Search, X } from 'lucide-react-native';
+import { MaterialTextInput } from './MaterialTextInput';
 import { BACK_PRIORITY, useBackHandler } from '../services/backNavigation';
 
 export interface SearchPillInputProps {
@@ -27,15 +27,12 @@ export interface SearchPillInputProps {
   onSearchPress?: () => void;
   isSearching?: boolean;
   searchAccessibilityLabel?: string;
-  showBackArrow?: boolean;
-  onBackPress?: () => void;
-  backAccessibilityLabel?: string;
   returnKeyType?: 'search' | 'done' | 'go' | 'next' | 'send';
   style?: StyleProp<ViewStyle>;
   inputRef?: React.RefObject<TextInput | null>;
 }
 
-/** Barra de pesquisa em pílula padronizada do tema YouTube Music. */
+/** Barra de pesquisa minimalista estilo Material com sublinhado crimson animado. */
 export const SearchPillInput: React.FC<SearchPillInputProps> = ({
   value,
   onChangeText,
@@ -48,102 +45,51 @@ export const SearchPillInput: React.FC<SearchPillInputProps> = ({
   onSearchPress,
   isSearching = false,
   searchAccessibilityLabel = 'Buscar músicas',
-  showBackArrow = false,
-  onBackPress,
-  backAccessibilityLabel = 'Voltar',
   returnKeyType = 'search',
   style,
   inputRef,
 }) => {
-  const [internalFocused, setInternalFocused] = useState(false);
+  const leftAccessory = onSearchPress ? (
+    <TouchableOpacity
+      style={[
+        styles.leadingIconButton,
+        isSearching && styles.searchButtonDisabled,
+      ]}
+      onPress={onSearchPress}
+      disabled={isSearching}
+      hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+      accessibilityRole="button"
+      accessibilityLabel={searchAccessibilityLabel}
+      activeOpacity={0.7}
+    >
+      {isSearching ? (
+        <ActivityIndicator color="#9E9EA4" size="small" />
+      ) : (
+        <Search color="#9E9EA4" size={18} />
+      )}
+    </TouchableOpacity>
+  ) : (
+    <Search color="#9E9EA4" size={18} />
+  );
 
   return (
-    <View
-      style={[
-        styles.searchBar,
-        onSearchPress && styles.searchBarWithInlineAction,
-        internalFocused && styles.searchBarFocused,
-        style,
-      ]}
-    >
-      {showBackArrow ? (
-        <TouchableOpacity
-          style={styles.leadingIconButton}
-          onPress={onBackPress}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          accessibilityRole="button"
-          accessibilityLabel={backAccessibilityLabel}
-        >
-          <ArrowLeft color="#FFFFFF" size={20} />
-        </TouchableOpacity>
-      ) : !onSearchPress ? (
-        <Search color="#9E9EA4" size={20} />
-      ) : null}
-
-      <TextInput
-        ref={inputRef as React.Ref<TextInput>}
-        style={styles.searchInput}
-        placeholder={placeholder}
-        placeholderTextColor="#9A9A9A"
-        value={value}
-        onChangeText={onChangeText}
-        onFocus={() => {
-          setInternalFocused(true);
-          onFocus?.();
-        }}
-        onBlur={() => {
-          setInternalFocused(false);
-          onBlur?.();
-        }}
-        onSubmitEditing={onSubmitEditing}
-        returnKeyType={returnKeyType}
-        selectionColor={theme.colors.brandPrimary}
-        autoCapitalize="none"
-        autoCorrect={false}
-        accessibilityLabel={accessibilityLabel}
-      />
-
-      {value.length > 0 && (
-        <TouchableOpacity
-          style={styles.clearBtn}
-          onPress={() => onChangeText('')}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          accessibilityRole="button"
-          accessibilityLabel={clearAccessibilityLabel}
-        >
-          <View style={styles.clearIconCircle}>
-            <X color="#FFFFFF" size={13} />
-          </View>
-        </TouchableOpacity>
-      )}
-
-      {onSearchPress && (
-        <TouchableOpacity
-          style={[
-            styles.inlineSearchButton,
-            isSearching && styles.searchButtonDisabled,
-          ]}
-          onPress={onSearchPress}
-          disabled={isSearching}
-          hitSlop={{ top: 8, bottom: 8, left: 6, right: 8 }}
-          accessibilityRole="button"
-          accessibilityLabel={searchAccessibilityLabel}
-          activeOpacity={0.75}
-        >
-          {isSearching ? (
-            <ActivityIndicator
-              color={theme.colors.textInverse}
-              size="small"
-            />
-          ) : (
-            <Search
-              color="#030303"
-              size={18}
-            />
-          )}
-        </TouchableOpacity>
-      )}
-    </View>
+    <MaterialTextInput
+      ref={inputRef as React.Ref<TextInput>}
+      containerStyle={[styles.searchBar, style]}
+      inputStyle={styles.searchInput}
+      leftAccessory={leftAccessory}
+      placeholder={placeholder}
+      value={value}
+      onChangeText={onChangeText}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      onSubmitEditing={onSubmitEditing}
+      returnKeyType={returnKeyType}
+      autoCapitalize="none"
+      autoCorrect={false}
+      accessibilityLabel={accessibilityLabel}
+      clearAccessibilityLabel={clearAccessibilityLabel}
+    />
   );
 };
 
@@ -177,7 +123,6 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
   const searchInputRef = useRef<TextInput | null>(null);
   const onFocusChangeRef = useRef(onFocusChange);
   onFocusChangeRef.current = onFocusChange;
-  const showBackArrow = isFocused || hasResults;
 
   const updateFocus = (nextFocused: boolean) => {
     setIsFocused(nextFocused);
@@ -236,18 +181,6 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
     onSearch();
   };
 
-  const handleLeadingPress = () => {
-    if (isFocused) {
-      updateFocus(false);
-      searchInputRef.current?.blur?.();
-      Keyboard?.dismiss?.();
-      return;
-    }
-    if (hasResults) {
-      onClearSearch?.();
-    }
-  };
-
   const handleSelectRecent = (item: string) => {
     onChangeQuery(item);
     updateFocus(false);
@@ -272,11 +205,6 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
           onSearchPress={handleSubmit}
           isSearching={isSearching}
           searchAccessibilityLabel="Buscar músicas"
-          showBackArrow={showBackArrow}
-          onBackPress={handleLeadingPress}
-          backAccessibilityLabel={
-            isFocused ? 'Fechar sugestões de busca' : 'Voltar para descoberta'
-          }
         />
       </View>
 
@@ -379,54 +307,15 @@ const styles = StyleSheet.create({
   },
   searchBar: {
     width: '100%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#212121',
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
-    paddingHorizontal: 14,
-    height: 48,
-    gap: 10,
-  },
-  searchBarWithInlineAction: {
-    paddingLeft: 16,
-    paddingRight: 8,
-  },
-  searchBarFocused: {
-    borderColor: 'rgba(255, 255, 255, 0.14)',
-    backgroundColor: '#282828',
+    backgroundColor: 'transparent',
   },
   leadingIconButton: {
     alignItems: 'center',
     justifyContent: 'center',
   },
   searchInput: {
-    flex: 1,
-    color: theme.colors.textPrimary,
     fontSize: 16,
-    paddingVertical: 0,
-  },
-  clearBtn: {
-    padding: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  clearIconCircle: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: 'rgba(255, 255, 255, 0.14)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  inlineSearchButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#FFFFFF',
-    justifyContent: 'center',
-    alignItems: 'center',
+    paddingVertical: 8,
   },
   searchButtonDisabled: {
     opacity: 0.7,

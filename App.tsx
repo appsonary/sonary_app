@@ -45,8 +45,12 @@ import { YouTubeMusicSidebar } from './components/YouTubeMusicSidebar';
 import { QuickPicksSection } from './components/QuickPicksSection';
 import { AtmosphericGradient } from './components/AtmosphericGradient';
 import { TrackRowSkeleton } from './components/TrackRowSkeleton';
-import { ToastBanner } from './components/ToastBanner';
+import { ToastBanner, ToastVariant } from './components/ToastBanner';
 import { PlaylistCover } from './components/PlaylistCover';
+import {
+  DRAWER_SHELL_TRANSLATE_RATIO,
+  SideDrawerMenu,
+} from './components/SideDrawerMenu';
 import { getEaseOutCubic, theme } from './theme';
 import {
   AlertCircle,
@@ -207,6 +211,17 @@ export default function App() {
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [downloadQueue, setDownloadQueue] = useState<DownloadQueueItem[]>([]);
   const [isDownloadQueueVisible, setIsDownloadQueueVisible] = useState(false);
+  const [isDrawerVisible, setIsDrawerVisible] = useState(false);
+  const drawerProgress = useRef(new Animated.Value(0)).current;
+  const shellDrawerTranslateX = React.useMemo(
+    () =>
+      drawerProgress.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0, -width * DRAWER_SHELL_TRANSLATE_RATIO],
+        extrapolate: 'clamp',
+      }),
+    [drawerProgress, width]
+  );
   const [availableUpdate, setAvailableUpdate] = useState<RemoteReleaseInfo | null>(null);
   const [installedAppVersion, setInstalledAppVersion] = useState<InstalledAppVersion | null>(null);
   const [isUpdateModalVisible, setIsUpdateModalVisible] = useState(false);
@@ -339,9 +354,9 @@ export default function App() {
   );
   const originalQueueRef = React.useRef<Track[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [toastVariant, setToastVariant] = useState<'success' | 'error'>('success');
+  const [toastVariant, setToastVariant] = useState<ToastVariant>('success');
   const showToast = useCallback(
-    (msg: string, variant: 'success' | 'error' = 'success') => {
+    (msg: string, variant: ToastVariant = 'success') => {
       setToastVariant(variant);
       setToastMessage(msg);
     },
@@ -1111,6 +1126,7 @@ export default function App() {
     isOpeningPlaylistRef.current = false;
     setIsDevMenuVisible(false);
     setIsDownloadQueueVisible(false);
+    setIsDrawerVisible(false);
     closeNowPlayingImmediate();
     isPlaylistDetailVisibleRef.current = false;
     setIsPlaylistDetailVisible(false);
@@ -1392,7 +1408,8 @@ export default function App() {
     isAddToPlaylistVisible ||
     isDownloadQueueVisible ||
     isUpdateModalVisible ||
-    (isDevMode && isDevMenuVisible)
+    (isDevMode && isDevMenuVisible) ||
+    isDrawerVisible
   );
 
   useBackHandler(
@@ -2435,6 +2452,17 @@ export default function App() {
           translucent={true}
         />
 
+        <Animated.View
+          testID="app-shell-perspective-layer"
+          pointerEvents={isDrawerVisible ? 'none' : 'auto'}
+          style={[
+            styles.appShell,
+            {
+              overflow: 'hidden',
+              transform: [{ translateX: shellDrawerTranslateX }],
+            },
+          ]}
+        >
         <View style={styles.shellContainer}>
           {/* Barra Lateral Expansível YouTube Music para Telas Grandes / Desktop */}
           {isDesktop && (
@@ -2500,13 +2528,11 @@ export default function App() {
                 style={[styles.tabContent, { opacity: shellOpacity }]}
                 testID="shell-transition-container"
               >
-                {/* Header com Identidade Visual YouTube Music */}
+                {/* Header com Identidade Visual Sonary */}
                 <BrandHeader
-                  onOpenDevMenu={isDevMode ? () => setIsDevMenuVisible(true) : undefined}
-                  onOpenDownloadQueue={() => setIsDownloadQueueVisible(true)}
+                  onOpenMenu={() => setIsDrawerVisible(true)}
                   downloadQueueCount={downloadQueueBadgeCount}
                   hasDownloadErrors={hasDownloadErrors}
-                  onOpenUpdates={() => void handleCheckUpdates(true)}
                   hasAvailableUpdate={Boolean(availableUpdate)}
                 />
 
@@ -2935,7 +2961,7 @@ export default function App() {
           )}
         </View>
 
-        {/* Modal de Now Playing (Tela Cheia Expandida) */}
+        {/* Modal de Now Playing (Tela Cheia Expandida / Mini Player Persistente dentro do shell para acompanhar o recuo 3D) */}
         {(isPersistentPlayerEnv || isNowPlayingVisible || isMiniDragging) && activeTrack && (
           <NowPlayingModal
             visible={isNowPlayingVisible || isMiniDragging}
@@ -3078,6 +3104,25 @@ export default function App() {
             }}
           />
         )}
+        </Animated.View>
+
+        {/* Menu Lateral pela Direita */}
+        <SideDrawerMenu
+          visible={isDrawerVisible}
+          progress={drawerProgress}
+          onClose={() => setIsDrawerVisible(false)}
+          installedVersion={installedAppVersion}
+          availableUpdate={availableUpdate}
+          downloadQueueCount={downloadQueueBadgeCount}
+          isDevMode={isDevMode}
+          onOpenDownloadQueue={() => setIsDownloadQueueVisible(true)}
+          onOpenRecentHistory={() => showToast('Em breve no Sonary', 'info')}
+          onOpenStats={() => showToast('Em breve no Sonary', 'info')}
+          onOpenUpdates={() => void handleCheckUpdates(true)}
+          onOpenSettings={() => showToast('Em breve no Sonary', 'info')}
+          onOpenDevMenu={isDevMode ? () => setIsDevMenuVisible(true) : undefined}
+          onOpenSupport={() => handleTabChange('support')}
+        />
 
         {/* Modal de Fila de Downloads */}
         <DownloadQueueModal
@@ -3163,6 +3208,11 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
+    backgroundColor: '#030303',
+  },
+  appShell: {
+    flex: 1,
+    zIndex: 1,
     backgroundColor: '#030303',
   },
   shellContainer: {
