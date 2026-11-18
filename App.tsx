@@ -211,6 +211,7 @@ export default function App() {
   const [installedAppVersion, setInstalledAppVersion] = useState<InstalledAppVersion | null>(null);
   const [isUpdateModalVisible, setIsUpdateModalVisible] = useState(false);
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
+  const [updateCheckError, setUpdateCheckError] = useState<string | null>(null);
   const [downloadedIds, setDownloadedIds] = useState<Set<string>>(new Set());
   const [favoriteTrackIds, setFavoriteTrackIds] = useState<Set<string>>(new Set());
   const [isCurrentFavorite, setIsCurrentFavorite] = useState(false);
@@ -1345,11 +1346,19 @@ export default function App() {
   }, [isNowPlayingVisible, activeTrack, closeNowPlayingImmediate]);
 
   const handleCheckUpdates = useCallback(
-    async (openIfFoundOnlyWhenAvailable: boolean = false) => {
-      if (isCheckingUpdates) return;
-      if (availableUpdate && openIfFoundOnlyWhenAvailable) {
+    async (openModal: boolean = false) => {
+      if (isCheckingUpdates) {
+        if (openModal) setIsUpdateModalVisible(true);
+        return;
+      }
+      if (availableUpdate && openModal) {
+        setUpdateCheckError(null);
         setIsUpdateModalVisible(true);
         return;
+      }
+      if (openModal) {
+        setUpdateCheckError(null);
+        setIsUpdateModalVisible(true);
       }
       setIsCheckingUpdates(true);
       try {
@@ -1357,12 +1366,19 @@ export default function App() {
         setInstalledAppVersion(res.installed);
         if (res.status === 'update_available') {
           setAvailableUpdate(res.release);
+          setUpdateCheckError(null);
           setIsUpdateModalVisible(true);
         } else if (res.status === 'up_to_date') {
           setAvailableUpdate(null);
-          showToast(`Você já está na versão mais recente (v${res.installed.versionName})`, 'success');
+          setUpdateCheckError(null);
+          if (!openModal) {
+            showToast(`Você já está na versão mais recente (v${res.installed.versionName})`, 'success');
+          }
         } else if (res.status === 'error') {
-          showToast(res.error, 'error');
+          setUpdateCheckError(res.error);
+          if (!openModal) {
+            showToast(res.error, 'error');
+          }
         }
       } finally {
         setIsCheckingUpdates(false);
@@ -3087,7 +3103,13 @@ export default function App() {
           visible={isUpdateModalVisible}
           release={availableUpdate}
           installedVersion={installedAppVersion}
-          onClose={() => setIsUpdateModalVisible(false)}
+          isChecking={isCheckingUpdates}
+          checkError={updateCheckError}
+          onCheckNow={() => void handleCheckUpdates(true)}
+          onClose={() => {
+            setIsUpdateModalVisible(false);
+            setUpdateCheckError(null);
+          }}
           onSkipVersion={(versionName) => {
             void skipAppUpdateVersion(versionName);
             setAvailableUpdate(null);

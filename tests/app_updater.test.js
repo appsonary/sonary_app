@@ -280,9 +280,15 @@ test('Updater UI: UpdateModal exibe notas, fluxo de atualização e botão de pu
   });
 
   const modalText = getAllText(tree.root);
-  assert.ok(modalText.includes('Nova versão disponível'));
+  assert.ok(modalText.includes('Atualização disponível'));
+  assert.ok(modalText.includes('v1.0.1 →'));
   assert.ok(modalText.includes('v1.2.0'));
+  assert.ok(modalText.includes('NOVIDADES DA VERSÃO'));
+  assert.ok(modalText.includes('Ver no GitHub ↗'));
   assert.ok(modalText.includes('Melhorias de estabilidade.'));
+  assert.ok(modalText.includes('Atualizar agora (40.0 MB)'));
+  assert.ok(modalText.includes('Lembrar mais tarde'));
+  assert.ok(modalText.includes('Pular esta versão'));
 
   const skipBtn = tree.root.find(
     (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Ignorar esta versão'
@@ -302,6 +308,206 @@ test('Updater UI: UpdateModal exibe notas, fluxo de atualização e botão de pu
     await updateBtn.props.onPress();
   });
   assert.strictEqual(installCalled, true);
+});
+
+test('Updater UI: UpdateModal parseia lista de novidades e omite opcionais quando ausentes', async () => {
+  let tree;
+  await actAsync(async () => {
+    tree = renderer.create(
+      React.createElement(UpdateModal, {
+        visible: true,
+        installedVersion: null,
+        release: {
+          versionName: '1.3.0',
+          versionCode: 6,
+          apkName: 'sonary-pro-v1.3.0.apk',
+          apkUrl: 'https://github.com/appsonary/sonary_app/releases/download/v1.3.0/sonary-pro-v1.3.0.apk',
+          sha256: null,
+          sizeBytes: null,
+          releaseNotes: '- Áudio: Correções de estabilidade\n* Desempenho: Mais rápido\n• Interface: Ajustes',
+          releaseUrl: '',
+        },
+        onClose: () => {},
+      })
+    );
+  });
+
+  const modalText = getAllText(tree.root);
+  assert.ok(modalText.includes('v1.3.0'));
+  assert.ok(!modalText.includes('→'));
+  assert.ok(!modalText.includes('Ver no GitHub'));
+  assert.ok(!modalText.includes('Pular esta versão'));
+  assert.ok(modalText.includes('Áudio: Correções de estabilidade'));
+  assert.ok(modalText.includes('Desempenho: Mais rápido'));
+  assert.ok(modalText.includes('Interface: Ajustes'));
+  assert.ok(modalText.includes('Atualizar agora'));
+  assert.ok(
+    tree.root.find((n) => n.type === 'LucideIcon' && n.props.name === 'AudioLines')
+  );
+  assert.ok(
+    tree.root.find((n) => n.type === 'LucideIcon' && n.props.name === 'Zap')
+  );
+});
+
+test('Updater UI: UpdateModal exibe estado atualizado e verificando quando release é null', async () => {
+  let checkNowCalls = 0;
+  let tree;
+
+  await actAsync(async () => {
+    tree = renderer.create(
+      React.createElement(UpdateModal, {
+        visible: true,
+        installedVersion: { versionName: '1.0.4', versionCode: 6 },
+        release: null,
+        isChecking: true,
+        onClose: () => {},
+      })
+    );
+  });
+  assert.ok(getAllText(tree.root).includes('Verificando atualizações...'));
+
+  await actAsync(async () => {
+    tree.update(
+      React.createElement(UpdateModal, {
+        visible: true,
+        installedVersion: { versionName: '1.0.4', versionCode: 6 },
+        release: null,
+        isChecking: false,
+        onCheckNow: () => {
+          checkNowCalls += 1;
+        },
+        onClose: () => {},
+      })
+    );
+  });
+
+  const upToDateText = getAllText(tree.root);
+  assert.ok(upToDateText.includes('App atualizado'));
+  assert.ok(upToDateText.includes('v1.0.4'));
+  assert.ok(upToDateText.includes('Você já está na versão mais recente'));
+
+  const recheckBtn = tree.root.find(
+    (n) =>
+      n.type === 'TouchableOpacity' &&
+      n.props.accessibilityLabel === 'Verificar atualizações novamente'
+  );
+  assert.ok(recheckBtn);
+  await actAsync(async () => {
+    recheckBtn.props.onPress();
+  });
+  assert.strictEqual(checkNowCalls, 1);
+});
+
+test('Updater App: botão do cabeçalho abre UpdateModal mesmo sem atualização disponível', async () => {
+  const App = require('../App').default;
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      versionName: '1.0.4',
+      versionCode: 6,
+      apkName: 'sonary-pro-v1.0.4.apk',
+      apkUrl: 'https://github.com/appsonary/sonary_app/releases/download/v1.0.4/sonary-pro-v1.0.4.apk',
+    }),
+  });
+  NativeModules.SonaryAppUpdater = {
+    getInstalledVersion: async () => ({ versionName: '1.0.4', versionCode: 6 }),
+  };
+
+  let appTree;
+  try {
+    await actAsync(async () => {
+      appTree = renderer.create(React.createElement(App));
+    });
+    const headerUpdatesBtn = appTree.root.find(
+      (n) =>
+        n.type === 'TouchableOpacity' &&
+        n.props.accessibilityLabel === 'Atualizações do aplicativo'
+    );
+    await actAsync(async () => {
+      headerUpdatesBtn.props.onPress();
+    });
+    const text = getAllText(appTree.root);
+    assert.ok(text.includes('App atualizado'));
+    assert.ok(text.includes('v1.0.4'));
+  } finally {
+    if (appTree) {
+      await actAsync(async () => {
+        appTree.unmount();
+      });
+    }
+    global.fetch = originalFetch;
+  }
+});
+
+test('Updater UI: botão de simular atualização aparece apenas em desenvolvimento e simula tela de update', async () => {
+  const prevDev = global.__DEV__;
+  const envKey = 'EXPO_PUBLIC_DEV_MENU';
+  const prevEnv = process.env[envKey];
+
+  try {
+    // 1. Produção: botão de simular NÃO deve existir
+    global.__DEV__ = false;
+    delete process.env[envKey];
+
+    let prodTree;
+    await actAsync(async () => {
+      prodTree = renderer.create(
+        React.createElement(UpdateModal, {
+          visible: true,
+          installedVersion: { versionName: '1.0.4', versionCode: 6 },
+          release: null,
+          isChecking: false,
+          onClose: () => {},
+        })
+      );
+    });
+    const prodSimButtons = prodTree.root.findAll(
+      (n) =>
+        n.type === 'TouchableOpacity' &&
+        n.props.accessibilityLabel === 'Simular atualização disponível'
+    );
+    assert.strictEqual(prodSimButtons.length, 0);
+
+    // 2. Desenvolvimento: botão aparece e simula atualização disponível
+    global.__DEV__ = true;
+    let devTree;
+    await actAsync(async () => {
+      devTree = renderer.create(
+        React.createElement(UpdateModal, {
+          visible: true,
+          installedVersion: { versionName: '1.0.4', versionCode: 6 },
+          release: null,
+          isChecking: false,
+          onClose: () => {},
+          onSkipVersion: () => {},
+        })
+      );
+    });
+    const simBtn = devTree.root.find(
+      (n) =>
+        n.type === 'TouchableOpacity' &&
+        n.props.accessibilityLabel === 'Simular atualização disponível'
+    );
+    assert.ok(simBtn);
+
+    await actAsync(async () => {
+      simBtn.props.onPress();
+    });
+
+    const simText = getAllText(devTree.root);
+    assert.ok(simText.includes('Atualização disponível'));
+    assert.ok(simText.includes('v1.0.4 →'));
+    assert.ok(simText.includes('v1.0.5'));
+    assert.ok(simText.includes('124.3 MB'));
+    assert.ok(simText.includes('Atualizar agora (124.3 MB)'));
+  } finally {
+    if (prevDev === undefined) delete global.__DEV__;
+    else global.__DEV__ = prevDev;
+    if (prevEnv === undefined) delete process.env[envKey];
+    else process.env[envKey] = prevEnv;
+  }
 });
 
 test('Updater CNG Plugins: patchBuildGradleSigning e withAppUpdater são idempotentes', () => {

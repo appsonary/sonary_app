@@ -1,6 +1,6 @@
 import React from 'react';
 import { Image, Platform, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { ArrowDownToLine, Bell, Code2 } from 'lucide-react-native';
+import { ArrowDownToLine, Code2, RefreshCw } from 'lucide-react-native';
 import { isDevMenuEnabled } from './DevMenuModal';
 
 const HEADER_LOGO = require('../assets/brand-logo-header.png');
@@ -49,7 +49,7 @@ export const BrandHeader: React.FC<BrandHeaderProps> = ({
           </View>
         </View>
 
-        {/* Dev (em debug), Fila de Downloads (clean) e Notificações */}
+        {/* Dev (em debug), Fila de Downloads (clean) e Atualizações */}
         <View style={styles.headerRightActions}>
           {showDevButton && (
             <TouchableOpacity
@@ -88,15 +88,15 @@ export const BrandHeader: React.FC<BrandHeaderProps> = ({
             ) : null}
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.notificationsButton}
+            style={styles.updatesButton}
             onPress={onOpenUpdates}
             disabled={typeof onOpenUpdates !== 'function'}
             activeOpacity={0.75}
             hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
             accessibilityRole="button"
-            accessibilityLabel="Notificações"
+            accessibilityLabel="Atualizações do aplicativo"
           >
-            <Bell color="#FFFFFF" size={22} />
+            <RefreshCw color="#FFFFFF" size={20} />
             {hasAvailableUpdate ? <View style={styles.queueErrorDot} /> : null}
           </TouchableOpacity>
         </View>
@@ -179,7 +179,7 @@ const styles = StyleSheet.create({
     borderRadius: 3.5,
     backgroundColor: '#FF4E45',
   },
-  notificationsButton: {
+  updatesButton: {
     width: 32,
     height: 32,
     alignItems: 'center',

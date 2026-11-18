@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Animated,
   AppState,
+  Linking,
   Modal,
   ScrollView,
   StyleSheet,
@@ -11,7 +12,17 @@ import {
   View,
 } from 'react-native';
 import * as FileSystem from 'expo-file-system';
-import { Download, RefreshCw, ShieldCheck, Sparkles, X } from 'lucide-react-native';
+import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
+import {
+  AudioLines,
+  Check,
+  Code2,
+  Download,
+  RefreshCw,
+  ShieldCheck,
+  Sparkles,
+  Zap,
+} from 'lucide-react-native';
 import {
   canRequestPackageInstalls,
   downloadUpdateApk,
@@ -21,38 +32,115 @@ import {
   RemoteReleaseInfo,
 } from '../services/updater';
 import { useBackModalLock } from '../services/backNavigation';
+import { isDevMenuEnabled } from './DevMenuModal';
 import { useBottomSheetController } from './sheetMotion';
-import { theme } from '../theme';
 
 export interface UpdateModalProps {
   visible: boolean;
   release: RemoteReleaseInfo | null;
   installedVersion: InstalledAppVersion | null;
+  isChecking?: boolean;
+  checkError?: string | null;
+  onCheckNow?: () => void;
   onClose: () => void;
   onSkipVersion?: (versionName: string) => void;
 }
 
 type UpdateStage = 'idle' | 'downloading' | 'permission_required' | 'error';
 
+const DEFAULT_RELEASE_NOTES =
+  'Melhorias de desempenho, estabilidade e correções de áudio.';
+
+interface ParsedNoteItem {
+  text: string;
+  isBullet: boolean;
+}
+
 function formatMegabytes(bytes?: number | null): string | null {
   if (!bytes || bytes <= 0) return null;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function parseReleaseNotes(raw?: string | null): ParsedNoteItem[] {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) {
+    return [{ text: DEFAULT_RELEASE_NOTES, isBullet: false }];
+  }
+
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length === 1 && !/^[-*•]\s+/.test(lines[0])) {
+    return [{ text: trimmed, isBullet: false }];
+  }
+
+  const hasExplicitBullets = lines.some((line) => /^[-*•]\s+/.test(line));
+  return lines.map((line) => {
+    const bulletMatch = line.match(/^[-*•]\s+(.+)$/);
+    if (bulletMatch) {
+      return { text: bulletMatch[1], isBullet: true };
+    }
+    return { text: line, isBullet: !hasExplicitBullets };
+  });
+}
+
+function renderBulletIcon(text: string): React.ReactNode {
+  if (/áudio|audio|player|som|reprodução|música/i.test(text)) {
+    return <AudioLines color="#D63344" size={16} />;
+  }
+  if (/desempenho|rápid|velocidade|carregamento|performance|memória|bateria/i.test(text)) {
+    return <Zap color="#D63344" size={16} />;
+  }
+  return <Sparkles color="#D63344" size={16} />;
+}
+
+function buildSimulatedRelease(installedVersion: InstalledAppVersion | null): RemoteReleaseInfo {
+  const base = (installedVersion?.versionName || '1.0.0').trim().replace(/^v/i, '');
+  const parts = base.split('.').map((n) => parseInt(n, 10));
+  const nextVersion =
+    parts.length >= 3 && parts.every((n) => Number.isFinite(n))
+      ? `${parts[0]}.${parts[1]}.${parts[2] + 1}`
+      : '9.9.9';
+
+  return {
+    versionName: nextVersion,
+    versionCode: (installedVersion?.versionCode ?? 1) + 1,
+    apkName: `sonary-pro-v${nextVersion}.apk`,
+    apkUrl: 'https://github.com/appsonary/sonary_app/releases/latest',
+    sha256: null,
+    sizeBytes: Math.round(124.3 * 1024 * 1024),
+    releaseNotes: [
+      '- Áudio: Correções de estabilidade na reprodução',
+      '- Desempenho: Carregamento mais rápido do app',
+      '- Interface: Pequenos ajustes visuais',
+    ].join('\n'),
+    releaseUrl: 'https://github.com/appsonary/sonary_app/releases',
+  };
 }
 
 export const UpdateModal: React.FC<UpdateModalProps> = ({
   visible,
   release,
   installedVersion,
+  isChecking = false,
+  checkError = null,
+  onCheckNow,
   onClose,
   onSkipVersion,
 }) => {
   useBackModalLock(visible);
+  const isDev = isDevMenuEnabled();
   const [stage, setStage] = useState<UpdateStage>('idle');
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [downloadedUri, setDownloadedUri] = useState<string | null>(null);
+  const [simulatedRelease, setSimulatedRelease] = useState<RemoteReleaseInfo | null>(null);
   const resumableRef = useRef<FileSystem.DownloadResumable | null>(null);
   const cancelledRef = useRef(false);
+  const effectiveRelease = release ?? (isDev ? simulatedRelease : null);
+  const isSimulated = Boolean(!release && isDev && simulatedRelease);
 
   const {
     translateY,
@@ -74,6 +162,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
       setProgress(0);
       setErrorMsg(null);
       setDownloadedUri(null);
+      setSimulatedRelease(null);
       resumableRef.current = null;
     }
   }, [visible, release?.versionName]);
@@ -109,10 +198,15 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     };
   }, [visible, stage, downloadedUri, tryInstallUri]);
 
-  if (!visible || !release) return null;
+  if (!visible) return null;
 
   const handleStartUpdate = async () => {
-    if (stage === 'downloading') return;
+    if (!effectiveRelease || stage === 'downloading') return;
+    if (isSimulated) {
+      setErrorMsg('Simulação de desenvolvimento: nenhum APK real será baixado.');
+      setStage('error');
+      return;
+    }
     if (downloadedUri) {
       await tryInstallUri(downloadedUri);
       return;
@@ -125,7 +219,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 
     try {
       const { localUri } = await downloadUpdateApk(
-        release,
+        effectiveRelease,
         (ratio) => setProgress(Math.round(ratio * 100)),
         {
           shouldAbort: () => cancelledRef.current,
@@ -159,7 +253,22 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     setProgress(0);
   };
 
-  const sizeLabel = formatMegabytes(release.sizeBytes);
+  const sizeLabel = formatMegabytes(effectiveRelease?.sizeBytes);
+  const parsedNotes = effectiveRelease ? parseReleaseNotes(effectiveRelease.releaseNotes) : [];
+
+  const handleOpenReleaseUrl = async () => {
+    const url = effectiveRelease?.releaseUrl;
+    if (!url) return;
+    try {
+      const canOpen =
+        typeof Linking.canOpenURL === 'function' ? await Linking.canOpenURL(url) : true;
+      if (canOpen && typeof Linking.openURL === 'function') {
+        await Linking.openURL(url);
+      }
+    } catch {
+      // Ignora falha ao abrir navegador externo
+    }
+  };
 
   return (
     <Modal
@@ -185,146 +294,360 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
             onStartShouldSetResponder={() => true}
             onTouchEnd={(e) => e?.stopPropagation?.()}
           >
+            {effectiveRelease && (
+              <View style={styles.sheetTopGlow} pointerEvents="none">
+                <Svg width="100%" height="100%">
+                  <Defs>
+                    <RadialGradient
+                      id="sheetBadgeGlow"
+                      cx="48"
+                      cy="56"
+                      rx="130"
+                      ry="100"
+                      fx="48"
+                      fy="56"
+                      gradientUnits="userSpaceOnUse"
+                    >
+                      <Stop offset="0%" stopColor="#DC2626" stopOpacity="0.34" />
+                      <Stop offset="45%" stopColor="#991B1B" stopOpacity="0.14" />
+                      <Stop offset="100%" stopColor="#131315" stopOpacity="0" />
+                    </RadialGradient>
+                  </Defs>
+                  <Rect x="0" y="0" width="100%" height="100%" fill="url(#sheetBadgeGlow)" />
+                </Svg>
+              </View>
+            )}
+
             <View style={styles.dragArea} {...panResponder.panHandlers}>
               <View style={styles.dragHandle} />
             </View>
 
-            <View style={styles.header}>
-              <View style={styles.badgeIcon}>
-                <Sparkles color="#FFFFFF" size={18} />
-              </View>
-              <View style={styles.headerText}>
-                <Text style={styles.title}>Nova versão disponível</Text>
-                <Text style={styles.subtitle}>
-                  {`v${release.versionName}${installedVersion ? ` (atual: v${installedVersion.versionName})` : ''}${sizeLabel ? ` • ${sizeLabel}` : ''}`}
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={styles.closeBtn}
-                onPress={() => {
-                  if (stage === 'downloading') handleCancelDownload();
-                  dismissSheet();
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Fechar atualização"
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <X color="#FFFFFF" size={20} />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={styles.notesScroll} contentContainerStyle={styles.notesContent}>
-              <Text style={styles.notesLabel}>NOVIDADES DA RELEASE</Text>
-              <Text style={styles.notesText}>
-                {release.releaseNotes ||
-                  'Melhorias de desempenho, estabilidade e correções de áudio.'}
-              </Text>
-            </ScrollView>
-
-            {stage === 'downloading' && (
-              <View style={styles.statusBox}>
-                <View style={styles.progressHeader}>
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                  <Text style={styles.statusText}>
-                    {`Baixando APK oficial do GitHub... ${progress}%`}
-                  </Text>
+            {effectiveRelease ? (
+              <>
+                <View style={styles.header}>
+                  <View style={styles.badgeWrapper}>
+                    <View style={styles.badgeAura} pointerEvents="none">
+                      <Svg width="100%" height="100%">
+                        <Defs>
+                          <RadialGradient id="badgeAura" cx="50%" cy="50%" r="50%">
+                            <Stop offset="0%" stopColor="#EF4444" stopOpacity="0.55" />
+                            <Stop offset="55%" stopColor="#B91C1C" stopOpacity="0.22" />
+                            <Stop offset="100%" stopColor="#B91C1C" stopOpacity="0" />
+                          </RadialGradient>
+                        </Defs>
+                        <Rect x="0" y="0" width="100%" height="100%" fill="url(#badgeAura)" />
+                      </Svg>
+                    </View>
+                    <View style={styles.badgeIcon}>
+                      <Sparkles color="#FFFFFF" size={24} />
+                    </View>
+                  </View>
+                  <View style={styles.headerText}>
+                    <Text style={styles.title}>Atualização disponível</Text>
+                    <View style={styles.subtitleRow}>
+                      {installedVersion && (
+                        <Text style={styles.subtitleText}>
+                          {`v${installedVersion.versionName} →`}
+                        </Text>
+                      )}
+                      <View style={styles.versionBadge}>
+                        <Text style={styles.versionBadgeText}>{`v${effectiveRelease.versionName}`}</Text>
+                      </View>
+                      {sizeLabel && (
+                        <Text style={styles.subtitleText}>{`• ${sizeLabel}`}</Text>
+                      )}
+                    </View>
+                  </View>
                 </View>
-                <View style={styles.progressTrack}>
-                  <View style={[styles.progressFill, { width: `${progress}%` }]} />
-                </View>
-              </View>
-            )}
 
-            {stage === 'permission_required' && (
-              <View style={styles.permissionBox}>
-                <ShieldCheck color="#FFC107" size={18} />
-                <Text style={styles.permissionText}>
-                  Autorize &quot;Instalar apps desconhecidos&quot; para o Sonary nas configurações do Android para concluir a atualização.
-                </Text>
-              </View>
-            )}
-
-            {stage === 'error' && errorMsg && (
-              <View style={styles.errorBox}>
-                <Text style={styles.errorText}>{errorMsg}</Text>
-              </View>
-            )}
-
-            <View style={styles.actions}>
-              {stage === 'downloading' ? (
-                <TouchableOpacity
-                  style={styles.secondaryButton}
-                  onPress={handleCancelDownload}
-                  activeOpacity={0.8}
-                  accessibilityRole="button"
-                  accessibilityLabel="Cancelar download da atualização"
-                >
-                  <Text style={styles.secondaryButtonText}>Cancelar download</Text>
-                </TouchableOpacity>
-              ) : stage === 'permission_required' ? (
-                <>
-                  <TouchableOpacity
-                    style={styles.primaryButton}
-                    onPress={() => void openInstallPermissionSettings()}
-                    activeOpacity={0.85}
-                    accessibilityRole="button"
-                    accessibilityLabel="Permitir instalação nas configurações"
-                  >
-                    <ShieldCheck color="#030303" size={18} />
-                    <Text style={styles.primaryButtonText}>Abrir configurações</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.secondaryButton}
-                    onPress={() => downloadedUri && void tryInstallUri(downloadedUri)}
-                    activeOpacity={0.8}
-                    accessibilityRole="button"
-                    accessibilityLabel="Tentar instalar novamente"
-                  >
-                    <RefreshCw color="#FFFFFF" size={16} />
-                    <Text style={styles.secondaryButtonText}>Já autorizei, instalar</Text>
-                  </TouchableOpacity>
-                </>
-              ) : (
-                <>
-                  <TouchableOpacity
-                    style={styles.primaryButton}
-                    onPress={() => void handleStartUpdate()}
-                    activeOpacity={0.85}
-                    accessibilityRole="button"
-                    accessibilityLabel="Atualizar agora"
-                  >
-                    <Download color="#030303" size={18} />
-                    <Text style={styles.primaryButtonText}>
-                      {stage === 'error' ? 'Tentar novamente' : 'Atualizar agora'}
-                    </Text>
-                  </TouchableOpacity>
-
-                  <View style={styles.secondaryRow}>
-                    {onSkipVersion && (
+                <View style={styles.notesCard}>
+                  <View style={styles.notesCardHeader}>
+                    <Text style={styles.notesLabel}>NOVIDADES DA VERSÃO</Text>
+                    {!!effectiveRelease.releaseUrl && (
                       <TouchableOpacity
-                        style={styles.ghostButton}
-                        onPress={() => {
-                          onSkipVersion(release.versionName);
-                          dismissSheet();
-                        }}
-                        accessibilityRole="button"
-                        accessibilityLabel="Ignorar esta versão"
+                        onPress={() => void handleOpenReleaseUrl()}
+                        activeOpacity={0.75}
+                        accessibilityRole="link"
+                        accessibilityLabel="Ver novidades no GitHub"
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                       >
-                        <Text style={styles.ghostButtonText}>Pular versão</Text>
+                        <Text style={styles.githubLink}>Ver no GitHub ↗</Text>
                       </TouchableOpacity>
                     )}
+                  </View>
+
+                  <ScrollView
+                    style={styles.notesScroll}
+                    contentContainerStyle={styles.notesContent}
+                    nestedScrollEnabled={true}
+                    showsVerticalScrollIndicator={false}
+                  >
+                    {parsedNotes.map((item, idx) =>
+                      item.isBullet ? (
+                        <View key={`${idx}-${item.text}`} style={styles.noteBulletRow}>
+                          <View style={styles.noteBulletIcon}>
+                            {renderBulletIcon(item.text)}
+                          </View>
+                          <Text style={styles.noteItemText}>{item.text}</Text>
+                        </View>
+                      ) : (
+                        <Text key={`${idx}-${item.text}`} style={styles.notesText}>
+                          {item.text}
+                        </Text>
+                      )
+                    )}
+                  </ScrollView>
+                </View>
+
+                {stage === 'downloading' && (
+                  <View style={styles.statusBox}>
+                    <View style={styles.progressHeader}>
+                      <ActivityIndicator size="small" color="#E11D48" />
+                      <Text style={styles.statusText}>
+                        {`Baixando APK oficial do GitHub... ${progress}%`}
+                      </Text>
+                    </View>
+                    <View style={styles.progressTrack}>
+                      <View style={[styles.progressFill, { width: `${progress}%` }]} />
+                    </View>
+                  </View>
+                )}
+
+                {stage === 'permission_required' && (
+                  <View style={styles.permissionBox}>
+                    <ShieldCheck color="#FFC107" size={18} />
+                    <Text style={styles.permissionText}>
+                      Autorize &quot;Instalar apps desconhecidos&quot; para o Sonary nas configurações do Android para concluir a atualização.
+                    </Text>
+                  </View>
+                )}
+
+                {stage === 'error' && errorMsg && (
+                  <View style={styles.errorBox}>
+                    <Text style={styles.errorText}>{errorMsg}</Text>
+                  </View>
+                )}
+
+                <View style={styles.actions}>
+                  {stage === 'downloading' ? (
                     <TouchableOpacity
-                      style={styles.ghostButton}
-                      onPress={() => dismissSheet()}
+                      style={styles.secondaryButton}
+                      onPress={handleCancelDownload}
+                      activeOpacity={0.8}
                       accessibilityRole="button"
-                      accessibilityLabel="Atualizar depois"
+                      accessibilityLabel="Cancelar download da atualização"
                     >
-                      <Text style={styles.ghostButtonText}>Mais tarde</Text>
+                      <Text style={styles.secondaryButtonText}>Cancelar download</Text>
+                    </TouchableOpacity>
+                  ) : stage === 'permission_required' ? (
+                    <>
+                      <TouchableOpacity
+                        style={styles.primaryButton}
+                        onPress={() => void openInstallPermissionSettings()}
+                        activeOpacity={0.85}
+                        accessibilityRole="button"
+                        accessibilityLabel="Permitir instalação nas configurações"
+                      >
+                        <ShieldCheck color="#030303" size={18} />
+                        <Text style={styles.primaryButtonText}>Abrir configurações</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.secondaryButton}
+                        onPress={() => downloadedUri && void tryInstallUri(downloadedUri)}
+                        activeOpacity={0.8}
+                        accessibilityRole="button"
+                        accessibilityLabel="Tentar instalar novamente"
+                      >
+                        <RefreshCw color="#FFFFFF" size={16} />
+                        <Text style={styles.secondaryButtonText}>Já autorizei, instalar</Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <>
+                      <TouchableOpacity
+                        style={styles.primaryButton}
+                        onPress={() => void handleStartUpdate()}
+                        activeOpacity={0.85}
+                        accessibilityRole="button"
+                        accessibilityLabel="Atualizar agora"
+                      >
+                        <Download color="#030303" size={18} />
+                        <Text style={styles.primaryButtonText}>
+                          {stage === 'error'
+                            ? 'Tentar novamente'
+                            : sizeLabel
+                              ? `Atualizar agora (${sizeLabel})`
+                              : 'Atualizar agora'}
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.secondaryButton}
+                        onPress={() => dismissSheet()}
+                        activeOpacity={0.8}
+                        accessibilityRole="button"
+                        accessibilityLabel="Atualizar depois"
+                      >
+                        <Text style={styles.secondaryButtonText}>Lembrar mais tarde</Text>
+                      </TouchableOpacity>
+
+                      {onSkipVersion && (
+                        <View style={styles.skipRow}>
+                          <TouchableOpacity
+                            style={styles.skipButton}
+                            onPress={() => {
+                              if (isSimulated) {
+                                setSimulatedRelease(null);
+                              } else {
+                                onSkipVersion(effectiveRelease.versionName);
+                              }
+                              dismissSheet();
+                            }}
+                            activeOpacity={0.7}
+                            accessibilityRole="button"
+                            accessibilityLabel="Ignorar esta versão"
+                          >
+                            <Text style={styles.skipButtonText}>Pular esta versão</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                    </>
+                  )}
+                </View>
+              </>
+            ) : (
+              <>
+                {isChecking || checkError ? (
+                  <>
+                    <View style={styles.header}>
+                      <View style={styles.badgeIcon}>
+                        <RefreshCw color="#FFFFFF" size={22} />
+                      </View>
+                      <View style={styles.headerText}>
+                        <Text style={styles.title}>
+                          {isChecking ? 'Verificando atualizações...' : 'Falha ao verificar'}
+                        </Text>
+                        <Text style={[styles.subtitleText, { marginTop: 4 }]}>
+                          {installedVersion
+                            ? `Versão atual: v${installedVersion.versionName}`
+                            : isChecking
+                              ? 'Consultando GitHub Releases'
+                              : 'Não foi possível consultar o GitHub'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {isChecking ? (
+                      <View style={styles.statusBox}>
+                        <View style={styles.progressHeader}>
+                          <ActivityIndicator size="small" color="#E11D48" />
+                          <Text style={styles.statusText}>
+                            Buscando a versão mais recente no GitHub...
+                          </Text>
+                        </View>
+                      </View>
+                    ) : (
+                      <View style={styles.errorBox}>
+                        <Text style={styles.errorText}>{checkError}</Text>
+                      </View>
+                    )}
+
+                    <View style={styles.actions}>
+                      {checkError && onCheckNow && (
+                        <TouchableOpacity
+                          style={styles.primaryButton}
+                          onPress={onCheckNow}
+                          activeOpacity={0.85}
+                          accessibilityRole="button"
+                          accessibilityLabel="Tentar verificar atualizações novamente"
+                        >
+                          <RefreshCw color="#030303" size={18} />
+                          <Text style={styles.primaryButtonText}>Tentar novamente</Text>
+                        </TouchableOpacity>
+                      )}
+                      <TouchableOpacity
+                        style={checkError && onCheckNow ? styles.secondaryButton : styles.primaryButton}
+                        onPress={() => dismissSheet()}
+                        activeOpacity={0.85}
+                        accessibilityRole="button"
+                        accessibilityLabel="Fechar menu de atualizações"
+                      >
+                        <Text
+                          style={
+                            checkError && onCheckNow
+                              ? styles.secondaryButtonText
+                              : styles.primaryButtonText
+                          }
+                        >
+                          Fechar
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                ) : (
+                  <>
+                    <View style={styles.upToDateHeader}>
+                      <View style={styles.upToDateIcon}>
+                        <Check color="#4ADE80" size={20} strokeWidth={2.5} />
+                      </View>
+                      <View style={styles.headerText}>
+                        <Text style={styles.upToDateTitle}>App atualizado</Text>
+                        <Text style={styles.upToDateSubtitle}>
+                          {'Você já está na versão mais recente'}
+                          {installedVersion ? (
+                            <Text style={styles.upToDateVersion}>
+                              {` (v${installedVersion.versionName})`}
+                            </Text>
+                          ) : null}
+                          {'.'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.upToDateActions}>
+                      {onCheckNow && (
+                        <TouchableOpacity
+                          style={styles.upToDateSecondaryBtn}
+                          onPress={onCheckNow}
+                          activeOpacity={0.8}
+                          accessibilityRole="button"
+                          accessibilityLabel="Verificar atualizações novamente"
+                        >
+                          <RefreshCw color="#E4E4E7" size={16} />
+                          <Text style={styles.upToDateSecondaryText}>Verificar</Text>
+                        </TouchableOpacity>
+                      )}
+                      <TouchableOpacity
+                        style={styles.upToDatePrimaryBtn}
+                        onPress={() => dismissSheet()}
+                        activeOpacity={0.85}
+                        accessibilityRole="button"
+                        accessibilityLabel="Fechar menu de atualizações"
+                      >
+                        <Text style={styles.upToDatePrimaryText}>Fechar</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )}
+
+                {isDev && !isChecking && (
+                  <View style={styles.devSimulateRow}>
+                    <TouchableOpacity
+                      style={styles.devSimulateLink}
+                      onPress={() => setSimulatedRelease(buildSimulatedRelease(installedVersion))}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel="Simular atualização disponível"
+                    >
+                      <Code2 color="#8E8E93" size={13} />
+                      <Text style={styles.devSimulateLinkText}>
+                        Simular atualização disponível
+                      </Text>
                     </TouchableOpacity>
                   </View>
-                </>
-              )}
-            </View>
+                )}
+              </>
+            )}
           </Animated.View>
         </TouchableOpacity>
       </Animated.View>
@@ -335,92 +658,225 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.72)',
+    backgroundColor: 'rgba(0, 0, 0, 0.78)',
     justifyContent: 'flex-end',
   },
   container: {
-    backgroundColor: '#141418',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    backgroundColor: '#131315',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
     borderTopWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    paddingHorizontal: 18,
-    paddingBottom: 24,
-    maxHeight: '80%',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    paddingHorizontal: 20,
+    marginBottom: -72,
+    paddingBottom: 96,
+    maxHeight: '88%',
+    overflow: 'hidden',
+  },
+  sheetTopGlow: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 160,
   },
   dragArea: {
     alignItems: 'center',
     paddingTop: 10,
-    paddingBottom: 8,
+    paddingBottom: 14,
   },
   dragHandle: {
     width: 38,
     height: 4,
     borderRadius: 2,
-    backgroundColor: 'rgba(255, 255, 255, 0.24)',
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    marginBottom: 14,
+    gap: 14,
+    marginBottom: 20,
   },
-  badgeIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: theme.colors.brandPrimary,
+  badgeWrapper: {
+    width: 52,
+    height: 52,
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
+  },
+  badgeAura: {
+    position: 'absolute',
+    width: 92,
+    height: 92,
+    top: -20,
+    left: -20,
+  },
+  badgeIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: '#A91B29',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 130, 145, 0.22)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  upToDateHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginBottom: 22,
+  },
+  upToDateIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(43, 166, 64, 0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  upToDateTitle: {
+    color: '#FFFFFF',
+    fontSize: 19,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+  upToDateSubtitle: {
+    color: '#9A9AA4',
+    fontSize: 13.5,
+    lineHeight: 19,
+    marginTop: 3,
+  },
+  upToDateVersion: {
+    color: '#E4E4E7',
+    fontWeight: '600',
+  },
+  upToDateActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  upToDateSecondaryBtn: {
+    flex: 1,
+    height: 46,
+    borderRadius: 9999,
+    backgroundColor: '#232327',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+  },
+  upToDateSecondaryText: {
+    color: '#E4E4E7',
+    fontSize: 14.5,
+    fontWeight: '600',
+  },
+  upToDatePrimaryBtn: {
+    flex: 1,
+    height: 46,
+    borderRadius: 9999,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  upToDatePrimaryText: {
+    color: '#111113',
+    fontSize: 14.5,
+    fontWeight: '700',
   },
   headerText: {
     flex: 1,
   },
   title: {
     color: '#FFFFFF',
-    fontSize: 17,
+    fontSize: 20,
     fontWeight: '700',
+    letterSpacing: -0.3,
   },
-  subtitle: {
-    color: '#AAAAAA',
-    fontSize: 12,
-    marginTop: 2,
-  },
-  closeBtn: {
-    width: 32,
-    height: 32,
+  subtitleRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 6,
   },
-  notesScroll: {
-    maxHeight: 160,
-    backgroundColor: '#0D0D10',
-    borderRadius: 12,
+  subtitleText: {
+    color: '#9A9AA4',
+    fontSize: 13.5,
+    fontWeight: '500',
+  },
+  versionBadge: {
+    backgroundColor: 'rgba(190, 45, 62, 0.28)',
+    borderRadius: 9999,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+  },
+  versionBadgeText: {
+    color: '#F4A3AC',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  notesCard: {
+    backgroundColor: '#19191D',
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
-    marginBottom: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 15,
+    marginBottom: 20,
   },
-  notesContent: {
-    padding: 12,
-    gap: 6,
+  notesCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 14,
   },
   notesLabel: {
-    color: '#8E8E93',
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.8,
+    color: '#8E8E98',
+    fontSize: 11.5,
+    fontWeight: '600',
+    letterSpacing: 0.6,
+  },
+  githubLink: {
+    color: '#B8B8C2',
+    fontSize: 12.5,
+    fontWeight: '500',
+  },
+  notesScroll: {
+    maxHeight: 164,
+  },
+  notesContent: {
+    gap: 13,
+  },
+  noteBulletRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  noteBulletIcon: {
+    width: 18,
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  noteItemText: {
+    flex: 1,
+    color: '#ECECF0',
+    fontSize: 13.5,
+    lineHeight: 20,
   },
   notesText: {
-    color: '#E4E4E7',
-    fontSize: 13,
-    lineHeight: 19,
+    color: '#ECECF0',
+    fontSize: 13.5,
+    lineHeight: 20,
   },
   statusBox: {
-    backgroundColor: '#1C1C22',
-    borderRadius: 12,
-    padding: 12,
-    gap: 8,
-    marginBottom: 14,
+    backgroundColor: '#1C1C20',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    padding: 14,
+    gap: 10,
+    marginBottom: 16,
   },
   progressHeader: {
     flexDirection: 'row',
@@ -440,7 +896,8 @@ const styles = StyleSheet.create({
   },
   progressFill: {
     height: '100%',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#E11D48',
+    borderRadius: 3,
   },
   permissionBox: {
     flexDirection: 'row',
@@ -449,34 +906,34 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 193, 7, 0.12)',
     borderWidth: 1,
     borderColor: 'rgba(255, 193, 7, 0.35)',
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 12,
-    marginBottom: 14,
+    marginBottom: 16,
   },
   permissionText: {
     flex: 1,
     color: '#FFE082',
-    fontSize: 12,
-    lineHeight: 17,
+    fontSize: 12.5,
+    lineHeight: 18,
   },
   errorBox: {
     backgroundColor: 'rgba(255, 78, 69, 0.14)',
     borderWidth: 1,
     borderColor: 'rgba(255, 78, 69, 0.35)',
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 12,
-    marginBottom: 14,
+    marginBottom: 16,
   },
   errorText: {
     color: '#FF8A80',
-    fontSize: 12,
-    lineHeight: 17,
+    fontSize: 12.5,
+    lineHeight: 18,
   },
   actions: {
-    gap: 10,
+    gap: 12,
   },
   primaryButton: {
-    height: 46,
+    height: 50,
     borderRadius: 9999,
     backgroundColor: '#FFFFFF',
     flexDirection: 'row',
@@ -485,40 +942,54 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   primaryButtonText: {
-    color: '#030303',
-    fontSize: 14,
+    color: '#111113',
+    fontSize: 15.5,
     fontWeight: '700',
   },
   secondaryButton: {
-    height: 44,
+    height: 50,
     borderRadius: 9999,
-    backgroundColor: '#212126',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.14)',
+    backgroundColor: '#232327',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
   },
   secondaryButtonText: {
-    color: '#FFFFFF',
-    fontSize: 13,
+    color: '#F4F4F6',
+    fontSize: 15,
     fontWeight: '600',
   },
-  secondaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 16,
-    paddingTop: 2,
+  skipRow: {
+    alignItems: 'center',
+    paddingTop: 4,
   },
-  ghostButton: {
-    paddingVertical: 8,
+  skipButton: {
+    paddingVertical: 6,
     paddingHorizontal: 14,
   },
-  ghostButtonText: {
-    color: '#AAAAAA',
+  skipButtonText: {
+    color: '#9A9AA4',
+    fontSize: 14,
+    fontWeight: '500',
+    textDecorationLine: 'underline',
+  },
+  devSimulateRow: {
+    alignItems: 'center',
+    paddingTop: 12,
+  },
+  devSimulateLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  devSimulateLinkText: {
+    color: '#8E8E93',
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '500',
+    textDecorationLine: 'underline',
   },
 });
 

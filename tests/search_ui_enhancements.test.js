@@ -55,26 +55,26 @@ test('Search UI: BrandHeader has balanced YouTube Music layout and refined statu
     'BrandHeader logo image must maintain horizontal aspect ratio'
   );
 
-  // Verify notifications bell icon replaces legacy profile avatar cleanly (no pill background) and Cast button is omitted
-  const notificationsIcon = root.find(
-    (n) => n.props && n.props.accessibilityLabel === 'Notificações'
+  // Verify updates icon replaces legacy profile avatar cleanly (no pill background) and Cast button is omitted
+  const updatesButton = root.find(
+    (n) => n.props && n.props.accessibilityLabel === 'Atualizações do aplicativo'
   );
-  assert.ok(notificationsIcon, 'Notifications bell button must be present');
+  assert.ok(updatesButton, 'App updates button must be present');
   assert.ok(
-    !notificationsIcon.props.style || !notificationsIcon.props.style.backgroundColor,
-    'Notifications bell button must stay clean without a background pill'
+    !updatesButton.props.style || !updatesButton.props.style.backgroundColor,
+    'App updates button must stay clean without a background pill'
   );
   assert.ok(
-    !notificationsIcon.props.style || !notificationsIcon.props.style.borderWidth,
-    'Notifications bell button must stay clean without a border'
+    !updatesButton.props.style || !updatesButton.props.style.borderWidth,
+    'App updates button must stay clean without a border'
   );
 
-  const bellIcon = notificationsIcon.find(
-    (n) => n.type === 'LucideIcon' && n.props && n.props.name === 'Bell'
+  const updateIcon = updatesButton.find(
+    (n) => n.type === 'LucideIcon' && n.props && n.props.name === 'RefreshCw'
   );
-  assert.ok(bellIcon, 'BrandHeader must render Bell icon inside notifications slot');
+  assert.ok(updateIcon, 'BrandHeader must render RefreshCw icon inside updates slot');
 
-  // Verify clean download queue button exists between dev button (when enabled) and notifications Bell
+  // Verify clean download queue button exists between dev button (when enabled) and updates button
   const queueBtn = root.find(
     (n) => n.type === 'TouchableOpacity' && n.props && n.props.accessibilityLabel === 'Fila de downloads'
   );
@@ -105,15 +105,15 @@ test('Search UI: BrandHeader has balanced YouTube Music layout and refined statu
       (n) =>
         n.type === 'View' &&
         Array.isArray(n.children) &&
-        n.children.some((c) => c.props && c.props.accessibilityLabel === 'Notificações')
+        n.children.some((c) => c.props && c.props.accessibilityLabel === 'Atualizações do aplicativo')
     );
     const actionLabels = devRightActions.children
       .map((c) => c.props && c.props.accessibilityLabel)
       .filter(Boolean);
     assert.deepStrictEqual(
       actionLabels,
-      ['Menu de desenvolvimento', 'Fila de downloads (3)', 'Notificações'],
-      'Download queue button must sit between dev button and notifications'
+      ['Menu de desenvolvimento', 'Fila de downloads (3)', 'Atualizações do aplicativo'],
+      'Download queue button must sit between dev button and updates button'
     );
     const devBtn = devHeaderTree.root.find(
       (n) => n.type === 'TouchableOpacity' && n.props && n.props.accessibilityLabel === 'Menu de desenvolvimento'
