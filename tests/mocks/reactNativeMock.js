@@ -194,6 +194,52 @@ const Clipboard = {
   },
 };
 
+class AnimatedInterpolation {
+  constructor(parent, config = {}) {
+    this._parent = parent;
+    this._config = config;
+  }
+  get _value() {
+    const raw = typeof this._parent?._value === 'number' ? this._parent._value : 0;
+    const inputRange = Array.isArray(this._config.inputRange) ? this._config.inputRange : [0, 1];
+    const outputRange = Array.isArray(this._config.outputRange) ? this._config.outputRange : [0, 1];
+    if (inputRange.length < 2 || outputRange.length !== inputRange.length) return raw;
+    const extrapolate = this._config.extrapolate || 'extend';
+    const extrapolateLeft = this._config.extrapolateLeft || extrapolate;
+    const extrapolateRight = this._config.extrapolateRight || extrapolate;
+
+    let idx = 0;
+    if (raw <= inputRange[0]) {
+      if (extrapolateLeft === 'clamp') return outputRange[0];
+      if (extrapolateLeft === 'identity') return raw;
+      idx = 0;
+    } else if (raw >= inputRange[inputRange.length - 1]) {
+      if (extrapolateRight === 'clamp') return outputRange[outputRange.length - 1];
+      if (extrapolateRight === 'identity') return raw;
+      idx = inputRange.length - 2;
+    } else {
+      for (let i = 0; i < inputRange.length - 1; i++) {
+        if (raw >= inputRange[i] && raw <= inputRange[i + 1]) {
+          idx = i;
+          break;
+        }
+      }
+    }
+
+    const inMin = inputRange[idx];
+    const inMax = inputRange[idx + 1];
+    const outMin = outputRange[idx];
+    const outMax = outputRange[idx + 1];
+    if (typeof outMin !== 'number' || typeof outMax !== 'number') return outMin;
+    if (inMax === inMin) return outMin;
+    const ratio = (raw - inMin) / (inMax - inMin);
+    return outMin + ratio * (outMax - outMin);
+  }
+  interpolate(config) {
+    return new AnimatedInterpolation(this, config);
+  }
+}
+
 class AnimatedValue {
   constructor(val) {
     this._value = val;
@@ -202,7 +248,7 @@ class AnimatedValue {
     this._value = val;
   }
   interpolate(config) {
-    return this;
+    return new AnimatedInterpolation(this, config);
   }
 }
 

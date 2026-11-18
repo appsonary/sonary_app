@@ -202,6 +202,62 @@ export default function App() {
   const [favoriteTrackIds, setFavoriteTrackIds] = useState<Set<string>>(new Set());
   const [isCurrentFavorite, setIsCurrentFavorite] = useState(false);
   const [isNowPlayingVisible, setIsNowPlayingVisible] = useState(false);
+  const [isMiniDragging, setIsMiniDragging] = useState(false);
+  const [morphEpoch, setMorphEpoch] = useState(0);
+  const [measuredNavHeight, setMeasuredNavHeight] = useState(66);
+  const [safeAreaHeight, setSafeAreaHeight] = useState(windowHeight);
+  const [measuredMiniPlayerY, setMeasuredMiniPlayerY] = useState<number | null>(null);
+  const isPersistentPlayerEnv = typeof requestAnimationFrame === 'function';
+  const navBarHeight = isDesktop ? 0 : measuredNavHeight;
+  const defaultCollapseDistance = Math.max(
+    200,
+    safeAreaHeight - (isDesktop ? 62 : 62 + navBarHeight)
+  );
+  const collapseDistance =
+    measuredMiniPlayerY !== null && measuredMiniPlayerY >= 200
+      ? measuredMiniPlayerY
+      : defaultCollapseDistance;
+  const modalTranslateY = useRef(new Animated.Value(defaultCollapseDistance)).current;
+  const activeMorphAnimRef = useRef<Animated.CompositeAnimation | null>(null);
+  const isMiniDraggingRef = useRef(false);
+  const isNowPlayingVisibleRef = useRef(isNowPlayingVisible);
+  isNowPlayingVisibleRef.current = isNowPlayingVisible;
+
+  useEffect(() => {
+    if (!isNowPlayingVisible && !isMiniDragging && !isMiniDraggingRef.current) {
+      modalTranslateY.setValue(collapseDistance);
+    }
+  }, [collapseDistance, isMiniDragging, isNowPlayingVisible, modalTranslateY]);
+
+  const miniPlayerOpacity = React.useMemo(
+    () =>
+      modalTranslateY.interpolate({
+        inputRange: [collapseDistance - 1.5, collapseDistance],
+        outputRange: [0, 1],
+        extrapolate: 'clamp',
+      }),
+    [collapseDistance, modalTranslateY]
+  );
+
+  const navBarTranslateY = React.useMemo(
+    () =>
+      modalTranslateY.interpolate({
+        inputRange: [0, collapseDistance],
+        outputRange: [navBarHeight, 0],
+        extrapolate: 'clamp',
+      }),
+    [collapseDistance, modalTranslateY, navBarHeight]
+  );
+
+  const navBarOpacity = React.useMemo(
+    () =>
+      modalTranslateY.interpolate({
+        inputRange: [0, collapseDistance * 0.12],
+        outputRange: [0, 1],
+        extrapolate: 'clamp',
+      }),
+    [collapseDistance, modalTranslateY]
+  );
 
   // Estados dos modais de playlist
   const [isAddToPlaylistVisible, setIsAddToPlaylistVisible] = useState(false);
@@ -235,13 +291,13 @@ export default function App() {
     nativeActiveTrack ??
     (restoredSession
       ? {
-          id: restoredSession.track.id,
-          url: '',
-          title: restoredSession.track.title,
-          artist: restoredSession.track.artist,
-          artwork: restoredSession.track.thumbnailUrl,
-          duration: restoredSession.track.duration,
-        }
+        id: restoredSession.track.id,
+        url: '',
+        title: restoredSession.track.title,
+        artist: restoredSession.track.artist,
+        artwork: restoredSession.track.thumbnailUrl,
+        duration: restoredSession.track.duration,
+      }
       : undefined);
   const [repeatMode, setRepeatModeState] = useState<RepeatMode>(RepeatMode.Off);
   const [isShuffleActive, setIsShuffleActive] = useState<boolean>(false);
@@ -563,7 +619,7 @@ export default function App() {
       duration: nativeActiveTrack.duration || 0,
       thumbnailUrl:
         typeof nativeActiveTrack.artwork === 'string' ? nativeActiveTrack.artwork : '',
-    }).catch(() => {});
+    }).catch(() => { });
 
     // Sincroniza a fila nativa com a UI
     syncPlayerQueue();
@@ -671,59 +727,59 @@ export default function App() {
       }
 
       console.warn('[App] PlaybackError capturado:', event);
-    setIsLoadingAudio(false);
+      setIsLoadingAudio(false);
 
-    const failedTrack = nativeActiveTrack ?? (await getActiveTrack().catch(() => undefined));
+      const failedTrack = nativeActiveTrack ?? (await getActiveTrack().catch(() => undefined));
 
-    // Se o player encontrou erro em um stream remoto, aciona fallback resiliente via download local
-    if (failedTrack && !downloadedIds.has(failedTrack.id)) {
-      if (recoveringTrackIdRef.current === failedTrack.id) {
-        return;
-      }
-      recoveringTrackIdRef.current = failedTrack.id;
-      setErrorMessage(
-        'Stream bloqueado pelo servidor. Sincronizando faixa para reprodução offline direta...'
-      );
-      try {
-        const streamInfo = await getAudioStream(failedTrack.id);
-        const trackSummary: TrackSummary = {
-          id: failedTrack.id,
-          title: failedTrack.title || 'Música',
-          artist: failedTrack.artist || 'Artista',
-          duration: failedTrack.duration || 0,
-          formattedDuration: formatSeconds(failedTrack.duration),
-          thumbnailUrl:
-            typeof failedTrack.artwork === 'string' ? failedTrack.artwork : '',
-        };
-        const downloaded = await downloadTrackFile(
-          trackSummary,
-          streamInfo.streamUrl
-        );
-        await loadOfflineTracks();
-        await playTrack({
-          id: downloaded.id,
-          url: downloaded.localAudioUri,
-          title: downloaded.title,
-          artist: downloaded.artist,
-          artwork: downloaded.localArtworkUri,
-          duration: downloaded.duration,
-        });
-        setErrorMessage(null);
-      } catch (fallbackErr) {
+      // Se o player encontrou erro em um stream remoto, aciona fallback resiliente via download local
+      if (failedTrack && !downloadedIds.has(failedTrack.id)) {
+        if (recoveringTrackIdRef.current === failedTrack.id) {
+          return;
+        }
+        recoveringTrackIdRef.current = failedTrack.id;
         setErrorMessage(
-          'Não foi possível reproduzir a faixa selecionada. Tente novamente mais tarde.'
+          'Stream bloqueado pelo servidor. Sincronizando faixa para reprodução offline direta...'
+        );
+        try {
+          const streamInfo = await getAudioStream(failedTrack.id);
+          const trackSummary: TrackSummary = {
+            id: failedTrack.id,
+            title: failedTrack.title || 'Música',
+            artist: failedTrack.artist || 'Artista',
+            duration: failedTrack.duration || 0,
+            formattedDuration: formatSeconds(failedTrack.duration),
+            thumbnailUrl:
+              typeof failedTrack.artwork === 'string' ? failedTrack.artwork : '',
+          };
+          const downloaded = await downloadTrackFile(
+            trackSummary,
+            streamInfo.streamUrl
+          );
+          await loadOfflineTracks();
+          await playTrack({
+            id: downloaded.id,
+            url: downloaded.localAudioUri,
+            title: downloaded.title,
+            artist: downloaded.artist,
+            artwork: downloaded.localArtworkUri,
+            duration: downloaded.duration,
+          });
+          setErrorMessage(null);
+        } catch (fallbackErr) {
+          setErrorMessage(
+            'Não foi possível reproduzir a faixa selecionada. Tente novamente mais tarde.'
+          );
+          await resetPlayer();
+        } finally {
+          recoveringTrackIdRef.current = null;
+        }
+      } else {
+        setErrorMessage(
+          'Erro na reprodução do áudio. Verifique sua conexão com a internet.'
         );
         await resetPlayer();
-      } finally {
-        recoveringTrackIdRef.current = null;
       }
-    } else {
-      setErrorMessage(
-        'Erro na reprodução do áudio. Verifique sua conexão com a internet.'
-      );
-      await resetPlayer();
-    }
-  });
+    });
 
   /**
    * Solicita permissão de notificação em runtime para Android 13+ (API 33+)
@@ -810,7 +866,7 @@ export default function App() {
     });
     getSearchHistory()
       .then(setRecentSearchQueries)
-      .catch(() => {});
+      .catch(() => { });
 
     // Restaura a última sessão salva em estado pausado se não houver faixa ativa (TASK-006)
     getPlaybackSession()
@@ -843,7 +899,7 @@ export default function App() {
           }
         }
       })
-      .catch(() => {});
+      .catch(() => { });
 
     const appStateSub = AppState.addEventListener?.('change', (nextState) => {
       if (nextState === 'active') {
@@ -880,6 +936,96 @@ export default function App() {
   isPlaylistDetailVisibleRef.current = isPlaylistDetailVisible;
   const isOpeningPlaylistRef = useRef<boolean>(false);
 
+  const openNowPlayingPlayer = useCallback(
+    (fromDrag = false) => {
+      lastBackExitPressRef.current = 0;
+      activeMorphAnimRef.current?.stop();
+      activeMorphAnimRef.current = null;
+      isMiniDraggingRef.current = false;
+      if (fromDrag) {
+        modalTranslateY.setValue(0);
+      } else if (!isNowPlayingVisibleRef.current) {
+        modalTranslateY.setValue(collapseDistance);
+      }
+      // Order matters: called from an Animated callback (no batching on old arch), so
+      // clearing isMiniDragging first would render visible=false and snap the player to collapsed.
+      setMorphEpoch((e) => e + 1);
+      setIsNowPlayingVisible(true);
+      setIsMiniDragging(false);
+    },
+    [collapseDistance, modalTranslateY]
+  );
+
+  const closeNowPlayingImmediate = useCallback(() => {
+    activeMorphAnimRef.current?.stop();
+    activeMorphAnimRef.current = null;
+    isMiniDraggingRef.current = false;
+    setIsMiniDragging(false);
+    modalTranslateY.setValue(collapseDistance);
+    setIsNowPlayingVisible(false);
+  }, [collapseDistance, modalTranslateY]);
+
+  const handleMiniDragMove = useCallback(
+    (dy: number) => {
+      if (!isMiniDraggingRef.current) {
+        isMiniDraggingRef.current = true;
+        setIsMiniDragging(true);
+      }
+      activeMorphAnimRef.current?.stop();
+      activeMorphAnimRef.current = null;
+      const nextY = Math.max(0, Math.min(collapseDistance, collapseDistance + dy));
+      modalTranslateY.setValue(nextY);
+    },
+    [collapseDistance, modalTranslateY]
+  );
+
+  const handleMiniDragCancel = useCallback(() => {
+    activeMorphAnimRef.current?.stop();
+    const anim = Animated.spring(modalTranslateY, {
+      toValue: collapseDistance,
+      bounciness: 4,
+      useNativeDriver: true,
+    });
+    activeMorphAnimRef.current = anim;
+    anim.start(({ finished }) => {
+      if (activeMorphAnimRef.current === anim) {
+        activeMorphAnimRef.current = null;
+      }
+      if (finished !== false) {
+        isMiniDraggingRef.current = false;
+        setIsMiniDragging(false);
+      }
+    });
+  }, [collapseDistance, modalTranslateY]);
+
+  const handleMiniDragRelease = useCallback(
+    (dy: number, vy: number) => {
+      if (dy < -50 || vy < -0.35) {
+        const currentY = Math.max(0, Math.min(collapseDistance, collapseDistance + dy));
+        modalTranslateY.setValue(currentY);
+        activeMorphAnimRef.current?.stop();
+        const anim = Animated.timing(modalTranslateY, {
+          toValue: 0,
+          duration: 240,
+          easing: getEaseOutCubic(Easing),
+          useNativeDriver: true,
+        });
+        activeMorphAnimRef.current = anim;
+        anim.start(({ finished }) => {
+          if (activeMorphAnimRef.current === anim) {
+            activeMorphAnimRef.current = null;
+          }
+          if (finished !== false) {
+            openNowPlayingPlayer(true);
+          }
+        });
+      } else {
+        handleMiniDragCancel();
+      }
+    },
+    [collapseDistance, handleMiniDragCancel, modalTranslateY, openNowPlayingPlayer]
+  );
+
   const pushNavHistory = useCallback((entry: NavHistoryEntry) => {
     lastBackExitPressRef.current = 0;
     const stack = navHistoryRef.current;
@@ -908,7 +1054,7 @@ export default function App() {
     isOpeningPlaylistRef.current = false;
     setIsDevMenuVisible(false);
     setIsDownloadQueueVisible(false);
-    setIsNowPlayingVisible(false);
+    closeNowPlayingImmediate();
     isPlaylistDetailVisibleRef.current = false;
     setIsPlaylistDetailVisible(false);
     setIsAddToPlaylistVisible(false);
@@ -923,6 +1069,7 @@ export default function App() {
     isPlaylistDetailVisible,
     selectedPlaylistId,
     pushNavHistory,
+    closeNowPlayingImmediate,
     tabContentOpacity,
     shellOpacity,
   ]);
@@ -1044,7 +1191,7 @@ export default function App() {
   );
 
   const handlePrefetchPlaylist = useCallback((playlistId: string) => {
-    void getPlaylistById(playlistId).catch(() => {});
+    void getPlaylistById(playlistId).catch(() => { });
   }, []);
 
   const openPlaylistDetail = useCallback(
@@ -1061,7 +1208,7 @@ export default function App() {
       shellTransitionRef.current?.stop();
       isOpeningPlaylistRef.current = false;
       setPendingTab(null);
-      void getPlaylistById(playlistId).catch(() => {});
+      void getPlaylistById(playlistId).catch(() => { });
       if (isPlaylistDetailVisible) {
         setSelectedPlaylistId(playlistId);
         return;
@@ -1137,22 +1284,22 @@ export default function App() {
 
   useEffect(() => {
     if (isNowPlayingVisible && !activeTrack) {
-      setIsNowPlayingVisible(false);
+      closeNowPlayingImmediate();
     }
-  }, [isNowPlayingVisible, activeTrack]);
+  }, [isNowPlayingVisible, activeTrack, closeNowPlayingImmediate]);
 
   const hasBlockingModalOpen = Boolean(
     (isNowPlayingVisible && activeTrack) ||
-      isAddToPlaylistVisible ||
-      isDownloadQueueVisible ||
-      (isDevMode && isDevMenuVisible)
+    isAddToPlaylistVisible ||
+    isDownloadQueueVisible ||
+    (isDevMode && isDevMenuVisible)
   );
 
   useBackHandler(
     !isPlaylistDetailVisible &&
-      !hasBlockingModalOpen &&
-      activeTab === 'playlists' &&
-      isQuickCreateVisible,
+    !hasBlockingModalOpen &&
+    activeTab === 'playlists' &&
+    isQuickCreateVisible,
     () => {
       setIsQuickCreateVisible(false);
       setQuickCreateName('');
@@ -1163,9 +1310,9 @@ export default function App() {
 
   useBackHandler(
     !isPlaylistDetailVisible &&
-      !hasBlockingModalOpen &&
-      activeTab === 'downloads' &&
-      downloadsSearchQuery.trim().length > 0,
+    !hasBlockingModalOpen &&
+    activeTab === 'downloads' &&
+    downloadsSearchQuery.trim().length > 0,
     () => {
       setDownloadsSearchQuery('');
       return true;
@@ -1451,7 +1598,7 @@ export default function App() {
 
     recordSearchHistory(trimmed)
       .then(setRecentSearchQueries)
-      .catch(() => {});
+      .catch(() => { });
 
     setIsSearching(true);
     setIsLoadingMoreSearch(false);
@@ -1815,7 +1962,7 @@ export default function App() {
           : Math.max(0, positionInSeconds);
       const updated = { ...restoredSession, positionSec: clamped };
       setRestoredSession(updated);
-      savePlaybackSession(updated).catch(() => {});
+      savePlaybackSession(updated).catch(() => { });
       return;
     }
     await seekTo(positionInSeconds);
@@ -1875,7 +2022,7 @@ export default function App() {
           }
         }
         if (shouldForcePrevious) {
-          await seekTo(0).catch(() => {});
+          await seekTo(0).catch(() => { });
         }
       }
     } catch (err) {
@@ -2015,7 +2162,7 @@ export default function App() {
         case 'Escape':
           if (isNowPlayingVisible) {
             e.preventDefault?.();
-            setIsNowPlayingVisible(false);
+            closeNowPlayingImmediate();
           }
           break;
         default:
@@ -2027,7 +2174,14 @@ export default function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isNowPlayingVisible, volume, isLoadingAudio, nativeActiveTrack?.id, restoredSession]);
+  }, [
+    isNowPlayingVisible,
+    volume,
+    isLoadingAudio,
+    nativeActiveTrack?.id,
+    restoredSession,
+    closeNowPlayingImmediate,
+  ]);
 
   const queuedDownloadIds = React.useMemo(
     () =>
@@ -2166,7 +2320,15 @@ export default function App() {
 
   return (
     <GestureHandlerRootView style={styles.root}>
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView
+        style={styles.container}
+        onLayout={(e) => {
+          const h = Math.round(e.nativeEvent.layout.height);
+          if (h >= 200) {
+            setSafeAreaHeight((prev) => (Math.abs(prev - h) > 1 ? h : prev));
+          }
+        }}
+      >
         <StatusBar
           barStyle="light-content"
           backgroundColor="transparent"
@@ -2246,345 +2408,345 @@ export default function App() {
                   hasDownloadErrors={hasDownloadErrors}
                 />
 
-            {/* Alerta de Erro */}
-            {errorMessage && (
-              <View style={styles.errorBox}>
-                <AlertCircle color="#FF4E45" size={18} />
-                <Text style={styles.errorText}>{errorMessage}</Text>
-                <TouchableOpacity
-                  onPress={() => setErrorMessage(null)}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Fechar alerta"
-                >
-                  <X color="#FF8A80" size={16} />
-                </TouchableOpacity>
-              </View>
-            )}
-
-            <Animated.View
-              style={[styles.tabContent, { opacity: tabContentOpacity }]}
-              testID="tab-transition-container"
-            >
-
-            {/* Conteúdo da Aba Ativa */}
-            {activeTab === 'search' && (
-              <View style={styles.tabContent}>
-                {/* Barra de Pesquisa YouTube Music */}
-                <SearchBarSection
-                  query={query}
-                  onChangeQuery={setQuery}
-                  onSearch={handleSearch}
-                  isSearching={isSearching}
-                  recentQueries={recentSearchQueries}
-                  hasResults={searchResults.length > 0}
-                  onFocusChange={setIsSearchFocused}
-                  onRemoveRecentQuery={async (item) => {
-                    try {
-                      const next = await removeSearchHistoryItem(item);
-                      setRecentSearchQueries(next);
-                    } catch {}
-                  }}
-                  onClearHistory={async () => {
-                    try {
-                      await clearSearchHistory();
-                      setRecentSearchQueries([]);
-                    } catch {}
-                  }}
-                  onClearSearch={() => {
-                    lastBackExitPressRef.current = 0;
-                    setQuery('');
-                    setSearchResults([]);
-                    setSearchContinuationToken(null);
-                    setLastSearchedQuery('');
-                    setErrorMessage(null);
-                  }}
-                />
-
-                {/* Lista de Resultados Online / Descoberta (oculta durante o modo busca focado) */}
-                {!isSearchFocused && (
-                <FlatList
-                  data={searchResults}
-                  keyExtractor={(item) => item.id}
-                  keyboardShouldPersistTaps="handled"
-                  contentContainerStyle={styles.listContent}
-                  ListHeaderComponent={
-                    searchResults.length > 0 ? (
-                      <View style={styles.searchResultsHeaderContainer}>
-                        <QuickPicksSection
-                          tracks={searchResults.slice(0, 8).map((t) => ({
-                            id: t.id,
-                            title: t.title,
-                            artist: t.artist,
-                            duration: t.duration,
-                            formattedDuration: t.formattedDuration,
-                            thumbnailUrl: t.thumbnailUrl,
-                          }))}
-                          activeTrackId={activeTrack?.id}
-                          isPlaying={isPlaying}
-                          downloadedTrackIds={downloadedIds}
-                          onSelectTrack={(track, index) => {
-                            const found = searchResults.find((r) => r.id === track.id);
-                            if (found) handleSelectTrack(found, index);
-                          }}
-                          onAddToPlaylist={(track) => {
-                            const found = searchResults.find((r) => r.id === track.id);
-                            if (found) handleOpenAddToPlaylist(found);
-                          }}
-                        />
-                        <View style={styles.resultsDivider} />
-                        <View style={styles.resultsHeaderRow}>
-                          <Text style={styles.resultsHeaderTitle}>Músicas e Resultados</Text>
-                          <View style={styles.resultsBadge}>
-                            <Text style={styles.resultsBadgeText}>
-                              {`${searchResults.length} faixas`}
-                            </Text>
-                          </View>
-                        </View>
-                      </View>
-                    ) : null
-                  }
-                  ListEmptyComponent={
-                    isSearching ? (
-                      <TrackRowSkeleton count={searchSkeletonRows} fadeBottom />
-                    ) : (
-                      <View style={styles.emptyContainer}>
-                        {/* Seção de Descoberta Rápida por Gênero */}
-                        <View style={styles.exploreSection}>
-                          <Text style={styles.exploreEyebrow}>DESCOBERTA RÁPIDA</Text>
-                          <Text style={styles.exploreTitle}>O que você quer ouvir?</Text>
-                          <ScrollView
-                            horizontal
-                            showsHorizontalScrollIndicator={false}
-                            style={styles.genreChipsScroll}
-                            contentContainerStyle={styles.genreChipsRow}
-                            testID="genre-chips-carousel"
-                          >
-                            {[
-                              { label: 'Lo-Fi', Icon: Coffee },
-                              { label: 'Pop', Icon: Headphones },
-                              { label: 'Rock', Icon: Guitar },
-                              { label: 'Acústico', Icon: Moon },
-                              { label: 'MPB', Icon: Sun },
-                              { label: 'Eletrônica', Icon: Zap },
-                              { label: 'Jazz', Icon: Disc3 },
-                              { label: 'Treino', Icon: Dumbbell },
-                            ].map(({ label, Icon }) => (
-                              <TouchableOpacity
-                                key={label}
-                                style={styles.genreChip}
-                                onPress={() => handleSearch(label)}
-                                activeOpacity={0.7}
-                                accessibilityRole="button"
-                                accessibilityLabel={`Explorar gênero ${label}`}
-                              >
-                                <Icon color="#D4D4D8" size={14} strokeWidth={2} />
-                                <Text style={styles.genreChipText}>{label}</Text>
-                              </TouchableOpacity>
-                            ))}
-                          </ScrollView>
-                        </View>
-
-                        {/* Catálogo de Playlists em 2 colunas estilo álbum */}
-                        <View style={styles.catalogSection} testID="search-playlists-catalog">
-                          <Text style={styles.exploreEyebrow}>SUAS COLEÇÕES</Text>
-                          <Text style={styles.exploreTitle}>Suas Playlists</Text>
-
-                          {playlists.length > 0 ? (
-                            <View style={styles.catalogGrid}>
-                              {playlists.map((pl) => {
-                                const isSystemFavorites = pl.id === FAVORITES_PLAYLIST_ID;
-                                const trackLabel = `${pl.trackCount} ${pl.trackCount === 1 ? 'música' : 'músicas'}`;
-                                return (
-                                  <TouchableOpacity
-                                    key={pl.id}
-                                    style={styles.catalogCard}
-                                    onPressIn={() => handlePrefetchPlaylist(pl.id)}
-                                    onPress={() => openPlaylistDetail(pl.id)}
-                                    activeOpacity={0.78}
-                                    accessibilityRole="button"
-                                    accessibilityLabel={`Abrir playlist ${pl.name}`}
-                                  >
-                                    {isSystemFavorites ? (
-                                      <FavoritesRubyBadge
-                                        iconSize={58}
-                                        style={[
-                                          styles.catalogArtworkBox,
-                                          styles.catalogFavoritesArtworkBox,
-                                        ]}
-                                      />
-                                    ) : (
-                                      <PlaylistCover
-                                        thumbnailUrl={pl.thumbnailUrl}
-                                        hasCustomCover={pl.hasCustomCover}
-                                        coverThumbnails={pl.coverThumbnails}
-                                        borderRadius={12}
-                                        iconSize={38}
-                                        placeholderColor="#52525B"
-                                        placeholderBackgroundColor="#16161A"
-                                        style={styles.catalogArtworkBox}
-                                      />
-                                    )}
-                                    <Text style={styles.catalogCardTitle} numberOfLines={1}>
-                                      {pl.name}
-                                    </Text>
-                                    <Text style={styles.catalogCardMeta} numberOfLines={1}>
-                                      {trackLabel}
-                                    </Text>
-                                  </TouchableOpacity>
-                                );
-                              })}
-                            </View>
-                          ) : (
-                            <Text style={styles.catalogEmptyText}>
-                              Pesquise por uma faixa ou crie sua primeira playlist.
-                            </Text>
-                          )}
-                        </View>
-                      </View>
-                    )
-                  }
-                  renderItem={({ item, index }) => (
-                    <TrackCard
-                      id={item.id}
-                      title={item.title}
-                      artist={item.artist}
-                      durationText={item.formattedDuration}
-                      thumbnailUrl={item.thumbnailUrl}
-                      isActive={activeTrack?.id === item.id}
-                      isPlaying={isPlaying}
-                      isDownloaded={downloadedIds.has(item.id)}
-                      isDownloading={downloadingId === item.id}
-                      isQueued={queuedDownloadIds.has(item.id)}
-                      downloadProgress={downloadProgress}
-                      onPress={() => handleSelectTrack(item, index)}
-                      onAddToPlaylist={() => handleOpenAddToPlaylist(item)}
-                      onDownload={() => handleDownload(item)}
-                      onPlayNext={() => handlePlayNext(item)}
-                      onAddToQueue={() => handleAddToQueue(item)}
-                    />
-                  )}
-                  ListFooterComponent={
-                    !isSearching && searchResults.length > 0 && searchContinuationToken ? (
-                      <View style={styles.loadMoreContainer}>
-                        <TouchableOpacity
-                          style={[
-                            styles.loadMoreButton,
-                            isLoadingMoreSearch && styles.loadMoreButtonDisabled,
-                          ]}
-                          onPress={handleLoadMoreSearch}
-                          disabled={isLoadingMoreSearch}
-                          activeOpacity={0.75}
-                          accessibilityRole="button"
-                          accessibilityLabel="Carregar mais músicas"
-                          testID="search-load-more-button"
-                        >
-                          {isLoadingMoreSearch ? (
-                            <View style={styles.loadMoreInner}>
-                              <ActivityIndicator size="small" color="#FFFFFF" />
-                              <Text style={styles.loadMoreText}>Carregando mais...</Text>
-                            </View>
-                          ) : (
-                            <Text style={styles.loadMoreText}>Carregar mais</Text>
-                          )}
-                        </TouchableOpacity>
-                      </View>
-                    ) : null
-                  }
-                />
-                )}
-              </View>
-            )}
-
-        {/* Aba Playlists / Coleções da Biblioteca */}
-        {activeTab === 'playlists' && (
-          <View style={styles.tabContent}>
-            <LibrarySection
-              playlists={playlists}
-              isLoading={false}
-              isQuickCreateVisible={isQuickCreateVisible}
-              quickCreateName={quickCreateName}
-              onChangeQuickCreateName={setQuickCreateName}
-              onToggleQuickCreate={() => setIsQuickCreateVisible((prev) => !prev)}
-              onSubmitQuickCreate={handleQuickCreatePlaylist}
-              onSelectPlaylist={openPlaylistDetail}
-              onPrefetchPlaylist={handlePrefetchPlaylist}
-            />
-          </View>
-        )}
-
-        {/* Aba Músicas Baixadas (Biblioteca Offline) */}
-        {activeTab === 'downloads' && (() => {
-          const normalizedDownloadsQuery = downloadsSearchQuery.trim().toLowerCase();
-          const displayedDownloads = normalizedDownloadsQuery
-            ? downloadedTracks.filter(
-                (t) =>
-                  t.title.toLowerCase().includes(normalizedDownloadsQuery) ||
-                  t.artist.toLowerCase().includes(normalizedDownloadsQuery)
-              )
-            : downloadedTracks;
-
-          return (
-            <View style={styles.tabContent}>
-              {downloadedTracks.length > 0 && (
-                <View style={styles.downloadsSearchWrapper}>
-                  <SearchPillInput
-                    value={downloadsSearchQuery}
-                    onChangeText={setDownloadsSearchQuery}
-                    placeholder="Buscar nas baixadas..."
-                    accessibilityLabel="Buscar músicas baixadas"
-                    clearAccessibilityLabel="Limpar busca de baixadas"
-                  />
-                </View>
-              )}
-              <FlatList
-                data={displayedDownloads}
-                keyExtractor={(item) => item.id}
-                contentContainerStyle={styles.listContent}
-                ListEmptyComponent={
-                  <View style={[styles.emptyContainer, styles.emptyDownloadsContainer]}>
-                    <FolderDown color="#717171" size={56} />
-                    <Text style={styles.emptyTitle}>
-                      {normalizedDownloadsQuery
-                        ? 'Nenhuma faixa encontrada'
-                        : 'Nenhuma música baixada'}
-                    </Text>
-                    <Text style={styles.emptySubtitle}>
-                      {normalizedDownloadsQuery
-                        ? `Não foram encontrados resultados para "${downloadsSearchQuery}".`
-                        : 'Suas faixas salvas aparecerão aqui e podem ser ouvidas sem internet.'}
-                    </Text>
+                {/* Alerta de Erro */}
+                {errorMessage && (
+                  <View style={styles.errorBox}>
+                    <AlertCircle color="#FF4E45" size={18} />
+                    <Text style={styles.errorText}>{errorMessage}</Text>
+                    <TouchableOpacity
+                      onPress={() => setErrorMessage(null)}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      accessibilityRole="button"
+                      accessibilityLabel="Fechar alerta"
+                    >
+                      <X color="#FF8A80" size={16} />
+                    </TouchableOpacity>
                   </View>
-                }
-                renderItem={({ item }) => (
-                  <TrackCard
-                    id={item.id}
-                    title={item.title}
-                    artist={item.artist}
-                    durationText={formatSeconds(item.duration)}
-                    thumbnailUrl={item.thumbnailUrl}
-                    isActive={activeTrack?.id === item.id}
-                    isPlaying={isPlaying}
-                    isOfflineList={true}
-                    onPress={() => handleSelectTrack(item)}
-                    onAddToPlaylist={() => handleOpenAddToPlaylist(item)}
-                    onDeleteOffline={() => handleDeleteOfflineTrack(item.id)}
-                    onPlayNext={() => handlePlayNext(item)}
-                    onAddToQueue={() => handleAddToQueue(item)}
-                  />
                 )}
-              />
-            </View>
-          );
-        })()}
 
-        {/* Aba Apoiar (Contribuição Voluntária via Pix) */}
-        {activeTab === 'support' && (
-          <View style={styles.tabContent}>
-            <SupportSection onShowToast={setToastMessage} />
-          </View>
-        )}
-            </Animated.View>
+                <Animated.View
+                  style={[styles.tabContent, { opacity: tabContentOpacity }]}
+                  testID="tab-transition-container"
+                >
+
+                  {/* Conteúdo da Aba Ativa */}
+                  {activeTab === 'search' && (
+                    <View style={styles.tabContent}>
+                      {/* Barra de Pesquisa YouTube Music */}
+                      <SearchBarSection
+                        query={query}
+                        onChangeQuery={setQuery}
+                        onSearch={handleSearch}
+                        isSearching={isSearching}
+                        recentQueries={recentSearchQueries}
+                        hasResults={searchResults.length > 0}
+                        onFocusChange={setIsSearchFocused}
+                        onRemoveRecentQuery={async (item) => {
+                          try {
+                            const next = await removeSearchHistoryItem(item);
+                            setRecentSearchQueries(next);
+                          } catch { }
+                        }}
+                        onClearHistory={async () => {
+                          try {
+                            await clearSearchHistory();
+                            setRecentSearchQueries([]);
+                          } catch { }
+                        }}
+                        onClearSearch={() => {
+                          lastBackExitPressRef.current = 0;
+                          setQuery('');
+                          setSearchResults([]);
+                          setSearchContinuationToken(null);
+                          setLastSearchedQuery('');
+                          setErrorMessage(null);
+                        }}
+                      />
+
+                      {/* Lista de Resultados Online / Descoberta (oculta durante o modo busca focado) */}
+                      {!isSearchFocused && (
+                        <FlatList
+                          data={searchResults}
+                          keyExtractor={(item) => item.id}
+                          keyboardShouldPersistTaps="handled"
+                          contentContainerStyle={styles.listContent}
+                          ListHeaderComponent={
+                            searchResults.length > 0 ? (
+                              <View style={styles.searchResultsHeaderContainer}>
+                                <QuickPicksSection
+                                  tracks={searchResults.slice(0, 8).map((t) => ({
+                                    id: t.id,
+                                    title: t.title,
+                                    artist: t.artist,
+                                    duration: t.duration,
+                                    formattedDuration: t.formattedDuration,
+                                    thumbnailUrl: t.thumbnailUrl,
+                                  }))}
+                                  activeTrackId={activeTrack?.id}
+                                  isPlaying={isPlaying}
+                                  downloadedTrackIds={downloadedIds}
+                                  onSelectTrack={(track, index) => {
+                                    const found = searchResults.find((r) => r.id === track.id);
+                                    if (found) handleSelectTrack(found, index);
+                                  }}
+                                  onAddToPlaylist={(track) => {
+                                    const found = searchResults.find((r) => r.id === track.id);
+                                    if (found) handleOpenAddToPlaylist(found);
+                                  }}
+                                />
+                                <View style={styles.resultsDivider} />
+                                <View style={styles.resultsHeaderRow}>
+                                  <Text style={styles.resultsHeaderTitle}>Músicas e Resultados</Text>
+                                  <View style={styles.resultsBadge}>
+                                    <Text style={styles.resultsBadgeText}>
+                                      {`${searchResults.length} faixas`}
+                                    </Text>
+                                  </View>
+                                </View>
+                              </View>
+                            ) : null
+                          }
+                          ListEmptyComponent={
+                            isSearching ? (
+                              <TrackRowSkeleton count={searchSkeletonRows} fadeBottom />
+                            ) : (
+                              <View style={styles.emptyContainer}>
+                                {/* Seção de Descoberta Rápida por Gênero */}
+                                <View style={styles.exploreSection}>
+                                  <Text style={styles.exploreEyebrow}>DESCOBERTA RÁPIDA</Text>
+                                  <Text style={styles.exploreTitle}>O que você quer ouvir?</Text>
+                                  <ScrollView
+                                    horizontal
+                                    showsHorizontalScrollIndicator={false}
+                                    style={styles.genreChipsScroll}
+                                    contentContainerStyle={styles.genreChipsRow}
+                                    testID="genre-chips-carousel"
+                                  >
+                                    {[
+                                      { label: 'Lo-Fi', Icon: Coffee },
+                                      { label: 'Pop', Icon: Headphones },
+                                      { label: 'Rock', Icon: Guitar },
+                                      { label: 'Acústico', Icon: Moon },
+                                      { label: 'MPB', Icon: Sun },
+                                      { label: 'Eletrônica', Icon: Zap },
+                                      { label: 'Jazz', Icon: Disc3 },
+                                      { label: 'Treino', Icon: Dumbbell },
+                                    ].map(({ label, Icon }) => (
+                                      <TouchableOpacity
+                                        key={label}
+                                        style={styles.genreChip}
+                                        onPress={() => handleSearch(label)}
+                                        activeOpacity={0.7}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={`Explorar gênero ${label}`}
+                                      >
+                                        <Icon color="#D4D4D8" size={14} strokeWidth={2} />
+                                        <Text style={styles.genreChipText}>{label}</Text>
+                                      </TouchableOpacity>
+                                    ))}
+                                  </ScrollView>
+                                </View>
+
+                                {/* Catálogo de Playlists em 2 colunas estilo álbum */}
+                                <View style={styles.catalogSection} testID="search-playlists-catalog">
+                                  <Text style={styles.exploreEyebrow}>SUAS COLEÇÕES</Text>
+                                  <Text style={styles.exploreTitle}>Suas Playlists</Text>
+
+                                  {playlists.length > 0 ? (
+                                    <View style={styles.catalogGrid}>
+                                      {playlists.map((pl) => {
+                                        const isSystemFavorites = pl.id === FAVORITES_PLAYLIST_ID;
+                                        const trackLabel = `${pl.trackCount} ${pl.trackCount === 1 ? 'música' : 'músicas'}`;
+                                        return (
+                                          <TouchableOpacity
+                                            key={pl.id}
+                                            style={styles.catalogCard}
+                                            onPressIn={() => handlePrefetchPlaylist(pl.id)}
+                                            onPress={() => openPlaylistDetail(pl.id)}
+                                            activeOpacity={0.78}
+                                            accessibilityRole="button"
+                                            accessibilityLabel={`Abrir playlist ${pl.name}`}
+                                          >
+                                            {isSystemFavorites ? (
+                                              <FavoritesRubyBadge
+                                                iconSize={58}
+                                                style={[
+                                                  styles.catalogArtworkBox,
+                                                  styles.catalogFavoritesArtworkBox,
+                                                ]}
+                                              />
+                                            ) : (
+                                              <PlaylistCover
+                                                thumbnailUrl={pl.thumbnailUrl}
+                                                hasCustomCover={pl.hasCustomCover}
+                                                coverThumbnails={pl.coverThumbnails}
+                                                borderRadius={12}
+                                                iconSize={38}
+                                                placeholderColor="#52525B"
+                                                placeholderBackgroundColor="#16161A"
+                                                style={styles.catalogArtworkBox}
+                                              />
+                                            )}
+                                            <Text style={styles.catalogCardTitle} numberOfLines={1}>
+                                              {pl.name}
+                                            </Text>
+                                            <Text style={styles.catalogCardMeta} numberOfLines={1}>
+                                              {trackLabel}
+                                            </Text>
+                                          </TouchableOpacity>
+                                        );
+                                      })}
+                                    </View>
+                                  ) : (
+                                    <Text style={styles.catalogEmptyText}>
+                                      Pesquise por uma faixa ou crie sua primeira playlist.
+                                    </Text>
+                                  )}
+                                </View>
+                              </View>
+                            )
+                          }
+                          renderItem={({ item, index }) => (
+                            <TrackCard
+                              id={item.id}
+                              title={item.title}
+                              artist={item.artist}
+                              durationText={item.formattedDuration}
+                              thumbnailUrl={item.thumbnailUrl}
+                              isActive={activeTrack?.id === item.id}
+                              isPlaying={isPlaying}
+                              isDownloaded={downloadedIds.has(item.id)}
+                              isDownloading={downloadingId === item.id}
+                              isQueued={queuedDownloadIds.has(item.id)}
+                              downloadProgress={downloadProgress}
+                              onPress={() => handleSelectTrack(item, index)}
+                              onAddToPlaylist={() => handleOpenAddToPlaylist(item)}
+                              onDownload={() => handleDownload(item)}
+                              onPlayNext={() => handlePlayNext(item)}
+                              onAddToQueue={() => handleAddToQueue(item)}
+                            />
+                          )}
+                          ListFooterComponent={
+                            !isSearching && searchResults.length > 0 && searchContinuationToken ? (
+                              <View style={styles.loadMoreContainer}>
+                                <TouchableOpacity
+                                  style={[
+                                    styles.loadMoreButton,
+                                    isLoadingMoreSearch && styles.loadMoreButtonDisabled,
+                                  ]}
+                                  onPress={handleLoadMoreSearch}
+                                  disabled={isLoadingMoreSearch}
+                                  activeOpacity={0.75}
+                                  accessibilityRole="button"
+                                  accessibilityLabel="Carregar mais músicas"
+                                  testID="search-load-more-button"
+                                >
+                                  {isLoadingMoreSearch ? (
+                                    <View style={styles.loadMoreInner}>
+                                      <ActivityIndicator size="small" color="#FFFFFF" />
+                                      <Text style={styles.loadMoreText}>Carregando mais...</Text>
+                                    </View>
+                                  ) : (
+                                    <Text style={styles.loadMoreText}>Carregar mais</Text>
+                                  )}
+                                </TouchableOpacity>
+                              </View>
+                            ) : null
+                          }
+                        />
+                      )}
+                    </View>
+                  )}
+
+                  {/* Aba Playlists / Coleções da Biblioteca */}
+                  {activeTab === 'playlists' && (
+                    <View style={styles.tabContent}>
+                      <LibrarySection
+                        playlists={playlists}
+                        isLoading={false}
+                        isQuickCreateVisible={isQuickCreateVisible}
+                        quickCreateName={quickCreateName}
+                        onChangeQuickCreateName={setQuickCreateName}
+                        onToggleQuickCreate={() => setIsQuickCreateVisible((prev) => !prev)}
+                        onSubmitQuickCreate={handleQuickCreatePlaylist}
+                        onSelectPlaylist={openPlaylistDetail}
+                        onPrefetchPlaylist={handlePrefetchPlaylist}
+                      />
+                    </View>
+                  )}
+
+                  {/* Aba Músicas Baixadas (Biblioteca Offline) */}
+                  {activeTab === 'downloads' && (() => {
+                    const normalizedDownloadsQuery = downloadsSearchQuery.trim().toLowerCase();
+                    const displayedDownloads = normalizedDownloadsQuery
+                      ? downloadedTracks.filter(
+                        (t) =>
+                          t.title.toLowerCase().includes(normalizedDownloadsQuery) ||
+                          t.artist.toLowerCase().includes(normalizedDownloadsQuery)
+                      )
+                      : downloadedTracks;
+
+                    return (
+                      <View style={styles.tabContent}>
+                        {downloadedTracks.length > 0 && (
+                          <View style={styles.downloadsSearchWrapper}>
+                            <SearchPillInput
+                              value={downloadsSearchQuery}
+                              onChangeText={setDownloadsSearchQuery}
+                              placeholder="Buscar nas baixadas..."
+                              accessibilityLabel="Buscar músicas baixadas"
+                              clearAccessibilityLabel="Limpar busca de baixadas"
+                            />
+                          </View>
+                        )}
+                        <FlatList
+                          data={displayedDownloads}
+                          keyExtractor={(item) => item.id}
+                          contentContainerStyle={styles.listContent}
+                          ListEmptyComponent={
+                            <View style={[styles.emptyContainer, styles.emptyDownloadsContainer]}>
+                              <FolderDown color="#717171" size={56} />
+                              <Text style={styles.emptyTitle}>
+                                {normalizedDownloadsQuery
+                                  ? 'Nenhuma faixa encontrada'
+                                  : 'Nenhuma música baixada'}
+                              </Text>
+                              <Text style={styles.emptySubtitle}>
+                                {normalizedDownloadsQuery
+                                  ? `Não foram encontrados resultados para "${downloadsSearchQuery}".`
+                                  : 'Suas faixas salvas aparecerão aqui e podem ser ouvidas sem internet.'}
+                              </Text>
+                            </View>
+                          }
+                          renderItem={({ item }) => (
+                            <TrackCard
+                              id={item.id}
+                              title={item.title}
+                              artist={item.artist}
+                              durationText={formatSeconds(item.duration)}
+                              thumbnailUrl={item.thumbnailUrl}
+                              isActive={activeTrack?.id === item.id}
+                              isPlaying={isPlaying}
+                              isOfflineList={true}
+                              onPress={() => handleSelectTrack(item)}
+                              onAddToPlaylist={() => handleOpenAddToPlaylist(item)}
+                              onDeleteOffline={() => handleDeleteOfflineTrack(item.id)}
+                              onPlayNext={() => handlePlayNext(item)}
+                              onAddToQueue={() => handleAddToQueue(item)}
+                            />
+                          )}
+                        />
+                      </View>
+                    );
+                  })()}
+
+                  {/* Aba Apoiar (Contribuição Voluntária via Pix) */}
+                  {activeTab === 'support' && (
+                    <View style={styles.tabContent}>
+                      <SupportSection onShowToast={setToastMessage} />
+                    </View>
+                  )}
+                </Animated.View>
 
               </Animated.View>
             )}
@@ -2595,58 +2757,104 @@ export default function App() {
         <View
           style={!isDesktop ? styles.bottomDock : undefined}
           pointerEvents="box-none"
+          onLayout={(e) => {
+            const { y } = e.nativeEvent.layout;
+            if (activeTrack && y >= 200) {
+              setMeasuredMiniPlayerY((prev) =>
+                prev === null || Math.abs(prev - y) > 1 ? y : prev
+              );
+            }
+          }}
         >
           {/* Mini Player Persistente (Sincronizado Nativo com MediaSession & Tocável para Expandir) */}
           {activeTrack && (
-            <PersistentMiniPlayer
-              activeTrack={activeTrack}
-              isPlaying={isPlaying}
-              isLoadingAudio={isLoadingAudio}
-              isBuffering={isBuffering}
-              progressPct={
-                !nativeActiveTrack &&
-                restoredSession &&
-                restoredSession.track.duration > 0
-                  ? (restoredSession.positionSec /
+            <Animated.View
+              pointerEvents={isNowPlayingVisible ? 'none' : 'auto'}
+              style={{
+                zIndex: 10,
+                opacity: isPersistentPlayerEnv ? 0 : miniPlayerOpacity,
+              }}
+            >
+              <PersistentMiniPlayer
+                activeTrack={activeTrack}
+                isPlaying={isPlaying}
+                isLoadingAudio={isLoadingAudio}
+                isBuffering={isBuffering}
+                progressPct={
+                  !nativeActiveTrack &&
+                    restoredSession &&
+                    restoredSession.track.duration > 0
+                    ? (restoredSession.positionSec /
                       restoredSession.track.duration) *
                     100
-                  : undefined
-              }
-              isFavorite={isCurrentFavorite}
-              repeatMode={repeatMode}
-              isShuffleActive={isShuffleActive}
-              volume={volume}
-              onExpand={() => {
-                lastBackExitPressRef.current = 0;
-                setIsNowPlayingVisible(true);
-              }}
-              onTogglePlay={handleTogglePlay}
-              onSkipNext={handleSkipNext}
-              onSkipPrevious={handleSkipPrevious}
-              onToggleFavorite={handleToggleFavorite}
-              onToggleRepeat={handleToggleRepeat}
-              onToggleShuffle={handleToggleShuffle}
-              onToggleMute={handleToggleMute}
-              onSeek={handleSeekTo}
-            />
+                    : undefined
+                }
+                isFavorite={isCurrentFavorite}
+                repeatMode={repeatMode}
+                isShuffleActive={isShuffleActive}
+                volume={volume}
+                onExpand={() => openNowPlayingPlayer(false)}
+                onDragMove={handleMiniDragMove}
+                onDragRelease={handleMiniDragRelease}
+                onDragCancel={handleMiniDragCancel}
+                onTogglePlay={handleTogglePlay}
+                onSkipNext={handleSkipNext}
+                onSkipPrevious={handleSkipPrevious}
+                onToggleFavorite={handleToggleFavorite}
+                onToggleRepeat={handleToggleRepeat}
+                onToggleShuffle={handleToggleShuffle}
+                onToggleMute={handleToggleMute}
+                onSeek={handleSeekTo}
+              />
+            </Animated.View>
           )}
 
           {/* Barra de Navegação Inferior Mobile (< 768px) estilo YouTube Music */}
           {!isDesktop && (
-            <NavigationTabBar
-              activeTab={pendingTab ?? activeTab}
-              onTabChange={handleTabChange}
-              playlistCount={playlists.length}
-              downloadCount={downloadedTracks.length}
-            />
+            <Animated.View
+              onLayout={(e) => {
+                const h = Math.round(e.nativeEvent.layout.height);
+                if (h > 20) {
+                  setMeasuredNavHeight((prev) => (Math.abs(prev - h) > 1 ? h : prev));
+                }
+              }}
+              style={{
+                zIndex: 1,
+                opacity: navBarOpacity,
+                transform: [{ translateY: navBarTranslateY }],
+              }}
+            >
+              <NavigationTabBar
+                activeTab={pendingTab ?? activeTab}
+                onTabChange={handleTabChange}
+                playlistCount={playlists.length}
+                downloadCount={downloadedTracks.length}
+              />
+            </Animated.View>
           )}
         </View>
 
         {/* Modal de Now Playing (Tela Cheia Expandida) */}
-        {isNowPlayingVisible && activeTrack && (
+        {(isPersistentPlayerEnv || isNowPlayingVisible || isMiniDragging) && activeTrack && (
           <NowPlayingModal
-            visible={isNowPlayingVisible}
-            onClose={() => setIsNowPlayingVisible(false)}
+            visible={isNowPlayingVisible || isMiniDragging}
+            persistentMode={isPersistentPlayerEnv}
+            isMiniDragging={isMiniDragging}
+            isModalActive={isNowPlayingVisible}
+            onClose={() => {
+              isMiniDraggingRef.current = false;
+              setIsMiniDragging(false);
+              setIsNowPlayingVisible(false);
+            }}
+            onModalWindowShow={() => {
+              isMiniDraggingRef.current = false;
+              setIsMiniDragging(false);
+            }}
+            morphTranslateY={modalTranslateY}
+            collapseDistance={collapseDistance}
+            navBarHeight={navBarHeight}
+            morphAnimRef={activeMorphAnimRef}
+            morphEpoch={morphEpoch}
             track={activeTrack}
             isPlaying={isPlaying}
             isBuffering={isBuffering || isLoadingAudio}

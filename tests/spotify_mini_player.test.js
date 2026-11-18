@@ -110,3 +110,71 @@ test('Spotify Mini Player: Renders floating card with dynamic background, bottom
   assert.strictEqual(playToggled, true, 'Pressing play/pause should trigger callback');
 });
 
+test('Spotify Mini Player: Upward drag gestures drive onDragMove/onDragRelease without hijacking taps or horizontal swipes', async () => {
+  const moves = [];
+  let released = null;
+  let cancelled = false;
+  let expanded = false;
+
+  const sampleTrack = {
+    id: 'drag_mini_1',
+    title: 'Sorrows',
+    artist: 'Bryson Tiller',
+    duration: 194,
+    artwork: 'https://example.com/sorrows_blue.jpg',
+  };
+
+  let tree;
+  await actAsync(async () => {
+    tree = renderer.create(
+      React.createElement(PersistentMiniPlayer, {
+        activeTrack: sampleTrack,
+        isPlaying: true,
+        isLoadingAudio: false,
+        isBuffering: false,
+        progressPct: 25,
+        onExpand: () => {
+          expanded = true;
+        },
+        onDragMove: (dy) => moves.push(dy),
+        onDragRelease: (dy, vy) => {
+          released = { dy, vy };
+        },
+        onDragCancel: () => {
+          cancelled = true;
+        },
+        onTogglePlay: () => {},
+        onSkipNext: () => {},
+        onSkipPrevious: () => {},
+      })
+    );
+  });
+
+  const root = tree.root;
+  const panWrapper = root.find(
+    (n) => n.type === 'View' && typeof n.props.onMoveShouldSetResponderCapture === 'function'
+  );
+  assert.ok(panWrapper, 'Mini player should attach upward drag PanResponder when drag props are supplied');
+
+  // Normal tap / downward / horizontal movement should NOT capture
+  assert.strictEqual(panWrapper.props.onStartShouldSetResponder(), false);
+  assert.strictEqual(panWrapper.props.onMoveShouldSetResponderCapture({}, { dy: 12, dx: 0 }), false);
+  assert.strictEqual(panWrapper.props.onMoveShouldSetResponderCapture({}, { dy: -4, dx: 30 }), false);
+
+  // Upward drag captures and forwards move/release/terminate
+  assert.strictEqual(panWrapper.props.onMoveShouldSetResponderCapture({}, { dy: -20, dx: 0 }), true);
+  await actAsync(async () => {
+    panWrapper.props.onResponderMove({}, { dy: -90, dx: 0 });
+    panWrapper.props.onResponderRelease({}, { dy: -90, dx: 0, vy: -0.6 });
+  });
+  assert.deepStrictEqual(moves, [-90]);
+  assert.deepStrictEqual(released, { dy: -90, vy: -0.6 });
+  assert.strictEqual(expanded, false);
+
+  await actAsync(async () => {
+    panWrapper.props.onResponderTerminate();
+  });
+  assert.strictEqual(cancelled, true);
+});
+
+

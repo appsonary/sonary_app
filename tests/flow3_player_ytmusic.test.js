@@ -1164,3 +1164,634 @@ test('App UI: Adding recommended track to queue inside open NowPlayingModal disp
     api.getRelatedTracks = originalGetRelatedTracks;
   }
 });
+
+test('YT Music Morph: Continuous interpolations across p = 0, 0.35, 0.50, 0.65, 0.85, 1.0', async () => {
+  const collapseDistance = 684;
+  const navBarHeight = 66;
+  const sampleTrack = {
+    id: 'morph_track_1',
+    title: 'Sorrows',
+    artist: 'Bryson Tiller',
+    duration: 194,
+    artwork: 'https://example.com/sorrows_blue.jpg',
+  };
+
+  let modalTree;
+  await actAsync(async () => {
+    modalTree = renderer.create(
+      React.createElement(NowPlayingModal, {
+        visible: true,
+        onClose: () => {},
+        track: sampleTrack,
+        isPlaying: true,
+        isBuffering: false,
+        collapseDistance,
+        navBarHeight,
+        onTogglePlay: () => {},
+        onSkipNext: () => {},
+        onSkipPrevious: () => {},
+      })
+    );
+  });
+
+  const mRoot = modalTree.root;
+  const dismissPan = mRoot.findByProps({ testID: 'player-dismiss-pan' });
+  const contentWrapper = mRoot.findByProps({ testID: 'now-playing-modal-content' });
+  const clipWrapper = contentWrapper.parent;
+  const headerToolbar = mRoot.findByProps({ accessibilityRole: 'toolbar' });
+  const morphArtwork = mRoot.findByProps({ testID: 'player-morph-artwork' });
+  const morphMiniBar = mRoot.findByProps({ testID: 'player-morph-mini-bar' });
+
+  const flatten = (st) => Object.assign({}, ...[].concat(st).filter(Boolean));
+  const getTx = (st, key) => {
+    const arr = flatten(st).transform || [];
+    const entry = arr.find((t) => t && t[key] !== undefined);
+    return entry ? entry[key]._value : undefined;
+  };
+  const getVal = (v) => (v && typeof v === 'object' && '_value' in v ? v._value : v);
+
+  const setProgress = async (p) => {
+    await actAsync(async () => {
+      dismissPan.props.onGestureEvent({
+        nativeEvent: { translationY: p * collapseDistance },
+      });
+    });
+  };
+
+  // p = 0: expanded controls visible, compact mini bar hidden, artwork at origin
+  await setProgress(0);
+  assert.strictEqual(getVal(flatten(headerToolbar.props.style).opacity), 1);
+  assert.strictEqual(getVal(flatten(morphMiniBar.props.style).opacity), 0);
+  assert.strictEqual(getVal(flatten(morphArtwork.props.style).opacity), 0);
+  assert.strictEqual(getTx(morphArtwork.props.style, 'scale'), 1);
+  assert.strictEqual(getTx(morphArtwork.props.style, 'translateX'), 0);
+  assert.strictEqual(getTx(morphArtwork.props.style, 'translateY'), 0);
+  assert.strictEqual(getTx(clipWrapper.props.style, 'translateY'), 0);
+  assert.strictEqual(getTx(contentWrapper.props.style, 'translateY'), 0);
+
+  // p = 0.35: expanded controls faded out completely, compact mini bar still hidden, artwork morphing
+  await setProgress(0.35);
+  assert.strictEqual(getVal(flatten(headerToolbar.props.style).opacity), 0);
+  assert.strictEqual(getVal(flatten(morphMiniBar.props.style).opacity), 0);
+  assert.strictEqual(getVal(flatten(morphArtwork.props.style).opacity), 1);
+  const scaleAt35 = getTx(morphArtwork.props.style, 'scale');
+  assert.ok(scaleAt35 < 1 && scaleAt35 > 40 / 300, `scale at p=0.35 should interpolate (${scaleAt35})`);
+  assert.ok(getTx(morphArtwork.props.style, 'translateX') < 0);
+  assert.ok(getTx(morphArtwork.props.style, 'translateY') < 0);
+
+  // p = 0.50: container bottom-clipped cleanly above rising NavigationTabBar
+  await setProgress(0.5);
+  assert.ok(Math.abs(getTx(clipWrapper.props.style, 'translateY') - -33) < 0.01);
+  assert.ok(Math.abs(getTx(contentWrapper.props.style, 'translateY') - (342 + 33)) < 0.01);
+  assert.strictEqual(getVal(flatten(morphMiniBar.props.style).opacity), 0);
+
+  // p = 0.65 -> 0.85: compact mini bar fades in across [0.65, 1.0]
+  await setProgress(0.65);
+  assert.ok(Math.abs(getVal(flatten(morphMiniBar.props.style).opacity)) < 0.01);
+  await setProgress(0.85);
+  const miniOpacity85 = getVal(flatten(morphMiniBar.props.style).opacity);
+  assert.ok(miniOpacity85 > 0.5 && miniOpacity85 < 0.65, `miniBar opacity at 0.85 expected ~0.57, got ${miniOpacity85}`);
+
+  // p = 1.0: docked compact mini bar at opacity 1, artwork at mini-thumbnail scale
+  await setProgress(1.0);
+  assert.strictEqual(getVal(flatten(headerToolbar.props.style).opacity), 0);
+  assert.strictEqual(getVal(flatten(morphMiniBar.props.style).opacity), 1);
+  const targetScale = 40 / Math.min(Math.round(375 * 0.76), 300);
+  assert.ok(Math.abs(getTx(morphArtwork.props.style, 'scale') - targetScale) < 0.001);
+  assert.strictEqual(getTx(clipWrapper.props.style, 'translateY'), -navBarHeight);
+  assert.strictEqual(getTx(contentWrapper.props.style, 'translateY'), collapseDistance + navBarHeight);
+
+  // Paused state: expanded artwork scale matches scaleAnim (0.95) while collapsed stays at targetScale
+  await actAsync(async () => {
+    modalTree.update(
+      React.createElement(NowPlayingModal, {
+        visible: true,
+        onClose: () => {},
+        track: sampleTrack,
+        isPlaying: false,
+        isBuffering: false,
+        collapseDistance,
+        navBarHeight,
+        onTogglePlay: () => {},
+        onSkipNext: () => {},
+        onSkipPrevious: () => {},
+      })
+    );
+  });
+  await setProgress(0);
+  assert.strictEqual(getTx(morphArtwork.props.style, 'scale'), 0.95);
+  await setProgress(1.0);
+  assert.ok(Math.abs(getTx(morphArtwork.props.style, 'scale') - targetScale) < 0.001);
+});
+
+test('YT Music Morph: Single-player handoff, NavigationTabBar proportional slide, mini drag-up expand, track switch, and desktop layout intact', async () => {
+  const rn = require('react-native');
+  let tree;
+  await actAsync(async () => {
+    tree = renderer.create(React.createElement(App));
+  });
+  const root = tree.root;
+
+  // Start playback
+  const input = findInputByPlaceholder(root, 'Buscar faixas');
+  await actAsync(async () => {
+    input.props.onChangeText('The Weeknd');
+  });
+  await actAsync(async () => {
+    findSearchActionButton(root).props.onPress();
+  });
+  const starboyCard = root.findAll(
+    (n) => n.type === 'TouchableOpacity' && getAllText(n).includes('Starboy')
+  )[0];
+  await actAsync(async () => {
+    starboyCard.props.onPress();
+  });
+
+  const navFade = root.findByProps({ testID: 'spotify-nav-fade' });
+  let navAnimWrapper = navFade.parent;
+  while (navAnimWrapper && !(navAnimWrapper.props?.style && navAnimWrapper.props.style.opacity !== undefined)) {
+    navAnimWrapper = navAnimWrapper.parent;
+  }
+  const miniTouchable = root.find(
+    (n) =>
+      n.type === 'TouchableOpacity' &&
+      String(n.props.accessibilityLabel || '').includes('Toque para expandir player')
+  );
+  let miniAnimWrapper = miniTouchable.parent;
+  while (miniAnimWrapper && typeof miniAnimWrapper.props?.pointerEvents !== 'string') {
+    miniAnimWrapper = miniAnimWrapper.parent;
+  }
+
+  const getVal = (v) => (v && typeof v === 'object' && '_value' in v ? v._value : v);
+  const getStyleNum = (node, prop) => {
+    const s = Object.assign({}, ...[].concat(node.props.style).filter(Boolean));
+    return getVal(s[prop]);
+  };
+  const getTxY = (node) => {
+    const s = Object.assign({}, ...[].concat(node.props.style).filter(Boolean));
+    const entry = (s.transform || []).find((t) => t && t.translateY !== undefined);
+    return entry ? getVal(entry.translateY) : undefined;
+  };
+
+  const countModalContent = () =>
+    root.findAll((n) => n.type === 'View' && n.props.testID === 'now-playing-modal-content').length;
+
+  // Resting collapsed state: 1 player visible (PersistentMiniPlayer), NowPlayingModal unmounted, NavigationTabBar visible
+  assert.strictEqual(getStyleNum(miniAnimWrapper, 'opacity'), 1);
+  assert.strictEqual(miniAnimWrapper.props.pointerEvents, 'auto');
+  assert.strictEqual(getTxY(navAnimWrapper), 0);
+  assert.strictEqual(getStyleNum(navAnimWrapper, 'opacity'), 1);
+  assert.strictEqual(countModalContent(), 0);
+
+  // Tap mini player to expand -> PersistentMiniPlayer hides (no 2 players!), NavigationTabBar slides off-screen
+  await actAsync(async () => {
+    miniTouchable.props.onPress();
+  });
+  assert.strictEqual(countModalContent(), 1);
+  assert.strictEqual(getStyleNum(miniAnimWrapper, 'opacity'), 0);
+  assert.strictEqual(miniAnimWrapper.props.pointerEvents, 'none');
+  assert.strictEqual(getTxY(navAnimWrapper), 66);
+  assert.strictEqual(getStyleNum(navAnimWrapper, 'opacity'), 0);
+
+  // Mid-drag collapse (p = 0.5): NavigationTabBar rises proportionally while PersistentMiniPlayer remains hidden
+  const dismissPan = root.findByProps({ testID: 'player-dismiss-pan' });
+  const collapseDistance = 812 - (62 + 66);
+  await actAsync(async () => {
+    dismissPan.props.onGestureEvent({
+      nativeEvent: { translationY: collapseDistance * 0.5 },
+    });
+  });
+  assert.ok(Math.abs(getTxY(navAnimWrapper) - 33) < 0.01);
+  assert.strictEqual(getStyleNum(miniAnimWrapper, 'opacity'), 0);
+
+  // Release past threshold -> NowPlayingModal closes & unmounts, PersistentMiniPlayer & NavigationTabBar restore
+  const { State: GestureState } = require('react-native-gesture-handler');
+  await actAsync(async () => {
+    dismissPan.props.onHandlerStateChange({
+      nativeEvent: {
+        state: GestureState.END,
+        oldState: GestureState.ACTIVE,
+        translationY: 140,
+        velocityY: 600,
+      },
+    });
+  });
+  assert.strictEqual(countModalContent(), 0);
+  assert.strictEqual(getStyleNum(miniAnimWrapper, 'opacity'), 1);
+  assert.strictEqual(miniAnimWrapper.props.pointerEvents, 'auto');
+  assert.strictEqual(getTxY(navAnimWrapper), 0);
+  assert.strictEqual(getStyleNum(navAnimWrapper, 'opacity'), 1);
+
+  // Drag mini player upward past threshold -> renders full morph sheet (never a floating 56px pill) and expands cleanly
+  const miniPanWrapper = root.find(
+    (n) => n.type === 'View' && typeof n.props?.onMoveShouldSetResponderCapture === 'function'
+  );
+  await actAsync(async () => {
+    miniPanWrapper.props.onResponderMove({}, { dy: -120, dx: 0 });
+  });
+  assert.strictEqual(
+    getStyleNum(miniAnimWrapper, 'opacity'),
+    0,
+    'Upward mini drag must hide 56px mini pill while full morph sheet rises'
+  );
+  assert.strictEqual(
+    countModalContent(),
+    1,
+    'Upward mini drag must render full morph sheet inline during drag'
+  );
+  const risingContent = root.findByProps({ testID: 'now-playing-modal-content' });
+  assert.ok(
+    getTxY(risingContent) < collapseDistance + 66,
+    'Full morph sheet should rise with upward finger drag'
+  );
+  await actAsync(async () => {
+    miniPanWrapper.props.onResponderRelease({}, { dy: -120, dx: 0, vy: -0.6 });
+  });
+  assert.strictEqual(countModalContent(), 1);
+  assert.strictEqual(getStyleNum(miniAnimWrapper, 'opacity'), 0);
+  const expandedContentAfterDrag = root.findByProps({ testID: 'now-playing-modal-content' });
+  assert.strictEqual(
+    getTxY(expandedContentAfterDrag),
+    0,
+    'Drag-up release must lock NowPlayingModal at translateY = 0 without collapsing or re-expanding'
+  );
+
+  // Track change while collapsed updates dominant color without unmounting mini player
+  const closeBtn = findButtonByIcon(root, 'ChevronDown');
+  await actAsync(async () => {
+    closeBtn.props.onPress({ stopPropagation: () => {} });
+  });
+  const skipNextBtn = findButtonByIcon(root, 'SkipForward');
+  await actAsync(async () => {
+    await skipNextBtn.props.onPress({ stopPropagation: () => {} });
+  });
+  assert.strictEqual(getStyleNum(miniAnimWrapper, 'opacity'), 1);
+  assert.strictEqual(mockPlayer.getActiveTrack().id !== 'yt_track_1', true);
+
+  // Desktop mode (width >= 768) leaves NavigationTabBar unmounted and sidebar intact
+  const originalGet = rn.Dimensions.get;
+  rn.Dimensions.get = () => ({ width: 1024, height: 900, scale: 2, fontScale: 1 });
+  let desktopTree;
+  try {
+    await actAsync(async () => {
+      desktopTree = renderer.create(React.createElement(App));
+    });
+    assert.strictEqual(
+      desktopTree.root.findAllByProps({ testID: 'spotify-nav-fade' }).length,
+      0,
+      'Desktop layout must omit NavigationTabBar'
+    );
+  } finally {
+    rn.Dimensions.get = originalGet;
+    if (desktopTree) {
+      await actAsync(async () => {
+        desktopTree.unmount();
+      });
+    }
+    await actAsync(async () => {
+      tree.unmount();
+    });
+  }
+});
+
+test('YT Music Morph: Snap-back below threshold and 10x rapid-tap async interruptibility', async () => {
+  const { Animated } = require('react-native');
+  const { State: GestureState } = require('react-native-gesture-handler');
+
+  // 1. Snap-back when dy <= 80 and vy <= 0.4
+  let closed = false;
+  let modalTree;
+  await actAsync(async () => {
+    modalTree = renderer.create(
+      React.createElement(NowPlayingModal, {
+        visible: true,
+        onClose: () => {
+          closed = true;
+        },
+        track: {
+          id: 'snap_1',
+          title: 'Snap Song',
+          artist: 'Artist',
+          duration: 180,
+          artwork: 'https://example.com/snap.jpg',
+        },
+        isPlaying: true,
+        isBuffering: false,
+        collapseDistance: 684,
+        onTogglePlay: () => {},
+        onSkipNext: () => {},
+        onSkipPrevious: () => {},
+      })
+    );
+  });
+
+  const dismissPan = modalTree.root.findByProps({ testID: 'player-dismiss-pan' });
+  const headerToolbar = modalTree.root.findByProps({ accessibilityRole: 'toolbar' });
+  const miniBar = modalTree.root.findByProps({ testID: 'player-morph-mini-bar' });
+  const getOpacity = (node) => {
+    const s = Object.assign({}, ...[].concat(node.props.style).filter(Boolean));
+    return s.opacity && typeof s.opacity === 'object' ? s.opacity._value : s.opacity;
+  };
+
+  await actAsync(async () => {
+    dismissPan.props.onGestureEvent({ nativeEvent: { translationY: 50 } });
+    dismissPan.props.onHandlerStateChange({
+      nativeEvent: {
+        state: GestureState.END,
+        oldState: GestureState.ACTIVE,
+        translationY: 50,
+        velocityY: 100,
+      },
+    });
+  });
+  assert.strictEqual(closed, false, 'Below-threshold drag must snap back instead of closing');
+  assert.strictEqual(getOpacity(headerToolbar), 1);
+  assert.strictEqual(getOpacity(miniBar), 0);
+
+  // 2. 10x rapid-tap async interruptibility with intercepted in-flight Animated.timing
+  let appTree;
+  await actAsync(async () => {
+    appTree = renderer.create(React.createElement(App));
+  });
+  const root = appTree.root;
+
+  const input = findInputByPlaceholder(root, 'Buscar faixas');
+  await actAsync(async () => {
+    input.props.onChangeText('The Weeknd');
+  });
+  await actAsync(async () => {
+    findSearchActionButton(root).props.onPress();
+  });
+  const starboyCard = root.findAll(
+    (n) => n.type === 'TouchableOpacity' && getAllText(n).includes('Starboy')
+  )[0];
+  await actAsync(async () => {
+    starboyCard.props.onPress();
+  });
+
+  const originalTiming = Animated.timing;
+  const pendingAnims = [];
+  Animated.timing = (val, config) => {
+    let active = true;
+    let storedCb = null;
+    return {
+      start: (cb) => {
+        storedCb = cb;
+        pendingAnims.push({
+          val,
+          config,
+          finish: () => {
+            if (!active) return;
+            active = false;
+            if (config && config.toValue !== undefined && val?.setValue) {
+              val.setValue(config.toValue);
+            }
+            storedCb?.({ finished: true });
+          },
+        });
+      },
+      stop: () => {
+        if (!active) return;
+        active = false;
+        const cb = storedCb;
+        storedCb = null;
+        cb?.({ finished: false });
+      },
+    };
+  };
+
+  try {
+    const expandBtn = findButtonByIcon(root, 'ChevronUp');
+    for (let i = 0; i < 10; i++) {
+      await actAsync(async () => {
+        expandBtn.props.onPress({ stopPropagation: () => {} });
+      });
+      const closeBtn = findButtonByIcon(root, 'ChevronDown');
+      assert.ok(closeBtn, `ChevronDown must be reachable on rapid async iteration ${i}`);
+      await actAsync(async () => {
+        closeBtn.props.onPress({ stopPropagation: () => {} });
+      });
+      assert.strictEqual(mockPlayer.state, State.Playing);
+    }
+
+    // Complete final in-flight close animation -> modal must unmount cleanly without deadlocking
+    await actAsync(async () => {
+      pendingAnims.forEach((p) => p.finish());
+    });
+    assert.strictEqual(
+      root.findAllByProps({ testID: 'now-playing-modal-content' }).length,
+      0,
+      'Final in-flight close must unmount NowPlayingModal cleanly'
+    );
+
+    // Re-expand and let enter animation finish -> must reach p = 0 cleanly
+    await actAsync(async () => {
+      expandBtn.props.onPress({ stopPropagation: () => {} });
+    });
+    await actAsync(async () => {
+      pendingAnims.forEach((p) => p.finish());
+    });
+    const finalToolbar = root.findByProps({ accessibilityRole: 'toolbar' });
+    assert.strictEqual(getOpacity(finalToolbar), 1);
+    assert.strictEqual(mockPlayer.state, State.Playing);
+  } finally {
+    Animated.timing = originalTiming;
+    await actAsync(async () => {
+      appTree.unmount();
+    });
+  }
+});
+
+test('YT Music Morph: BEGAN->FAILED tap during enter/close does not freeze, and stale close callback does not clobber across epochs', async () => {
+  const { Animated } = require('react-native');
+  const { State: GestureState } = require('react-native-gesture-handler');
+
+  let appTree;
+  await actAsync(async () => {
+    appTree = renderer.create(React.createElement(App));
+  });
+  const root = appTree.root;
+
+  const input = findInputByPlaceholder(root, 'Buscar faixas');
+  await actAsync(async () => {
+    input.props.onChangeText('The Weeknd');
+  });
+  await actAsync(async () => {
+    findSearchActionButton(root).props.onPress();
+  });
+  const starboyCard = root.findAll(
+    (n) => n.type === 'TouchableOpacity' && getAllText(n).includes('Starboy')
+  )[0];
+  await actAsync(async () => {
+    starboyCard.props.onPress();
+  });
+
+  const originalTiming = Animated.timing;
+  const recordedTimings = [];
+  Animated.timing = (val, config) => {
+    let active = true;
+    let storedCb = null;
+    const entry = {
+      val,
+      config,
+      stopped: false,
+      deferredStopCb: null,
+      finish: () => {
+        if (!active) return;
+        active = false;
+        if (config && config.toValue !== undefined && val?.setValue) {
+          val.setValue(config.toValue);
+        }
+        const cb = storedCb;
+        storedCb = null;
+        cb?.({ finished: true });
+      },
+      flushDeferredStop: () => {
+        const cb = entry.deferredStopCb;
+        entry.deferredStopCb = null;
+        cb?.({ finished: false });
+      },
+    };
+    return {
+      start: (cb) => {
+        storedCb = cb;
+        recordedTimings.push(entry);
+      },
+      stop: () => {
+        if (!active) return;
+        active = false;
+        entry.stopped = true;
+        entry.deferredStopCb = storedCb;
+        storedCb = null;
+      },
+    };
+  };
+
+  const getOpacity = (node) => {
+    const s = Object.assign({}, ...[].concat(node.props.style).filter(Boolean));
+    return s.opacity && typeof s.opacity === 'object' ? s.opacity._value : s.opacity;
+  };
+  const countModalContent = () =>
+    root.findAll((n) => n.type === 'View' && n.props.testID === 'now-playing-modal-content').length;
+
+  try {
+    const expandBtn = findButtonByIcon(root, 'ChevronUp');
+
+    // (a) BEGAN -> FAILED during animateToExpanded() must settle headerToolbar opacity to 1
+    await actAsync(async () => {
+      expandBtn.props.onPress({ stopPropagation: () => {} });
+    });
+    const enterAnim1 = recordedTimings.filter((e) => e.config?.toValue === 0).slice(-1)[0];
+    assert.ok(enterAnim1, 'Enter animation must be created');
+
+    const dismissPan = root.findByProps({ testID: 'player-dismiss-pan' });
+    const headerToolbar = root.findByProps({ accessibilityRole: 'toolbar' });
+    assert.strictEqual(
+      headerToolbar.props.onStartShouldSetResponder?.(),
+      true,
+      'headerPanResponder must still accept touch start on the top bar'
+    );
+
+    await actAsync(async () => {
+      dismissPan.props.onHandlerStateChange({
+        nativeEvent: { state: GestureState.BEGAN, oldState: GestureState.UNDETERMINED },
+      });
+      dismissPan.props.onHandlerStateChange({
+        nativeEvent: { state: GestureState.FAILED, oldState: GestureState.BEGAN },
+      });
+      // Non-drag tap on headerPanResponder must also not interrupt enter animation
+      headerToolbar.props.onResponderGrant?.({}, {});
+      headerToolbar.props.onResponderMove?.({}, { dy: 2, dx: 0 });
+      headerToolbar.props.onResponderRelease?.({}, { dy: 2, dx: 0, vy: 0 });
+    });
+    assert.strictEqual(enterAnim1.stopped, false, 'BEGAN->FAILED and non-drag header tap must not stop animateToExpanded');
+
+    await actAsync(async () => {
+      enterAnim1.finish();
+    });
+    assert.strictEqual(getOpacity(headerToolbar), 1, 'headerToolbar opacity must settle to 1');
+
+    // (b) BEGAN -> FAILED during closeWithSlide() must not leave modal frozen mid-morph
+    const closeBtn = findButtonByIcon(root, 'ChevronDown');
+    await actAsync(async () => {
+      closeBtn.props.onPress({ stopPropagation: () => {} });
+    });
+    const closeAnim1 = recordedTimings.filter((e) => e.config?.toValue > 0).slice(-1)[0];
+    assert.ok(closeAnim1, 'Close animation 1 must be created');
+    closeAnim1.val.setValue(250);
+
+    await actAsync(async () => {
+      dismissPan.props.onHandlerStateChange({
+        nativeEvent: { state: GestureState.BEGAN, oldState: GestureState.UNDETERMINED },
+      });
+      dismissPan.props.onHandlerStateChange({
+        nativeEvent: { state: GestureState.FAILED, oldState: GestureState.BEGAN },
+      });
+    });
+    assert.strictEqual(closeAnim1.stopped, false, 'BEGAN->FAILED tap must not stop closeWithSlide');
+
+    await actAsync(async () => {
+      closeAnim1.finish();
+    });
+    assert.strictEqual(countModalContent(), 0, 'Modal must finish closing cleanly without mid-morph freeze');
+
+    // (c) Stale deferred closeWithSlide stop callback across morphEpoch bump must not clobber closeAnim2
+    await actAsync(async () => {
+      expandBtn.props.onPress({ stopPropagation: () => {} });
+    });
+    await actAsync(async () => {
+      recordedTimings.filter((e) => e.config?.toValue === 0).slice(-1)[0].finish();
+    });
+
+    await actAsync(async () => {
+      findButtonByIcon(root, 'ChevronDown').props.onPress({ stopPropagation: () => {} });
+    });
+    const staleCloseAnim = recordedTimings.filter((e) => e.config?.toValue > 0).slice(-1)[0];
+
+    // Re-open (bumps morphEpoch, stops staleCloseAnim with deferred stop callback)
+    await actAsync(async () => {
+      expandBtn.props.onPress({ stopPropagation: () => {} });
+    });
+    assert.strictEqual(staleCloseAnim.stopped, true, 'Re-open must stop in-flight close animation');
+    await actAsync(async () => {
+      recordedTimings.filter((e) => e.config?.toValue === 0).slice(-1)[0].finish();
+    });
+
+    // Start closeAnim2
+    const closeCountBefore2 = recordedTimings.filter((e) => e.config?.toValue > 0).length;
+    await actAsync(async () => {
+      findButtonByIcon(root, 'ChevronDown').props.onPress({ stopPropagation: () => {} });
+    });
+    const closeCountAfter2 = recordedTimings.filter((e) => e.config?.toValue > 0).length;
+    assert.strictEqual(closeCountAfter2, closeCountBefore2 + 1, 'Second close animation must start');
+    const closeAnim2 = recordedTimings.filter((e) => e.config?.toValue > 0).slice(-1)[0];
+
+    // Fire stale deferred stop callback from staleCloseAnim while closeAnim2 is active
+    await actAsync(async () => {
+      staleCloseAnim.flushDeferredStop();
+    });
+
+    // Attempt a 3rd closeWithSlide() while closeAnim2 is still active — must be ignored!
+    await actAsync(async () => {
+      findButtonByIcon(root, 'ChevronDown').props.onPress({ stopPropagation: () => {} });
+    });
+    const closeCountAfter3 = recordedTimings.filter((e) => e.config?.toValue > 0).length;
+    assert.strictEqual(
+      closeCountAfter3,
+      closeCountAfter2,
+      'Stale deferred close callback must not clobber isClosingRef or allow a 3rd close animation'
+    );
+    assert.strictEqual(closeAnim2.stopped, false, 'closeAnim2 must remain active');
+
+    await actAsync(async () => {
+      closeAnim2.finish();
+    });
+    assert.strictEqual(countModalContent(), 0, 'closeAnim2 must finish and close modal cleanly');
+  } finally {
+    Animated.timing = originalTiming;
+    await actAsync(async () => {
+      appTree.unmount();
+    });
+  }
+});
+

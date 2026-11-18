@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
   Image,
+  PanResponder,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -51,6 +52,9 @@ export interface PersistentMiniPlayerProps {
   onToggleShuffle?: () => void;
   onToggleMute?: () => void;
   onSeek?: (positionSeconds: number) => void;
+  onDragMove?: (dy: number) => void;
+  onDragRelease?: (dy: number, vy: number) => void;
+  onDragCancel?: () => void;
 }
 
 /**
@@ -119,10 +123,48 @@ export const PersistentMiniPlayer: React.FC<PersistentMiniPlayerProps> = ({
   onToggleShuffle,
   onToggleMute,
   onSeek,
+  onDragMove,
+  onDragRelease,
+  onDragCancel,
 }) => {
   const [imageError, setImageError] = useState(false);
   const screenWidth = Dimensions.get('window').width;
   const isCompact = screenWidth < 680;
+  const dragCallbacksRef = useRef({ onDragMove, onDragRelease, onDragCancel });
+  dragCallbacksRef.current = { onDragMove, onDragRelease, onDragCancel };
+  const hasDragHandlers = Boolean(onDragMove || onDragRelease || onDragCancel);
+
+  const miniPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
+        onStartShouldSetPanResponderCapture: () => false,
+        onMoveShouldSetPanResponder: (_, gs) =>
+          Boolean(
+            dragCallbacksRef.current.onDragMove ||
+              dragCallbacksRef.current.onDragRelease
+          ) &&
+          gs.dy < -6 &&
+          Math.abs(gs.dy) > Math.abs(gs.dx) * 1.2,
+        onMoveShouldSetPanResponderCapture: (_, gs) =>
+          Boolean(
+            dragCallbacksRef.current.onDragMove ||
+              dragCallbacksRef.current.onDragRelease
+          ) &&
+          gs.dy < -8 &&
+          Math.abs(gs.dy) > Math.abs(gs.dx) * 1.2,
+        onPanResponderMove: (_, gs) => {
+          dragCallbacksRef.current.onDragMove?.(gs.dy);
+        },
+        onPanResponderRelease: (_, gs) => {
+          dragCallbacksRef.current.onDragRelease?.(gs.dy, gs.vy);
+        },
+        onPanResponderTerminate: () => {
+          dragCallbacksRef.current.onDragCancel?.();
+        },
+      }),
+    []
+  );
 
   // Cor de fundo dinâmica extraída da capa da faixa atual no padrão Spotify
   const dominantBgColor = useMemo(
@@ -158,16 +200,17 @@ export const PersistentMiniPlayer: React.FC<PersistentMiniPlayerProps> = ({
   };
 
   return (
-    <TouchableOpacity
-      style={[
-        styles.miniPlayer,
-        { backgroundColor: dominantBgColor },
-      ]}
-      activeOpacity={0.94}
-      onPress={onExpand}
-      accessibilityRole="button"
-      accessibilityLabel={`Tocando agora: ${activeTrack.title} por ${activeTrack.artist}. Toque para expandir player.`}
-    >
+    <View {...(hasDragHandlers ? miniPanResponder.panHandlers : {})}>
+      <TouchableOpacity
+        style={[
+          styles.miniPlayer,
+          { backgroundColor: dominantBgColor },
+        ]}
+        activeOpacity={0.94}
+        onPress={onExpand}
+        accessibilityRole="button"
+        accessibilityLabel={`Tocando agora: ${activeTrack.title} por ${activeTrack.artist}. Toque para expandir player.`}
+      >
       <View style={styles.contentRow}>
         {/* Lado Esquerdo: Miniatura da Capa e Metadados estilo Spotify */}
         <View style={styles.leftInfoCluster}>
@@ -372,6 +415,7 @@ export const PersistentMiniPlayer: React.FC<PersistentMiniPlayerProps> = ({
         </View>
       </TouchableOpacity>
     </TouchableOpacity>
+    </View>
   );
 };
 

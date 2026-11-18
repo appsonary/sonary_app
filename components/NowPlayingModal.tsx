@@ -2,6 +2,7 @@ import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, 
 import {
   ActivityIndicator,
   Animated,
+  BackHandler,
   Dimensions,
   Easing,
   Image,
@@ -76,6 +77,7 @@ import { TrackRowSkeleton } from './TrackRowSkeleton';
 import { PlayingEqualizer } from './PlayingEqualizer';
 import { AmbientGlowBackground } from './AmbientGlowBackground';
 import { MarqueeText, TrackMetaRow } from './MarqueeText';
+import { getDominantTrackColor } from './PersistentMiniPlayer';
 import { ToastBanner } from './ToastBanner';
 import {
   SHEET_ENTER_MS,
@@ -134,6 +136,15 @@ export interface NowPlayingModalProps {
   toastMessage?: string | null;
   toastVariant?: 'success' | 'error';
   onDismissToast?: () => void;
+  morphTranslateY?: Animated.Value;
+  collapseDistance?: number;
+  navBarHeight?: number;
+  morphAnimRef?: React.MutableRefObject<Animated.CompositeAnimation | null>;
+  morphEpoch?: number;
+  onModalWindowShow?: () => void;
+  isMiniDragging?: boolean;
+  isModalActive?: boolean;
+  persistentMode?: boolean;
 }
 
 /**
@@ -289,6 +300,33 @@ const PlayerProgressSection: React.FC<PlayerProgressSectionProps> = memo(
   }
 );
 
+const CompactMiniBarProgress: React.FC<{
+  trackDuration?: number;
+  fallbackPosition?: number;
+}> = memo(({ trackDuration, fallbackPosition }) => {
+  const progress = useProgress(500);
+  const effectiveDuration =
+    progress.duration > 0
+      ? progress.duration
+      : trackDuration && trackDuration > 0
+        ? trackDuration
+        : 0;
+  const currentPosition =
+    progress.duration > 0 || progress.position > 0
+      ? progress.position
+      : fallbackPosition ?? 0;
+  const pct =
+    effectiveDuration > 0
+      ? Math.min(100, Math.max(0, (currentPosition / effectiveDuration) * 100))
+      : 0;
+
+  return (
+    <View style={styles.compactMiniProgressTrack}>
+      <View style={[styles.compactMiniProgressFill, { width: `${pct}%` }]} />
+    </View>
+  );
+});
+
 interface PlayerLyricsSectionProps {
   track: { id?: string; title?: string; artist?: string; duration?: number };
   fallbackPosition?: number;
@@ -415,9 +453,9 @@ const isQueueSwipe = (touch: { x: number; y: number; moved: boolean } | null, ev
   const { pageX, pageY } = evt?.nativeEvent ?? {};
   return Boolean(
     touch &&
-      pageX !== undefined &&
-      pageY !== undefined &&
-      (Math.abs(pageX - touch.x) > 8 || Math.abs(pageY - touch.y) > 8)
+    pageX !== undefined &&
+    pageY !== undefined &&
+    (Math.abs(pageX - touch.x) > 8 || Math.abs(pageY - touch.y) > 8)
   );
 };
 
@@ -646,126 +684,126 @@ const QueueTrackRow: React.FC<QueueTrackRowProps> = memo(
       <Reanimated.View style={[styles.queueTrackSlot, slotAnimatedStyle]}>
         <Reanimated.View
           onTouchStart={(evt: any) => {
-          const { pageX, pageY } = evt?.nativeEvent ?? {};
-          touchRef.current =
-            pageX !== undefined && pageY !== undefined
-              ? { x: pageX, y: pageY, moved: false }
-              : null;
-        }}
-        onTouchMove={(evt: any) => {
-          if (isQueueSwipe(touchRef.current, evt)) {
-            touchRef.current!.moved = true;
-          }
-        }}
-        onTouchCancel={() => {
-          touchRef.current = null;
-        }}
-        style={[styles.queueTrackRow, animatedRowStyle]}
-      >
-        <TouchableOpacity
-          style={styles.queueTrackSelectArea}
-          onPressIn={(evt) => {
-            if (touchRef.current) return;
             const { pageX, pageY } = evt?.nativeEvent ?? {};
-            if (pageX !== undefined && pageY !== undefined) {
-              touchRef.current = { x: pageX, y: pageY, moved: false };
+            touchRef.current =
+              pageX !== undefined && pageY !== undefined
+                ? { x: pageX, y: pageY, moved: false }
+                : null;
+          }}
+          onTouchMove={(evt: any) => {
+            if (isQueueSwipe(touchRef.current, evt)) {
+              touchRef.current!.moved = true;
             }
           }}
-          onPress={(evt) => {
-            const touch = touchRef.current;
+          onTouchCancel={() => {
             touchRef.current = null;
-            if (touch?.moved || isQueueSwipe(touch, evt)) {
-              return;
-            }
-            onSelectTrack(qTrack, qIdx);
           }}
-          activeOpacity={0.75}
-          accessibilityRole="button"
-          accessibilityLabel={`Tocar ${qTrack.title} na fila`}
+          style={[styles.queueTrackRow, animatedRowStyle]}
         >
-          {artworkSource ? (
-            <Image
-              source={artworkSource}
-              fadeDuration={0}
-              style={styles.queueThumbImg}
-              resizeMode="cover"
-            />
-          ) : (
-            <View style={styles.queueThumbFallback}>
-              <Music2 color="#FFFFFF" size={18} />
-            </View>
-          )}
-
-          <View style={styles.queueItemMeta}>
-            <Text style={styles.queueItemTitle} numberOfLines={1}>
-              {qTrack.title}
-            </Text>
-            <Text style={styles.queueItemArtist} numberOfLines={1}>
-              {qTrack.artist}
-            </Text>
-          </View>
-        </TouchableOpacity>
-
-        {isEditingQueue ? (
-          <View style={styles.queueActionsRow}>
-            {onMoveTrack && (
-              <View style={styles.queueMoveControls}>
-                {!isFirst && (
-                  <TouchableOpacity
-                    style={styles.queueSmallBtn}
-                    onPress={(e) => {
-                      e.stopPropagation?.();
-                      onMoveTrack(qIdx, qIdx - 1);
-                    }}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Mover ${qTrack.title} para cima`}
-                  >
-                    <ChevronUp color="#AAAAAA" size={16} />
-                  </TouchableOpacity>
-                )}
-                {!isLast && (
-                  <TouchableOpacity
-                    style={styles.queueSmallBtn}
-                    onPress={(e) => {
-                      e.stopPropagation?.();
-                      onMoveTrack(qIdx, qIdx + 1);
-                    }}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Mover ${qTrack.title} para baixo`}
-                  >
-                    <ChevronDown color="#AAAAAA" size={16} />
-                  </TouchableOpacity>
-                )}
+          <TouchableOpacity
+            style={styles.queueTrackSelectArea}
+            onPressIn={(evt) => {
+              if (touchRef.current) return;
+              const { pageX, pageY } = evt?.nativeEvent ?? {};
+              if (pageX !== undefined && pageY !== undefined) {
+                touchRef.current = { x: pageX, y: pageY, moved: false };
+              }
+            }}
+            onPress={(evt) => {
+              const touch = touchRef.current;
+              touchRef.current = null;
+              if (touch?.moved || isQueueSwipe(touch, evt)) {
+                return;
+              }
+              onSelectTrack(qTrack, qIdx);
+            }}
+            activeOpacity={0.75}
+            accessibilityRole="button"
+            accessibilityLabel={`Tocar ${qTrack.title} na fila`}
+          >
+            {artworkSource ? (
+              <Image
+                source={artworkSource}
+                fadeDuration={0}
+                style={styles.queueThumbImg}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.queueThumbFallback}>
+                <Music2 color="#FFFFFF" size={18} />
               </View>
             )}
-            {onRemoveTrack && (
-              <TouchableOpacity
-                style={styles.queueSmallBtn}
-                onPress={(e) => {
-                  e.stopPropagation?.();
-                  onRemoveTrack(qIdx);
-                }}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                accessibilityRole="button"
-                accessibilityLabel={`Remover ${qTrack.title} da fila`}
-              >
-                <X color="#AAAAAA" size={16} />
-              </TouchableOpacity>
-            )}
-          </View>
-        ) : (
-          <GestureDetector gesture={dragGesture}>
-            <View
-              style={styles.queueDragHandle}
-              accessibilityRole="adjustable"
-              accessibilityLabel={`Arrastar ${qTrack.title} para reordenar na fila`}
-            >
-              <Menu color="#888888" size={18} />
+
+            <View style={styles.queueItemMeta}>
+              <Text style={styles.queueItemTitle} numberOfLines={1}>
+                {qTrack.title}
+              </Text>
+              <Text style={styles.queueItemArtist} numberOfLines={1}>
+                {qTrack.artist}
+              </Text>
             </View>
-          </GestureDetector>
-        )}
+          </TouchableOpacity>
+
+          {isEditingQueue ? (
+            <View style={styles.queueActionsRow}>
+              {onMoveTrack && (
+                <View style={styles.queueMoveControls}>
+                  {!isFirst && (
+                    <TouchableOpacity
+                      style={styles.queueSmallBtn}
+                      onPress={(e) => {
+                        e.stopPropagation?.();
+                        onMoveTrack(qIdx, qIdx - 1);
+                      }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Mover ${qTrack.title} para cima`}
+                    >
+                      <ChevronUp color="#AAAAAA" size={16} />
+                    </TouchableOpacity>
+                  )}
+                  {!isLast && (
+                    <TouchableOpacity
+                      style={styles.queueSmallBtn}
+                      onPress={(e) => {
+                        e.stopPropagation?.();
+                        onMoveTrack(qIdx, qIdx + 1);
+                      }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Mover ${qTrack.title} para baixo`}
+                    >
+                      <ChevronDown color="#AAAAAA" size={16} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
+              {onRemoveTrack && (
+                <TouchableOpacity
+                  style={styles.queueSmallBtn}
+                  onPress={(e) => {
+                    e.stopPropagation?.();
+                    onRemoveTrack(qIdx);
+                  }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remover ${qTrack.title} da fila`}
+                >
+                  <X color="#AAAAAA" size={16} />
+                </TouchableOpacity>
+              )}
+            </View>
+          ) : (
+            <GestureDetector gesture={dragGesture}>
+              <View
+                style={styles.queueDragHandle}
+                accessibilityRole="adjustable"
+                accessibilityLabel={`Arrastar ${qTrack.title} para reordenar na fila`}
+              >
+                <Menu color="#888888" size={18} />
+              </View>
+            </GestureDetector>
+          )}
         </Reanimated.View>
       </Reanimated.View>
     );
@@ -833,6 +871,15 @@ export default function NowPlayingModal({
   toastMessage = null,
   toastVariant = 'success',
   onDismissToast,
+  morphTranslateY,
+  collapseDistance,
+  navBarHeight,
+  morphAnimRef,
+  morphEpoch = 0,
+  onModalWindowShow,
+  isMiniDragging = false,
+  isModalActive,
+  persistentMode = false,
 }: NowPlayingModalProps) {
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [activePlayerTab, setActivePlayerTab] = useState<'cover' | 'upnext' | 'lyrics' | 'related'>('cover');
@@ -887,6 +934,7 @@ export default function NowPlayingModal({
   const dismissPanRef = useRef<any>(null);
   const horizontalPanRef = useRef<any>(null);
   const scrubberPanRef = useRef<any>(null);
+  const dummyScrubberPanRef = useRef<any>(null);
   const [viewportHeight, setViewportHeight] = useState<number>(
     Math.max(560, SCREEN_HEIGHT - (Platform.OS === 'ios' ? 120 : 96))
   );
@@ -902,8 +950,7 @@ export default function NowPlayingModal({
   queueListLengthSV.value = displayedQueue.length;
 
   const getQueueRowKey = (qTrack: Track, idx: number, list: Track[]) =>
-    `${qTrack.id || 'track'}-${
-      qTrack.id ? list.slice(0, idx).filter((t) => t.id === qTrack.id).length : idx
+    `${qTrack.id || 'track'}-${qTrack.id ? list.slice(0, idx).filter((t) => t.id === qTrack.id).length : idx
     }`;
 
   // Mantém a ordem de montagem dos filhos no React fixa ao arrastar, mas sincroniza em reordenações externas (ex.: Aleatório)
@@ -921,9 +968,9 @@ export default function NowPlayingModal({
   const dragTargetKeys = lastDragReorderedKeysRef.current;
   const isDragSyncConfirmation = Boolean(
     !isOptimisticDragRender &&
-      dragTargetKeys &&
-      dragTargetKeys.length === currentQueueKeys.length &&
-      dragTargetKeys.every((k, i) => k === currentQueueKeys[i])
+    dragTargetKeys &&
+    dragTargetKeys.length === currentQueueKeys.length &&
+    dragTargetKeys.every((k, i) => k === currentQueueKeys[i])
   );
   if (isDragSyncConfirmation) {
     lastDragReorderedKeysRef.current = null;
@@ -1257,7 +1304,7 @@ export default function NowPlayingModal({
     mainScrollRef.current?.scrollTo?.({ y: targetY, animated: true });
   };
 
-  const sheetEaseOut = getEaseOutCubic(Easing);
+  const sheetEaseOut = useMemo(() => getEaseOutCubic(Easing), []);
 
   const openQueueSheet = () => {
     setActivePlayerTab('upnext');
@@ -1436,10 +1483,94 @@ export default function NowPlayingModal({
   const isClosingRef = useRef(false);
   const isDismissingMenuRef = useRef(false);
   const isDismissingQueueRef = useRef(false);
-  useBackModalLock(Boolean(visible && track));
-  const modalTranslateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
+  const effectiveModalActive = isModalActive !== undefined ? isModalActive : !isMiniDragging;
+  useBackModalLock(Boolean((persistentMode ? effectiveModalActive : visible) && track));
+  const effectiveCollapseDistance = Math.max(
+    200,
+    collapseDistance ?? Math.max(200, SCREEN_HEIGHT - 128)
+  );
+  const effectiveNavBarHeight = Math.max(0, navBarHeight ?? 66);
+  const internalTranslateY = useRef(new Animated.Value(effectiveCollapseDistance)).current;
+  const modalTranslateY = morphTranslateY ?? internalTranslateY;
+  const localModalAnimRef = useRef<Animated.CompositeAnimation | null>(null);
+  const modalAnimTokenRef = useRef(0);
+  const morphEpochRef = useRef(morphEpoch);
+  morphEpochRef.current = morphEpoch;
+  const lastHandledMorphEpochRef = useRef(0);
+  const isMiniDraggingRef = useRef(isMiniDragging);
+  isMiniDraggingRef.current = isMiniDragging;
+  const wasMiniDraggingRef = useRef(false);
+  if (isMiniDragging) {
+    wasMiniDraggingRef.current = true;
+  }
+  const enterFrameCancelRef = useRef<(() => void) | null>(null);
+  const hasModalShownRef = useRef(false);
+  const isHeaderDraggingRef = useRef(false);
+  const defaultHeaderH =
+    (Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) + 8 : 8) + 52 + 12;
+  const defaultViewportH = Math.max(560, SCREEN_HEIGHT - defaultHeaderH);
+  const defaultArtworkContainerH = Math.max(
+    ARTWORK_BOX_SIZE + 24,
+    defaultViewportH - 64 - 248
+  );
+  const defaultArtworkRelY = Math.max(
+    12,
+    Math.round((defaultArtworkContainerH - ARTWORK_BOX_SIZE) / 2)
+  );
+  const [measuredArtworkTop, setMeasuredArtworkTop] = useState<number | null>(null);
+  const artworkLayoutMetricsRef = useRef<{
+    scrollY: number | null;
+    boxY: number | null;
+  }>({ scrollY: null, boxY: null });
+  const updateArtworkLayoutMetric = useCallback(
+    (key: 'scrollY' | 'boxY', val: number) => {
+      const m = artworkLayoutMetricsRef.current;
+      if (m[key] === val) return;
+      m[key] = val;
+      if (m.scrollY !== null && m.boxY !== null) {
+        const nextTop = Math.round(m.scrollY + m.boxY);
+        if (nextTop > 0) {
+          setMeasuredArtworkTop((prev) =>
+            prev !== null && Math.abs(prev - nextTop) <= 1 ? prev : nextTop
+          );
+        }
+      }
+    },
+    []
+  );
+  const morphArtworkTop = measuredArtworkTop ?? defaultHeaderH + defaultArtworkRelY;
   const swipeTranslateX = useRef(new Animated.Value(0)).current;
   const swipeFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const stopModalAnim = useCallback(() => {
+    modalAnimTokenRef.current += 1;
+    if (enterFrameCancelRef.current) {
+      enterFrameCancelRef.current();
+      enterFrameCancelRef.current = null;
+    }
+    const prevLocal = localModalAnimRef.current;
+    localModalAnimRef.current = null;
+    prevLocal?.stop();
+    if (morphAnimRef) {
+      const prevShared = morphAnimRef.current;
+      morphAnimRef.current = null;
+      if (prevShared && prevShared !== prevLocal) {
+        prevShared.stop();
+      }
+    }
+    return modalAnimTokenRef.current;
+  }, [morphAnimRef]);
+
+  const trackModalAnim = useCallback(
+    (anim: Animated.CompositeAnimation) => {
+      localModalAnimRef.current = anim;
+      if (morphAnimRef) {
+        morphAnimRef.current = anim;
+      }
+      return anim;
+    },
+    [morphAnimRef]
+  );
 
   const clearSwipeFallbackTimer = React.useCallback(() => {
     if (swipeFallbackTimerRef.current) {
@@ -1448,31 +1579,70 @@ export default function NowPlayingModal({
     }
   }, []);
 
-  const { onModalShow: onNowPlayingModalShow } = useModalEnterAnimation({
-    visible: Boolean(visible && track),
-    onReset: () => {
-      modalTranslateY.setValue(SCREEN_HEIGHT);
-    },
-    onAnimateIn: () => {
-      const anim = Animated.timing(modalTranslateY, {
-        toValue: 0,
-        duration: SHEET_ENTER_MS,
-        easing: sheetEaseOut,
-        useNativeDriver: true,
+  const animateToExpanded = useCallback(() => {
+    const token = stopModalAnim();
+    const anim = Animated.timing(modalTranslateY, {
+      toValue: 0,
+      duration: 280,
+      easing: sheetEaseOut,
+      useNativeDriver: true,
+    });
+    trackModalAnim(anim);
+    anim.start((result) => {
+      if (modalAnimTokenRef.current !== token || localModalAnimRef.current !== anim) return;
+      localModalAnimRef.current = null;
+      if (morphAnimRef && morphAnimRef.current === anim) morphAnimRef.current = null;
+      if (result?.finished !== false) {
+        isClosingRef.current = false;
+      }
+    });
+    return anim;
+  }, [
+    modalTranslateY,
+    morphAnimRef,
+    sheetEaseOut,
+    stopModalAnim,
+    trackModalAnim,
+  ]);
+
+  const handleModalShow = useCallback(() => {
+    hasModalShownRef.current = true;
+    lastHandledMorphEpochRef.current = morphEpochRef.current;
+    if (enterFrameCancelRef.current) {
+      enterFrameCancelRef.current();
+      enterFrameCancelRef.current = null;
+    }
+    if (isMiniDraggingRef.current) {
+      modalTranslateY.setValue(0);
+      enterFrameCancelRef.current = scheduleNextFrame(() => {
+        enterFrameCancelRef.current = scheduleNextFrame(() => {
+          enterFrameCancelRef.current = null;
+          onModalWindowShow?.();
+        });
       });
-      anim.start();
-      return anim;
-    },
-  });
+      return;
+    }
+    onModalWindowShow?.();
+    enterFrameCancelRef.current = scheduleNextFrame(() => {
+      enterFrameCancelRef.current = null;
+      if (!isClosingRef.current && !isMiniDraggingRef.current) {
+        animateToExpanded();
+      }
+    });
+  }, [animateToExpanded, modalTranslateY, onModalWindowShow]);
 
   useEffect(() => {
     if (visible) {
+      if (!morphTranslateY && !hasModalShownRef.current) {
+        internalTranslateY.setValue(effectiveCollapseDistance);
+      }
       clearSwipeFallbackTimer();
       swipeTranslateX.setValue(0);
       scrollYRef.current = 0;
       isAtTopRef.current = true;
       setIsAtTop(true);
       isNativePanActiveRef.current = false;
+      isHeaderDraggingRef.current = false;
       isClosingRef.current = false;
       isDismissingMenuRef.current = false;
       isDismissingQueueRef.current = false;
@@ -1484,15 +1654,53 @@ export default function NowPlayingModal({
       setIsEditingQueue(false);
       setOptimisticQueueMove(null);
       resetQueueDrag();
+    } else {
+      hasModalShownRef.current = false;
+      wasMiniDraggingRef.current = false;
+      lastHandledMorphEpochRef.current = 0;
+      isHeaderDraggingRef.current = false;
+      isClosingRef.current = false;
+      stopModalAnim();
     }
-  }, [clearSwipeFallbackTimer, visible]);
+  }, [
+    clearSwipeFallbackTimer,
+    effectiveCollapseDistance,
+    internalTranslateY,
+    morphTranslateY,
+    stopModalAnim,
+    visible,
+  ]);
+
+  useEffect(() => {
+    if (
+      visible &&
+      !isMiniDragging &&
+      morphEpoch > 0 &&
+      morphEpoch !== lastHandledMorphEpochRef.current
+    ) {
+      isClosingRef.current = false;
+      if (persistentMode) {
+        lastHandledMorphEpochRef.current = morphEpoch;
+        if (wasMiniDraggingRef.current) {
+          wasMiniDraggingRef.current = false;
+          modalTranslateY.setValue(0);
+        } else {
+          animateToExpanded();
+        }
+      } else if (hasModalShownRef.current) {
+        lastHandledMorphEpochRef.current = morphEpoch;
+        animateToExpanded();
+      }
+    }
+  }, [animateToExpanded, isMiniDragging, modalTranslateY, morphEpoch, persistentMode, visible]);
 
   useEffect(
     () => () => {
       stopQueueAutoScroll();
       clearSwipeFallbackTimer();
+      stopModalAnim();
     },
-    [clearSwipeFallbackTimer]
+    [clearSwipeFallbackTimer, stopModalAnim]
   );
 
   const handleScrubbingChange = useCallback((scrubbing: boolean) => {
@@ -1500,15 +1708,86 @@ export default function NowPlayingModal({
     setIsScrubbing(scrubbing);
   }, []);
 
-  const clampedModalTranslateY = useMemo(
-    () =>
-      modalTranslateY.interpolate({
-        inputRange: [-500, 0, SCREEN_HEIGHT],
-        outputRange: [-75, 0, SCREEN_HEIGHT],
+  const expandedArtworkScale = isPlaying ? 1 : 0.95;
+
+  const morphInterpolations = useMemo(() => {
+    const D = effectiveCollapseDistance;
+    const navH = effectiveNavBarHeight;
+    const maxModalY = Math.max(D + 1, SCREEN_HEIGHT);
+    const startCenterX = SCREEN_WIDTH / 2;
+    const startCenterY = morphArtworkTop + ARTWORK_BOX_SIZE / 2;
+    const targetCenterX = 36;
+    const targetCenterY = 28;
+    const targetScale = 40 / ARTWORK_BOX_SIZE;
+
+    return {
+      clipY: modalTranslateY.interpolate({
+        inputRange: [0, D],
+        outputRange: [0, -navH],
         extrapolate: 'clamp',
       }),
-    [modalTranslateY]
-  );
+      innerTranslateY: modalTranslateY.interpolate({
+        inputRange: [-500, 0, D, maxModalY],
+        outputRange: [-75, 0, D + navH, maxModalY + navH],
+        extrapolate: 'clamp',
+      }),
+      expandedControlsOpacity: modalTranslateY.interpolate({
+        inputRange: [0, D * 0.35],
+        outputRange: [1, 0],
+        extrapolate: 'clamp',
+      }),
+      sheetBodyOpacity: modalTranslateY.interpolate({
+        inputRange: [0, D * 0.92, D],
+        outputRange: [1, 1, 0],
+        extrapolate: 'clamp',
+      }),
+      morphSurfaceOpacity: modalTranslateY.interpolate({
+        inputRange: [D * 0.15, D * 0.75, D * 0.92, D],
+        outputRange: [0, 1, 1, 0],
+        extrapolate: 'clamp',
+      }),
+      miniBarOpacity: modalTranslateY.interpolate({
+        inputRange: [D * 0.65, D],
+        outputRange: [0, 1],
+        extrapolate: 'clamp',
+      }),
+      miniMetaTranslateX: modalTranslateY.interpolate({
+        inputRange: [D * 0.65, D],
+        outputRange: [76, 0],
+        extrapolate: 'clamp',
+      }),
+      miniProgressOpacity: modalTranslateY.interpolate({
+        inputRange: [D * 0.94, D],
+        outputRange: [0, 1],
+        extrapolate: 'clamp',
+      }),
+      inScrollArtworkFade: modalTranslateY.interpolate({
+        inputRange: [0, 6, 8],
+        outputRange: [1, 1, 0],
+        extrapolate: 'clamp',
+      }),
+      morphArtworkOpacity: modalTranslateY.interpolate({
+        inputRange: [0, 6],
+        outputRange: [0, 1],
+        extrapolate: 'clamp',
+      }),
+      morphArtworkTranslateX: modalTranslateY.interpolate({
+        inputRange: [0, D],
+        outputRange: [0, targetCenterX - startCenterX],
+        extrapolate: 'clamp',
+      }),
+      morphArtworkTranslateY: modalTranslateY.interpolate({
+        inputRange: [0, D],
+        outputRange: [0, targetCenterY - startCenterY],
+        extrapolate: 'clamp',
+      }),
+      morphArtworkScale: modalTranslateY.interpolate({
+        inputRange: [0, D],
+        outputRange: [expandedArtworkScale, targetScale],
+        extrapolate: 'clamp',
+      }),
+    };
+  }, [effectiveCollapseDistance, effectiveNavBarHeight, expandedArtworkScale, modalTranslateY, morphArtworkTop]);
 
   const dismissGestureEvent = useMemo(
     () =>
@@ -1528,36 +1807,74 @@ export default function NowPlayingModal({
 
   const updateDragTranslate = React.useCallback(
     (dy: number) => {
+      isClosingRef.current = false;
+      stopModalAnim();
       if (dy > 0) {
         modalTranslateY.setValue(dy);
       } else {
         modalTranslateY.setValue(dy * 0.15);
       }
     },
-    [modalTranslateY]
+    [modalTranslateY, stopModalAnim]
   );
 
   const resetDragTranslate = React.useCallback(() => {
-    Animated.spring(modalTranslateY, {
+    isClosingRef.current = false;
+    const token = stopModalAnim();
+    const anim = Animated.spring(modalTranslateY, {
       toValue: 0,
       bounciness: 4,
       useNativeDriver: true,
-    }).start();
-  }, [modalTranslateY]);
+    });
+    trackModalAnim(anim);
+    anim.start(() => {
+      if (modalAnimTokenRef.current !== token || localModalAnimRef.current !== anim) return;
+      localModalAnimRef.current = null;
+      if (morphAnimRef && morphAnimRef.current === anim) morphAnimRef.current = null;
+    });
+  }, [modalTranslateY, morphAnimRef, stopModalAnim, trackModalAnim]);
 
   const closeWithSlide = React.useCallback(() => {
     if (isClosingRef.current) return;
     isClosingRef.current = true;
-    Animated.timing(modalTranslateY, {
-      toValue: SCREEN_HEIGHT,
-      duration: theme.transitions.sheetOutMs,
+    const token = stopModalAnim();
+    const startEpoch = morphEpochRef.current;
+    const targetY = morphTranslateY ? effectiveCollapseDistance : SCREEN_HEIGHT;
+    const anim = Animated.timing(modalTranslateY, {
+      toValue: targetY,
+      duration: 240,
       easing: sheetEaseOut,
       useNativeDriver: true,
-    }).start(() => {
-      onClose();
-      modalTranslateY.setValue(0);
     });
-  }, [modalTranslateY, onClose, sheetEaseOut]);
+    trackModalAnim(anim);
+    anim.start((result) => {
+      if (
+        modalAnimTokenRef.current !== token ||
+        localModalAnimRef.current !== anim ||
+        morphEpochRef.current !== startEpoch
+      ) {
+        return;
+      }
+      localModalAnimRef.current = null;
+      if (morphAnimRef && morphAnimRef.current === anim) morphAnimRef.current = null;
+      isClosingRef.current = false;
+      if (result?.finished !== false) {
+        onClose();
+        if (!morphTranslateY) {
+          modalTranslateY.setValue(0);
+        }
+      }
+    });
+  }, [
+    effectiveCollapseDistance,
+    modalTranslateY,
+    morphAnimRef,
+    morphTranslateY,
+    onClose,
+    sheetEaseOut,
+    stopModalAnim,
+    trackModalAnim,
+  ]);
 
   const handleModalRequestClose = React.useCallback(() => {
     if (isArtistModalVisible) {
@@ -1589,6 +1906,18 @@ export default function NowPlayingModal({
     isLyricsExpanded,
     closeWithSlide,
   ]);
+
+  useEffect(() => {
+    if (!persistentMode || !effectiveModalActive || !track) return;
+    if (typeof BackHandler?.addEventListener !== 'function') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleModalRequestClose();
+      return true;
+    });
+    return () => {
+      sub?.remove?.();
+    };
+  }, [effectiveModalActive, handleModalRequestClose, persistentMode, track]);
 
   const finishDragTranslate = React.useCallback(
     (dy: number, vyPerMs: number) => {
@@ -1678,6 +2007,7 @@ export default function NowPlayingModal({
             !isScrubbingRef.current &&
             !showContextMenu &&
             !isQueueSheetVisible &&
+            !isArtistModalVisible &&
             scrollYRef.current <= 5 &&
             gestureState.dy > 8 &&
             Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 1.2
@@ -1702,6 +2032,7 @@ export default function NowPlayingModal({
     [
       showContextMenu,
       isQueueSheetVisible,
+      isArtistModalVisible,
       updateDragTranslate,
       finishDragTranslate,
       resetDragTranslate,
@@ -1719,6 +2050,7 @@ export default function NowPlayingModal({
             !isNativePanActiveRef.current &&
             !showContextMenu &&
             !isQueueSheetVisible &&
+            !isArtistModalVisible &&
             gestureState.dy > 4 &&
             Math.abs(gestureState.dy) > Math.abs(gestureState.dx)
           );
@@ -1728,22 +2060,34 @@ export default function NowPlayingModal({
             !isNativePanActiveRef.current &&
             !showContextMenu &&
             !isQueueSheetVisible &&
+            !isArtistModalVisible &&
             gestureState.dy > 8 &&
             Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 1.2
           );
         },
+        onPanResponderGrant: () => {
+          isHeaderDraggingRef.current = false;
+        },
         onPanResponderMove: (_, gestureState) => {
-          if (!isNativePanActiveRef.current) {
+          if (
+            !isNativePanActiveRef.current &&
+            (isHeaderDraggingRef.current || Math.abs(gestureState.dy) > 4)
+          ) {
+            isHeaderDraggingRef.current = true;
             updateDragTranslate(gestureState.dy);
           }
         },
         onPanResponderRelease: (_, gestureState) => {
-          if (!isNativePanActiveRef.current) {
+          const wasDragging = isHeaderDraggingRef.current;
+          isHeaderDraggingRef.current = false;
+          if (!isNativePanActiveRef.current && wasDragging) {
             finishDragTranslate(gestureState.dy, gestureState.vy);
           }
         },
         onPanResponderTerminate: () => {
-          if (!isNativePanActiveRef.current) {
+          const wasDragging = isHeaderDraggingRef.current;
+          isHeaderDraggingRef.current = false;
+          if (!isNativePanActiveRef.current && wasDragging) {
             resetDragTranslate();
           }
         },
@@ -1751,6 +2095,7 @@ export default function NowPlayingModal({
     [
       showContextMenu,
       isQueueSheetVisible,
+      isArtistModalVisible,
       updateDragTranslate,
       finishDragTranslate,
       resetDragTranslate,
@@ -1762,7 +2107,7 @@ export default function NowPlayingModal({
       if (!track?.title || !track?.artist) {
         setLyricsPayload(null);
         setIsLoadingLyrics(false);
-        return () => {};
+        return () => { };
       }
       let isCancelled = false;
       setIsLoadingLyrics(true);
@@ -1886,12 +2231,22 @@ export default function NowPlayingModal({
     setCardPositions((prev) => ({ ...prev, lyrics: y }));
   }, []);
 
+  const dominantBgColor = useMemo(
+    () =>
+      getDominantTrackColor(
+        typeof track?.artwork === 'string' ? track.artwork : undefined,
+        track?.id,
+        track?.title
+      ),
+    [track?.artwork, track?.id, track?.title]
+  );
+
   useLayoutEffect(() => {
     clearSwipeFallbackTimer();
     swipeTranslateX.setValue(0);
   }, [clearSwipeFallbackTimer, swipeTranslateX, track?.id]);
 
-  if (!visible || !track) return null;
+  if (!track || (!visible && !persistentMode)) return null;
 
   const ambientColor = 'rgba(255, 255, 255, 0.06)';
   const nextTrack = displayedQueue.length > 0 ? displayedQueue[0] : null;
@@ -1922,22 +2277,26 @@ export default function NowPlayingModal({
     );
   };
 
-  return (
-    <Modal
-      visible={visible}
-      animationType="none"
-      transparent={true}
-      statusBarTranslucent={true}
-      hardwareAccelerated={true}
-      onShow={onNowPlayingModalShow}
-      onRequestClose={handleModalRequestClose}
-    >
-      <GestureHandlerRootView style={{ flex: 1 }}>
+  const renderModalInnerContent = (isInlinePreview: boolean) => {
+    const RootWrapper = isInlinePreview || persistentMode ? View : GestureHandlerRootView;
+    const attachRefs = !isInlinePreview;
+    const allowPointers = persistentMode ? effectiveModalActive : !isInlinePreview;
+    return (
+      <RootWrapper pointerEvents={allowPointers ? 'auto' : 'none'} style={{ flex: 1 }}>
         <View style={styles.safeContainer}>
           <PanGestureHandler
-            ref={dismissPanRef}
+            ref={attachRefs ? dismissPanRef : undefined}
             testID="player-dismiss-pan"
-            enabled={isAtTop && !showContextMenu && !isQueueSheetVisible && !isScrubbing}
+            enabled={
+              attachRefs &&
+              effectiveModalActive &&
+              !isMiniDragging &&
+              isAtTop &&
+              !showContextMenu &&
+              !isQueueSheetVisible &&
+              !isArtistModalVisible &&
+              !isScrubbing
+            }
             activeOffsetY={10}
             failOffsetY={-5}
             failOffsetX={[-15, 15]}
@@ -1947,6 +2306,8 @@ export default function NowPlayingModal({
             onHandlerStateChange={(evt: any) => {
               const { state, oldState, translationY, velocityY } = evt.nativeEvent;
               if (state === GestureState.ACTIVE) {
+                isClosingRef.current = false;
+                stopModalAnim();
                 isNativePanActiveRef.current = true;
               } else if (
                 state === GestureState.END &&
@@ -1966,26 +2327,96 @@ export default function NowPlayingModal({
             }}
           >
             <Animated.View
-              renderToHardwareTextureAndroid={!isQueueSheetVisible && !showContextMenu}
               style={[
-                styles.modalContentWrapper,
+                styles.clipWrapper,
                 {
-                  transform: [{ translateY: clampedModalTranslateY }],
+                  transform: [{ translateY: morphInterpolations.clipY }],
                 },
               ]}
-              {...modalPanResponder.panHandlers}
-              testID="now-playing-modal-content"
-              accessibilityLabel="Player em tela cheia - arraste para baixo para recolher"
             >
-          <AmbientGlowBackground
-            artworkUri={typeof track.artwork === 'string' ? track.artwork : null}
-          />
+              <Animated.View
+                renderToHardwareTextureAndroid={!isQueueSheetVisible && !showContextMenu}
+                style={[
+                  styles.modalContentWrapper,
+                  {
+                    transform: [{ translateY: morphInterpolations.innerTranslateY }],
+                  },
+                ]}
+                {...modalPanResponder.panHandlers}
+                testID="now-playing-modal-content"
+                accessibilityLabel="Player em tela cheia - arraste para baixo para recolher"
+              >
+                <Animated.View
+                  pointerEvents="none"
+                  style={[
+                    StyleSheet.absoluteFillObject,
+                    {
+                      backgroundColor: '#050505',
+                      opacity: morphInterpolations.sheetBodyOpacity,
+                    },
+                  ]}
+                >
+                  <AmbientGlowBackground
+                    artworkUri={typeof track.artwork === 'string' ? track.artwork : null}
+                  />
+                </Animated.View>
+                <Animated.View
+                  pointerEvents="none"
+                  style={[
+                    StyleSheet.absoluteFillObject,
+                    {
+                      backgroundColor: dominantBgColor,
+                      opacity: morphInterpolations.morphSurfaceOpacity,
+                    },
+                  ]}
+                />
+                <Animated.View
+                  pointerEvents="none"
+                  accessible={false}
+                  testID="player-morph-artwork"
+                  style={[
+                    styles.morphArtworkOverlay,
+                    {
+                      top: morphArtworkTop,
+                      left: (SCREEN_WIDTH - ARTWORK_BOX_SIZE) / 2,
+                      opacity: morphInterpolations.morphArtworkOpacity,
+                      transform: [
+                        { translateX: morphInterpolations.morphArtworkTranslateX },
+                        { translateY: morphInterpolations.morphArtworkTranslateY },
+                        { scale: morphInterpolations.morphArtworkScale },
+                      ],
+                    },
+                  ]}
+                >
+                  {track.artwork ? (
+                    <Image
+                      key={`morph-${track.id}`}
+                      source={{
+                        uri: typeof track.artwork === 'string' ? track.artwork : undefined,
+                      }}
+                      fadeDuration={0}
+                      style={[
+                        styles.artwork,
+                        Boolean(
+                          typeof track.artwork === 'string' &&
+                            /(?:hqdefault|sddefault)\.jpg/i.test(track.artwork)
+                        ) && styles.artworkLetterboxCrop,
+                      ]}
+                      resizeMode="cover"
+                      accessible={false}
+                    />
+                  ) : (
+                    <View style={styles.artworkFallback}>
+                      <Music2 color="#555555" size={64} />
+                    </View>
+                  )}
+                </Animated.View>
 
-          <SafeAreaView style={styles.safeContainer}>
+          <SafeAreaView style={[styles.safeContainer, { zIndex: 1 }]}>
           <PanGestureHandler
-            ref={horizontalPanRef}
+            ref={attachRefs ? horizontalPanRef : undefined}
             testID="player-horizontal-pan"
-            enabled={!showContextMenu && !isQueueSheetVisible && !isArtistModalVisible && !isScrubbing}
+            enabled={attachRefs && !showContextMenu && !isQueueSheetVisible && !isArtistModalVisible && !isScrubbing}
             activeOffsetX={[-15, 15]}
             failOffsetY={[-12, 12]}
             simultaneousHandlers={dismissPanRef}
@@ -1994,1114 +2425,1353 @@ export default function NowPlayingModal({
             onHandlerStateChange={(evt: any) => {
               const { state, oldState, translationX = 0, velocityX = 0 } = evt?.nativeEvent ?? {};
               if (state === GestureState.ACTIVE) {
-                swipeTranslateX.setValue(
-                  Math.max(-SCREEN_WIDTH * 0.85, Math.min(SCREEN_WIDTH * 0.85, translationX))
-                );
+                swipeTranslateX.setValue(Math.max(-SCREEN_WIDTH * 0.85, Math.min(SCREEN_WIDTH * 0.85, translationX)));
               } else if (state === GestureState.END && oldState === GestureState.ACTIVE) {
                 finishHorizontalSwipe(translationX, velocityX / 1000);
-              } else if (
-                (state === GestureState.CANCELLED || state === GestureState.FAILED) &&
-                oldState === GestureState.ACTIVE
-              ) {
+              } else if ((state === GestureState.CANCELLED || state === GestureState.FAILED) && oldState === GestureState.ACTIVE) {
                 resetHorizontalSwipe();
               }
             }}
           >
           <Animated.View style={styles.container}>
-          {/* Header Superior: Botão Minimizar e Indicador de Origem */}
-          <View
-            style={styles.header}
-            {...headerPanResponder.panHandlers}
-            accessibilityRole="toolbar"
-            accessibilityLabel="Barra superior do player - arraste para baixo para recolher"
-          >
-            <TouchableOpacity
-              style={styles.minimizeButton}
-              onPress={closeWithSlide}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-              accessibilityRole="button"
-              accessibilityLabel="Minimizar player"
-            >
-              <ChevronDown color="#FFFFFF" size={28} />
-            </TouchableOpacity>
-
-            <View style={styles.headerCenter} pointerEvents="none">
-              <Text style={styles.headerSubtitle}>TOCANDO AGORA</Text>
-              <Text style={styles.headerTitle} numberOfLines={1}>
-                {track.album || 'Sonary'}
-              </Text>
-            </View>
-
-            <TouchableOpacity
-              style={styles.headerAction}
-              onPress={openMenuSheet}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-              accessibilityRole="button"
-              accessibilityLabel="Mais opções"
-            >
-              <MoreVertical color={showContextMenu ? '#FFFFFF' : '#AAAAAA'} size={24} />
-            </TouchableOpacity>
-          </View>
-
-          {/* ScrollView Vertical Unificado Estilo Spotify */}
-          <GHScrollView
-            ref={mainScrollRef}
-            waitFor={[dismissPanRef, horizontalPanRef]}
-            bounces={false}
-            overScrollMode="never"
-            style={styles.mainScrollView}
-            contentContainerStyle={styles.mainScrollContent}
-            showsVerticalScrollIndicator={false}
-            scrollEventThrottle={16}
-            onScroll={(e) => {
-              const y = e?.nativeEvent?.contentOffset?.y ?? 0;
-              scrollYRef.current = y;
-              const nextAtTop = y <= 5;
-              if (nextAtTop !== isAtTopRef.current) {
-                isAtTopRef.current = nextAtTop;
-                setIsAtTop(nextAtTop);
-              }
-            }}
-            onLayout={(e) => {
-              const h = e.nativeEvent.layout.height;
-              if (h > 400 && Math.abs(h - viewportHeight) > 10) {
-                setViewportHeight(h);
-              }
-            }}
-          >
-            {/* 1. SEÇÃO HERO DO PLAYER (Layout ergonômico estilo Spotify: thumb zone inferior) */}
-            <View style={[styles.heroSection, { minHeight: viewportHeight - 64 }]}>
-              {/* Capa expansiva estilo carrossel Spotify: revela capa anterior/próxima ao arrastar */}
-              <View style={styles.artworkContainer}>
-                {previousTrack && (
-                  <Animated.View
-                    pointerEvents="none"
-                    style={[
-                      styles.artworkWrapper,
-                      styles.adjacentArtworkWrapper,
-                      {
-                        opacity: swipeTranslateX.interpolate({
-                          inputRange: [0, 1, SCREEN_WIDTH],
-                          outputRange: [0, 0.9, 1],
-                          extrapolate: 'clamp',
-                        }),
-                        transform: [
-                          {
-                            translateX: swipeTranslateX.interpolate({
-                              inputRange: [-SCREEN_WIDTH, 0, SCREEN_WIDTH],
-                              outputRange: [-SCREEN_WIDTH, -SCREEN_WIDTH, 0],
-                              extrapolate: 'clamp',
-                            }),
-                          },
-                        ],
-                      },
-                    ]}
-                  >
-                    {renderArtworkVisual(previousTrack, false)}
-                  </Animated.View>
-                )}
-
-                {nextTrack && (
-                  <Animated.View
-                    pointerEvents="none"
-                    style={[
-                      styles.artworkWrapper,
-                      styles.adjacentArtworkWrapper,
-                      {
-                        opacity: swipeTranslateX.interpolate({
-                          inputRange: [-SCREEN_WIDTH, -1, 0],
-                          outputRange: [1, 0.9, 0],
-                          extrapolate: 'clamp',
-                        }),
-                        transform: [
-                          {
-                            translateX: swipeTranslateX.interpolate({
-                              inputRange: [-SCREEN_WIDTH, 0, SCREEN_WIDTH],
-                              outputRange: [0, SCREEN_WIDTH, SCREEN_WIDTH],
-                              extrapolate: 'clamp',
-                            }),
-                          },
-                        ],
-                      },
-                    ]}
-                  >
-                    {renderArtworkVisual(nextTrack, false)}
-                  </Animated.View>
-                )}
-
-                <Animated.View
-                  style={[
-                    styles.artworkWrapper,
-                    {
-                      opacity: swipeTranslateX.interpolate({
-                        inputRange: [-SCREEN_WIDTH * 0.5, 0, SCREEN_WIDTH * 0.5],
-                        outputRange: [0.45, 1, 0.45],
-                        extrapolate: 'clamp',
-                      }),
-                      transform: [{ scale: scaleAnim }, { translateX: swipeTranslateX }],
-                    },
-                  ]}
-                >
-                  {renderArtworkVisual(track, true)}
-                </Animated.View>
-              </View>
-
-              {/* Bloco de Controles aproximado da parte inferior (Thumb Zone natural) */}
-              <View style={styles.heroControlsArea}>
-                {/* Metadados da Faixa: Título com Chevron, Artista e Botão de Favoritar */}
-                <View style={styles.metadataRow}>
-                  <Animated.View
-                    style={[
-                      styles.titleCol,
-                      {
-                        opacity: swipeTranslateX.interpolate({
-                          inputRange: [-SCREEN_WIDTH * 0.5, 0, SCREEN_WIDTH * 0.5],
-                          outputRange: [0.55, 1, 0.55],
-                          extrapolate: 'clamp',
-                        }),
-                        transform: [
-                          {
-                            translateX: swipeTranslateX.interpolate({
-                              inputRange: [-SCREEN_WIDTH, SCREEN_WIDTH],
-                              outputRange: [-SCREEN_WIDTH * 0.45, SCREEN_WIDTH * 0.45],
-                            }),
-                          },
-                        ],
-                      },
-                    ]}
-                  >
-                    <View style={styles.titleWithChevron}>
-                      <MarqueeText
-                        active={true}
-                        containerStyle={styles.titleMarqueeContainer}
-                        style={styles.trackTitle}
-                      >
-                        {track.title || 'Faixa sem título'}
-                      </MarqueeText>
-                      <ChevronRight color="#AAAAAA" size={22} style={styles.titleChevron} />
-                    </View>
-                    <TouchableOpacity
-                      onPress={() => setIsArtistModalVisible(true)}
-                      activeOpacity={0.75}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Ver perfil de ${track.artist || 'Artista'}`}
-                    >
-                      <MarqueeText active={true} style={styles.trackArtist}>
-                        {track.artist || 'Artista desconhecido'}
-                      </MarqueeText>
-                    </TouchableOpacity>
-                  </Animated.View>
-
-                  {onToggleFavorite && (
-                    <TouchableOpacity
-                      style={styles.favoriteButton}
-                      onPress={onToggleFavorite}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      accessibilityRole="button"
-                      accessibilityLabel={isFavorite ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}
-                    >
-                      <Heart
-                        color={isFavorite ? '#FF0000' : '#AAAAAA'}
-                        fill={isFavorite ? '#FF0000' : 'transparent'}
-                        size={26}
-                      />
-                    </TouchableOpacity>
-                  )}
-                </View>
-
-                {/* Scrubber de Progresso Interativo isolado com useProgress */}
-                <PlayerProgressSection
-                  trackDuration={track.duration}
-                  fallbackPosition={fallbackPosition}
-                  onSeek={onSeek}
-                  scrubberPanRef={scrubberPanRef}
-                  onScrubbingChange={handleScrubbingChange}
-                />
-
-                {/* Controles Principais de Reprodução: Linha de 5 Botões no Thumb Zone */}
-                <View style={styles.controlsContainer}>
-                  {/* 1. Shuffle na extrema esquerda */}
-                  {onToggleShuffle ? (
-                    <TouchableOpacity
-                      style={styles.sideControlButton}
-                      onPress={onToggleShuffle}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      accessibilityRole="button"
-                      accessibilityLabel="Ordem aleatória"
-                      activeOpacity={0.7}
-                    >
-                      <Shuffle
-                        color={isShuffleActive ? '#FFFFFF' : '#717171'}
-                        size={24}
-                      />
-                    </TouchableOpacity>
-                  ) : (
-                    <View style={styles.sideControlButton} />
-                  )}
-
-                  {/* 2. Skip Previous */}
-                  <TouchableOpacity
-                    style={styles.skipButton}
-                    onPress={() => onSkipPrevious(false)}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    accessibilityRole="button"
-                    accessibilityLabel="Faixa anterior"
-                  >
-                    <SkipBack color="#FFFFFF" size={32} fill="#FFFFFF" />
-                  </TouchableOpacity>
-
-                  {/* 3. Play / Pause Principal (Círculo Branco Maciço 72px) */}
-                  <TouchableOpacity
-                    style={styles.mainPlayButton}
-                    onPress={onTogglePlay}
-                    activeOpacity={0.85}
-                    accessibilityRole="button"
-                    accessibilityLabel={isPlaying ? 'Pausar' : 'Tocar'}
-                  >
-                    {isBuffering ? (
-                      <ActivityIndicator color="#030303" size="large" />
-                    ) : isPlaying ? (
-                      <Pause color="#030303" size={32} fill="#030303" />
-                    ) : (
-                      <Play
-                        color="#030303"
-                        size={32}
-                        fill="#030303"
-                        style={{ marginLeft: 3 }}
-                      />
-                    )}
-                  </TouchableOpacity>
-
-                  {/* 4. Skip Next */}
-                  <TouchableOpacity
-                    style={styles.skipButton}
-                    onPress={onSkipNext}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    accessibilityRole="button"
-                    accessibilityLabel="Próxima faixa"
-                  >
-                    <SkipForward color="#FFFFFF" size={32} fill="#FFFFFF" />
-                  </TouchableOpacity>
-
-                  {/* 5. Repeat na extrema direita */}
-                  {onToggleRepeat ? (
-                    <TouchableOpacity
-                      style={styles.sideControlButton}
-                      onPress={onToggleRepeat}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      accessibilityRole="button"
-                      accessibilityLabel="Repetir"
-                      activeOpacity={0.7}
-                    >
-                      {repeatMode === RepeatMode.Track ? (
-                        <Repeat1 color="#FF0000" size={24} />
-                      ) : (
-                        <Repeat
-                          color={repeatMode === RepeatMode.Queue ? '#FFFFFF' : '#717171'}
-                          size={24}
-                        />
-                      )}
-                    </TouchableOpacity>
-                  ) : (
-                    <View style={styles.sideControlButton} />
-                  )}
-                </View>
-
-                {/* Pílulas de Navegação Rápida de Seção */}
-                <View style={styles.sheetTabsRow}>
-                  <TouchableOpacity
-                    style={[
-                      styles.sheetTabButton,
-                      (isQueueSheetVisible || activePlayerTab === 'upnext') &&
-                        styles.sheetTabButtonActive,
-                    ]}
-                    onPress={openQueueSheet}
-                    accessibilityRole="button"
-                    accessibilityLabel="Fila"
-                  >
-                    <Text
+                    <Animated.View
                       style={[
-                        styles.sheetTabText,
-                        (isQueueSheetVisible || activePlayerTab === 'upnext') &&
-                          styles.sheetTabTextActive,
+                        styles.header,
+                        { opacity: morphInterpolations.expandedControlsOpacity },
                       ]}
+                      {...headerPanResponder.panHandlers}
+                      accessibilityRole="toolbar"
+                      accessibilityLabel="Barra superior do player - arraste para baixo para recolher"
                     >
-                      FILA
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.sheetTabButton,
-                      activePlayerTab === 'lyrics' && styles.sheetTabButtonActive,
-                    ]}
-                    onPress={() => scrollToSection('lyrics')}
-                    accessibilityRole="button"
-                    accessibilityLabel="Letras"
-                  >
-                    <Text
-                      style={[
-                        styles.sheetTabText,
-                        activePlayerTab === 'lyrics' && styles.sheetTabTextActive,
-                      ]}
-                    >
-                      LETRAS
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.sheetTabButton,
-                      activePlayerTab === 'related' && styles.sheetTabButtonActive,
-                    ]}
-                    onPress={() => scrollToSection('related')}
-                    accessibilityRole="button"
-                    accessibilityLabel="Relacionados"
-                  >
-                    <Text
-                      style={[
-                        styles.sheetTabText,
-                        activePlayerTab === 'related' && styles.sheetTabTextActive,
-                      ]}
-                    >
-                      RELACIONADOS
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-
-            {/* 2. CARD DE LETRAS (SPOTIFY LYRICS CARD - Componente desacoplado e memoizado) */}
-            <PlayerLyricsSection
-              track={track}
-              fallbackPosition={fallbackPosition}
-              lyricsPayload={lyricsPayload}
-              syncedLyricsProp={syncedLyrics}
-              isLoading={isLoadingLyrics}
-              isExpanded={isLyricsExpanded}
-              onToggleExpand={handleLyricsToggleExpand}
-              onHeaderPress={handleLyricsHeaderPress}
-              onSeekTo={handleLyricsSeekTo}
-              onRetry={handleLyricsRetry}
-              ambientColor={ambientColor}
-              onCardLayout={handleLyricsCardLayout}
-            />
-
-            {/* 3. CARD DE RELACIONADOS E SOBRE O ARTISTA (SPOTIFY ARTIST & RECOMMENDATIONS) */}
-            <View
-              style={styles.spotifyArtistCard}
-              onLayout={(e) => {
-                const y = e.nativeEvent.layout.y;
-                setCardPositions((prev) => ({ ...prev, related: y }));
-              }}
-            >
-              <Text style={styles.spotifyCardTitle}>Sobre o artista</Text>
-
-              <TouchableOpacity
-                style={styles.spotifyArtistHero}
-                onPress={() => setIsArtistModalVisible(true)}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityLabel="Abrir perfil do artista"
-              >
-                <View style={styles.spotifyArtistAvatar}>
-                  {artistProfile?.avatarUrl ? (
-                    <Image
-                      source={{ uri: artistProfile.avatarUrl }}
-                      style={styles.spotifyArtistAvatarImg}
-                      resizeMode="cover"
-                      accessibilityRole="image"
-                      accessibilityLabel={`Foto de ${track.artist || 'Artista'}`}
-                    />
-                  ) : (
-                    <Sparkles color="#FFFFFF" size={24} />
-                  )}
-                </View>
-                <View style={styles.spotifyArtistMeta}>
-                  <Text style={styles.spotifyArtistName} numberOfLines={1}>
-                    {artistProfile?.name || effectiveArtistName}
-                  </Text>
-                  <Text style={styles.spotifyArtistSub} numberOfLines={1}>
-                    {`${artistProfile?.subscriberCountText || 'Artista Verificado'} • Explorar discografia e canais recomendados`}
-                  </Text>
-                </View>
-                <ChevronRight color="#AAAAAA" size={20} />
-              </TouchableOpacity>
-
-              <Text style={styles.spotifyArtistBio}>
-                {artistProfile?.bio ||
-                  'Ouça os maiores sucessos, novas faixas e mergulhe na rádio personalizada com base nas suas preferências musicais.'}
-              </Text>
-
-              <View style={styles.spotifyDivider} />
-
-              <Text style={styles.spotifySectionHeading}>Você também pode gostar</Text>
-
-              {/* Ação 1: Rádio da Música (Track Radio) */}
-              <View style={styles.spotifyRelatedCard}>
-                <View style={styles.spotifyRelatedLeft}>
-                  <View style={styles.spotifyRelatedIconBadge}>
-                    <Music2 color="#FFFFFF" size={20} />
-                  </View>
-                  <View style={styles.spotifyRelatedInfo}>
-                    <Text style={styles.spotifyRelatedTrackTitle} numberOfLines={1}>
-                      {`Mix Especial de ${resolvedTrackMeta.cleanTitle || track.title || 'Músicas'}`}
-                    </Text>
-                    <Text style={styles.spotifyRelatedSubtitle}>
-                      Sonary Smart Radio
-                    </Text>
-                  </View>
-                </View>
-
-                <TouchableOpacity
-                  style={styles.spotifyPlayCircle}
-                  onPress={() => {
-                    if (onStartTrackRadio) {
-                      onStartTrackRadio();
-                    } else {
-                      onTogglePlay();
-                    }
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Tocar mix relacionado"
-                >
-                  {isLoadingRadio ? (
-                    <ActivityIndicator color="#030303" size="small" />
-                  ) : (
-                    <Play color="#030303" size={16} fill="#030303" style={{ marginLeft: 2 }} />
-                  )}
-                </TouchableOpacity>
-              </View>
-
-              {/* Ação 2: Rádio do Artista (Artist Radio) */}
-              <TouchableOpacity
-                style={styles.spotifyRelatedCard}
-                onPress={() => {
-                  if (onStartArtistRadio) {
-                    onStartArtistRadio(
-                      effectiveArtistName,
-                      artistProfile?.channelId
-                    );
-                  } else {
-                    onTogglePlay();
-                  }
-                }}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityLabel="Iniciar rádio do artista"
-              >
-                <View style={styles.spotifyRelatedLeft}>
-                  <View style={[styles.spotifyRelatedIconBadge, { backgroundColor: '#333333' }]}>
-                    <Radio color="#FFFFFF" size={20} />
-                  </View>
-                  <View style={styles.spotifyRelatedInfo}>
-                    <Text style={styles.spotifyRelatedTrackTitle} numberOfLines={1}>
-                      {`Rádio de ${effectiveArtistName}`}
-                    </Text>
-                    <Text style={styles.spotifyRelatedSubtitle}>
-                      Descobertas e faixas similares
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.spotifyPillBadge}>
-                  <Text style={styles.spotifyPillBadgeText}>Mix Contínuo</Text>
-                </View>
-              </TouchableOpacity>
-
-              {/* Lista Dinâmica de Faixas Relacionadas Reais */}
-              {(isLoadingRelated || isFetchingRelated) &&
-              effectiveRelatedTracks.length === 0 ? (
-                <View style={styles.relatedSkeletonWrap}>
-                  <TrackRowSkeleton
-                    count={4}
-                    thumbnailSize={40}
-                    thumbnailRadius={8}
-                    horizontalPadding={0}
-                    showDuration={false}
-                  />
-                </View>
-              ) : (
-                effectiveRelatedTracks.slice(0, 6).map((relTrack, rIdx) => (
-                  <TouchableOpacity
-                    key={`${relTrack.id}-${rIdx}`}
-                    style={styles.spotifyRelatedCard}
-                    onPress={() => onPlayRelatedTrack?.(relTrack)}
-                    activeOpacity={0.8}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Tocar relacionada ${relTrack.title}`}
-                  >
-                    <View style={styles.spotifyRelatedLeft}>
-                      {relTrack.thumbnailUrl ? (
-                        <Image
-                          source={{ uri: relTrack.thumbnailUrl }}
-                          style={styles.relatedThumbImg}
-                          resizeMode="cover"
-                        />
-                      ) : (
-                        <View style={styles.spotifyRelatedIconBadge}>
-                          <Music2 color="#FFFFFF" size={18} />
-                        </View>
-                      )}
-                      <View style={styles.spotifyRelatedInfo}>
-                        <MarqueeText
-                          active={track?.id === relTrack.id}
-                          style={styles.spotifyRelatedTrackTitle}
-                        >
-                          {relTrack.title}
-                        </MarqueeText>
-                        <TrackMetaRow
-                          style={styles.spotifyRelatedMetaRow}
-                          active={track?.id === relTrack.id}
-                          artistText={relTrack.artist}
-                          textStyle={styles.spotifyRelatedSubtitle}
-                        />
-                      </View>
-                    </View>
-
-                    <Text style={styles.relatedDurationText} numberOfLines={1}>
-                      {relTrack.formattedDuration || '3:30'}
-                    </Text>
-
-                    {onAddRelatedToQueue ? (
                       <TouchableOpacity
-                        style={styles.relatedQueueAddBtn}
-                        onPress={(e) => {
-                          e?.stopPropagation?.();
-                          onAddRelatedToQueue(relTrack);
-                        }}
+                        style={styles.minimizeButton}
+                        onPress={closeWithSlide}
+                        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                         accessibilityRole="button"
-                        accessibilityLabel={`Adicionar ${relTrack.title} à fila`}
+                        accessibilityLabel="Minimizar player"
                       >
-                        <ListPlus color="#FFFFFF" size={18} />
+                        <ChevronDown color="#FFFFFF" size={28} />
                       </TouchableOpacity>
-                    ) : (
-                      <View style={styles.spotifyPlayCircle}>
-                        <Play color="#030303" size={14} fill="#030303" style={{ marginLeft: 2 }} />
+
+                      <View style={styles.headerCenter} pointerEvents="none">
+                        <Text style={styles.headerSubtitle}>TOCANDO AGORA</Text>
+                        <Text style={styles.headerTitle} numberOfLines={1}>
+                          {track.album || 'Sonary'}
+                        </Text>
                       </View>
-                    )}
-                  </TouchableOpacity>
-                ))
-              )}
-            </View>
-          </GHScrollView>
-        </Animated.View>
-        </PanGestureHandler>
-        </SafeAreaView>
 
-        {/* Menu Contextual Estilo Bottom Sheet do YouTube Music */}
-        {showContextMenu && (
-          <Animated.View
-            style={[styles.modalSheetOverlay, { opacity: sheetBackdropOpacity }]}
-          >
-            <TouchableOpacity
-              style={styles.sheetBackdrop}
-              activeOpacity={1}
-              onPress={() => dismissMenuSheet()}
-            >
-              <Animated.View
-                renderToHardwareTextureAndroid
-                style={[
-                  styles.sheetContainer,
-                  {
-                    transform: [{ translateY: sheetTranslateY }],
-                  },
-                ]}
-                onStartShouldSetResponder={() => true}
-                onTouchEnd={(e) => e?.stopPropagation?.()}
-              >
-                {/* Área de arrasto superior com PanResponder para recolher */}
-                <View
-                  style={styles.sheetDragArea}
-                  {...sheetPanResponder.panHandlers}
-                  accessibilityRole="adjustable"
-                  accessibilityLabel="Arraste para baixo para recolher o menu"
-                >
-                  <View style={styles.sheetDragHandle} />
-                </View>
+                      <TouchableOpacity
+                        style={styles.headerAction}
+                        onPress={openMenuSheet}
+                        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Mais opções"
+                      >
+                        <MoreVertical color={showContextMenu ? '#FFFFFF' : '#AAAAAA'} size={24} />
+                      </TouchableOpacity>
+                    </Animated.View>
 
-                {/* Cabeçalho com Título, Artista, Duração e Botão Fechar */}
-                <View style={styles.sheetHeader}>
-                  <View
-                    style={styles.sheetHeaderInfo}
-                    {...sheetPanResponder.panHandlers}
-                  >
-                    <Text style={styles.sheetTitle} numberOfLines={1}>
-                      {track.title || 'Faixa sem título'}
-                    </Text>
-                    <Text style={styles.sheetSubtitle} numberOfLines={1}>
-                      {track.artist || 'Artista'}
-                      {effectiveDuration > 0 ? ` • ${formatTime(effectiveDuration)}` : ''}
-                    </Text>
-                  </View>
-
-                  <TouchableOpacity
-                    style={styles.sheetCloseButton}
-                    onPress={() => dismissMenuSheet()}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    accessibilityRole="button"
-                    accessibilityLabel="Fechar menu"
-                  >
-                    <X color="#FFFFFF" size={22} />
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.sheetDivider} />
-
-                {/* 3 Blocos de Ação Rápida no Topo (YouTube Music Tiles) */}
-                <View style={styles.quickTilesRow}>
-                  {onPlayNext ? (
-                    <TouchableOpacity
-                      style={styles.quickTile}
-                      onPress={(e) => {
-                        e?.stopPropagation?.();
-                        dismissMenuSheet();
-                        onPlayNext();
-                      }}
-                      accessibilityRole="button"
-                      accessibilityLabel="Tocar a seguir"
-                    >
-                      <ListPlus color="#FFFFFF" size={22} />
-                      <Text style={styles.quickTileText} numberOfLines={1}>
-                        Tocar a seguir
-                      </Text>
-                    </TouchableOpacity>
-                  ) : (
-                    <TouchableOpacity
-                      style={styles.quickTile}
-                      onPress={(e) => {
-                        e?.stopPropagation?.();
-                        dismissMenuSheet(openQueueSheet);
-                      }}
-                      accessibilityRole="button"
-                      accessibilityLabel="Ver fila"
-                    >
-                      <ListMusic color="#FFFFFF" size={22} />
-                      <Text style={styles.quickTileText} numberOfLines={1}>
-                        Ver fila
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-
-                  <TouchableOpacity
-                    style={styles.quickTile}
-                    onPress={(e) => {
-                      e?.stopPropagation?.();
-                      dismissMenuSheet(openQueueSheet);
-                    }}
-                    accessibilityRole="button"
-                    accessibilityLabel="Fila / Rádio"
-                  >
-                    <Radio color="#FFFFFF" size={22} />
-                    <Text style={styles.quickTileText} numberOfLines={1}>
-                      Fila / Rádio
-                    </Text>
-                  </TouchableOpacity>
-
-                  {onAddToPlaylist && (
-                    <TouchableOpacity
-                      style={styles.quickTile}
-                      onPress={(e) => {
-                        e?.stopPropagation?.();
-                        dismissMenuSheet();
-                        onAddToPlaylist();
-                      }}
-                      accessibilityRole="button"
-                      accessibilityLabel="Playlist"
-                    >
-                      <Plus color="#FFFFFF" size={22} />
-                      <Text style={styles.quickTileText} numberOfLines={1}>
-                        Playlist
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-
-                {/* Lista Vertical de Opções */}
-                <View style={styles.sheetActionsList}>
-                  {onAddToQueue && (
-                    <TouchableOpacity
-                      style={styles.sheetActionRow}
-                      onPress={(e) => {
-                        e?.stopPropagation?.();
-                        dismissMenuSheet();
-                        onAddToQueue();
-                      }}
-                      accessibilityRole="button"
-                      accessibilityLabel="Adicionar ao fim da fila"
-                    >
-                      <ListMusic color="#FFFFFF" size={22} />
-                      <Text style={styles.sheetActionText}>Adicionar ao fim da fila</Text>
-                    </TouchableOpacity>
-                  )}
-
-                  <TouchableOpacity
-                    style={styles.sheetActionRow}
-                    onPress={(e) => {
-                      e?.stopPropagation?.();
-                      dismissMenuSheet(openQueueSheet);
-                    }}
-                    accessibilityRole="button"
-                    accessibilityLabel="Ver fila de reprodução"
-                  >
-                    <ListMusic color="#FFFFFF" size={22} />
-                    <Text style={styles.sheetActionText}>Ver fila de reprodução</Text>
-                  </TouchableOpacity>
-
-                  {onDownload && (
-                    <TouchableOpacity
-                      style={styles.sheetActionRow}
-                      onPress={(e) => {
-                        e?.stopPropagation?.();
-                        dismissMenuSheet();
-                        if (!isDownloaded && !isDownloading && !isQueued) {
-                          onDownload();
+                    {/* ScrollView Vertical Unificado Estilo Spotify */}
+                    <GHScrollView
+                      ref={attachRefs ? mainScrollRef : undefined}
+                      waitFor={attachRefs ? [dismissPanRef, horizontalPanRef] : undefined}
+                      bounces={false}
+                      overScrollMode="never"
+                      style={styles.mainScrollView}
+                      contentContainerStyle={styles.mainScrollContent}
+                      showsVerticalScrollIndicator={false}
+                      scrollEventThrottle={16}
+                      onScroll={(e) => {
+                        const y = e?.nativeEvent?.contentOffset?.y ?? 0;
+                        scrollYRef.current = y;
+                        const nextAtTop = y <= 5;
+                        if (nextAtTop !== isAtTopRef.current) {
+                          isAtTopRef.current = nextAtTop;
+                          setIsAtTop(nextAtTop);
                         }
                       }}
-                      accessibilityRole="button"
-                      accessibilityLabel={
-                        isDownloaded
-                          ? 'Música salva offline'
-                          : isDownloading
-                            ? 'Baixando música'
-                            : isQueued
-                              ? 'Na fila de downloads'
-                              : 'Salvar offline'
-                      }
-                    >
-                      {isDownloaded ? (
-                        <CheckCircle2 color="#2BA640" size={22} />
-                      ) : isDownloading ? (
-                        <ActivityIndicator color="#FFFFFF" size="small" />
-                      ) : isQueued ? (
-                        <Clock color="#AAAAAA" size={22} />
-                      ) : (
-                        <Download color="#FFFFFF" size={22} />
-                      )}
-                      <Text style={styles.sheetActionText}>
-                        {isDownloaded
-                          ? 'Música já baixada'
-                          : isDownloading
-                            ? `Baixando${downloadProgress > 0 ? ` (${downloadProgress}%)` : '...'}`
-                            : isQueued
-                              ? 'Na fila de downloads'
-                              : 'Salvar offline'}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-
-                  {onAddToPlaylist && (
-                    <TouchableOpacity
-                      style={styles.sheetActionRow}
-                      onPress={(e) => {
-                        e?.stopPropagation?.();
-                        dismissMenuSheet();
-                        onAddToPlaylist();
+                      onLayout={(e) => {
+                        const { y, height: h } = e.nativeEvent.layout;
+                        if (!isInlinePreview) {
+                          updateArtworkLayoutMetric('scrollY', y);
+                        }
+                        if (h > 400 && Math.abs(h - viewportHeight) > 10) {
+                          setViewportHeight(h);
+                        }
                       }}
-                      accessibilityRole="button"
-                      accessibilityLabel="Adicionar à playlist"
                     >
-                      <Plus color="#FFFFFF" size={22} />
-                      <Text style={styles.sheetActionText}>Adicionar à playlist</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </Animated.View>
-            </TouchableOpacity>
-          </Animated.View>
-        )}
+                      {/* 1. SEÇÃO HERO DO PLAYER (Layout ergonômico estilo Spotify: thumb zone inferior) */}
+                      <View style={[styles.heroSection, { minHeight: viewportHeight - 64 }]}>
+                        {/* Capa expansiva estilo carrossel Spotify: revela capa anterior/próxima ao arrastar */}
+                        <View style={styles.artworkContainer}>
+                          {previousTrack && (
+                            <Animated.View
+                              pointerEvents="none"
+                              style={[
+                                styles.artworkWrapper,
+                                styles.adjacentArtworkWrapper,
+                                {
+                                  opacity: swipeTranslateX.interpolate({
+                                    inputRange: [0, 1, SCREEN_WIDTH],
+                                    outputRange: [0, 0.9, 1],
+                                    extrapolate: 'clamp',
+                                  }),
+                                  transform: [
+                                    {
+                                      translateX: swipeTranslateX.interpolate({
+                                        inputRange: [-SCREEN_WIDTH, 0, SCREEN_WIDTH],
+                                        outputRange: [-SCREEN_WIDTH, -SCREEN_WIDTH, 0],
+                                        extrapolate: 'clamp',
+                                      }),
+                                    },
+                                  ],
+                                },
+                              ]}
+                            >
+                              {renderArtworkVisual(previousTrack, false)}
+                            </Animated.View>
+                          )}
 
-        {/* Modal Bottom Sheet da Fila Estilo Spotify */}
-        {isQueueSheetVisible && (
-          <Animated.View
-            style={[styles.modalSheetOverlay, { opacity: queueBackdropOpacity }]}
-          >
-            <TouchableOpacity
-              style={styles.sheetBackdrop}
-              activeOpacity={1}
-              onPress={dismissQueueSheet}
-            >
+                          {nextTrack && (
+                            <Animated.View
+                              pointerEvents="none"
+                              style={[
+                                styles.artworkWrapper,
+                                styles.adjacentArtworkWrapper,
+                                {
+                                  opacity: swipeTranslateX.interpolate({
+                                    inputRange: [-SCREEN_WIDTH, -1, 0],
+                                    outputRange: [1, 0.9, 0],
+                                    extrapolate: 'clamp',
+                                  }),
+                                  transform: [
+                                    {
+                                      translateX: swipeTranslateX.interpolate({
+                                        inputRange: [-SCREEN_WIDTH, 0, SCREEN_WIDTH],
+                                        outputRange: [0, SCREEN_WIDTH, SCREEN_WIDTH],
+                                        extrapolate: 'clamp',
+                                      }),
+                                    },
+                                  ],
+                                },
+                              ]}
+                            >
+                              {renderArtworkVisual(nextTrack, false)}
+                            </Animated.View>
+                          )}
+
+                          <Animated.View
+                            style={{ opacity: morphInterpolations.inScrollArtworkFade }}
+                            onLayout={(e) => {
+                              if (!isInlinePreview) {
+                                updateArtworkLayoutMetric('boxY', e.nativeEvent.layout.y);
+                              }
+                            }}
+                          >
+                            <Animated.View
+                              style={[
+                                styles.artworkWrapper,
+                                {
+                                  opacity: swipeTranslateX.interpolate({
+                                    inputRange: [-SCREEN_WIDTH * 0.5, 0, SCREEN_WIDTH * 0.5],
+                                    outputRange: [0.45, 1, 0.45],
+                                    extrapolate: 'clamp',
+                                  }),
+                                  transform: [{ scale: scaleAnim }, { translateX: swipeTranslateX }],
+                                },
+                              ]}
+                            >
+                              {renderArtworkVisual(track, true)}
+                            </Animated.View>
+                          </Animated.View>
+                        </View>
+
+                        {/* Bloco de Controles aproximado da parte inferior (Thumb Zone natural) */}
+                        <Animated.View
+                          style={[
+                            styles.heroControlsArea,
+                            { opacity: morphInterpolations.expandedControlsOpacity },
+                          ]}
+                        >
+                          {/* Metadados da Faixa: Título com Chevron, Artista e Botão de Favoritar */}
+                          <View style={styles.metadataRow}>
+                            <Animated.View
+                              style={[
+                                styles.titleCol,
+                                {
+                                  opacity: swipeTranslateX.interpolate({
+                                    inputRange: [-SCREEN_WIDTH * 0.5, 0, SCREEN_WIDTH * 0.5],
+                                    outputRange: [0.55, 1, 0.55],
+                                    extrapolate: 'clamp',
+                                  }),
+                                  transform: [
+                                    {
+                                      translateX: swipeTranslateX.interpolate({
+                                        inputRange: [-SCREEN_WIDTH, SCREEN_WIDTH],
+                                        outputRange: [-SCREEN_WIDTH * 0.45, SCREEN_WIDTH * 0.45],
+                                      }),
+                                    },
+                                  ],
+                                },
+                              ]}
+                            >
+                              <View style={styles.titleWithChevron}>
+                                <MarqueeText
+                                  active={true}
+                                  containerStyle={styles.titleMarqueeContainer}
+                                  style={styles.trackTitle}
+                                >
+                                  {track.title || 'Faixa sem título'}
+                                </MarqueeText>
+                                <ChevronRight color="#AAAAAA" size={22} style={styles.titleChevron} />
+                              </View>
+                              <TouchableOpacity
+                                onPress={() => setIsArtistModalVisible(true)}
+                                activeOpacity={0.75}
+                                accessibilityRole="button"
+                                accessibilityLabel={`Ver perfil de ${track.artist || 'Artista'}`}
+                              >
+                                <MarqueeText active={true} style={styles.trackArtist}>
+                                  {track.artist || 'Artista desconhecido'}
+                                </MarqueeText>
+                              </TouchableOpacity>
+                            </Animated.View>
+
+                            {onToggleFavorite && (
+                              <TouchableOpacity
+                                style={styles.favoriteButton}
+                                onPress={onToggleFavorite}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                accessibilityRole="button"
+                                accessibilityLabel={isFavorite ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}
+                              >
+                                <Heart
+                                  color={isFavorite ? '#FF0000' : '#AAAAAA'}
+                                  fill={isFavorite ? '#FF0000' : 'transparent'}
+                                  size={26}
+                                />
+                              </TouchableOpacity>
+                            )}
+                          </View>
+
+                          {/* Scrubber de Progresso Interativo isolado com useProgress */}
+                          <PlayerProgressSection
+                            trackDuration={track.duration}
+                            fallbackPosition={fallbackPosition}
+                            onSeek={onSeek}
+                            scrubberPanRef={attachRefs ? scrubberPanRef : dummyScrubberPanRef}
+                            onScrubbingChange={handleScrubbingChange}
+                          />
+
+                          {/* Controles Principais de Reprodução: Linha de 5 Botões no Thumb Zone */}
+                          <View style={styles.controlsContainer}>
+                            {/* 1. Shuffle na extrema esquerda */}
+                            {onToggleShuffle ? (
+                              <TouchableOpacity
+                                style={styles.sideControlButton}
+                                onPress={onToggleShuffle}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                accessibilityRole="button"
+                                accessibilityLabel="Ordem aleatória"
+                                activeOpacity={0.7}
+                              >
+                                <Shuffle
+                                  color={isShuffleActive ? '#FFFFFF' : '#717171'}
+                                  size={24}
+                                />
+                              </TouchableOpacity>
+                            ) : (
+                              <View style={styles.sideControlButton} />
+                            )}
+
+                            {/* 2. Skip Previous */}
+                            <TouchableOpacity
+                              style={styles.skipButton}
+                              onPress={() => onSkipPrevious(false)}
+                              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                              accessibilityRole="button"
+                              accessibilityLabel="Faixa anterior"
+                            >
+                              <SkipBack color="#FFFFFF" size={32} fill="#FFFFFF" />
+                            </TouchableOpacity>
+
+                            {/* 3. Play / Pause Principal (Círculo Branco Maciço 72px) */}
+                            <TouchableOpacity
+                              style={styles.mainPlayButton}
+                              onPress={onTogglePlay}
+                              activeOpacity={0.85}
+                              accessibilityRole="button"
+                              accessibilityLabel={isPlaying ? 'Pausar' : 'Tocar'}
+                            >
+                              {isBuffering ? (
+                                <ActivityIndicator color="#030303" size="large" />
+                              ) : isPlaying ? (
+                                <Pause color="#030303" size={32} fill="#030303" />
+                              ) : (
+                                <Play
+                                  color="#030303"
+                                  size={32}
+                                  fill="#030303"
+                                  style={{ marginLeft: 3 }}
+                                />
+                              )}
+                            </TouchableOpacity>
+
+                            {/* 4. Skip Next */}
+                            <TouchableOpacity
+                              style={styles.skipButton}
+                              onPress={onSkipNext}
+                              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                              accessibilityRole="button"
+                              accessibilityLabel="Próxima faixa"
+                            >
+                              <SkipForward color="#FFFFFF" size={32} fill="#FFFFFF" />
+                            </TouchableOpacity>
+
+                            {/* 5. Repeat na extrema direita */}
+                            {onToggleRepeat ? (
+                              <TouchableOpacity
+                                style={styles.sideControlButton}
+                                onPress={onToggleRepeat}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                accessibilityRole="button"
+                                accessibilityLabel="Repetir"
+                                activeOpacity={0.7}
+                              >
+                                {repeatMode === RepeatMode.Track ? (
+                                  <Repeat1 color="#FF0000" size={24} />
+                                ) : (
+                                  <Repeat
+                                    color={repeatMode === RepeatMode.Queue ? '#FFFFFF' : '#717171'}
+                                    size={24}
+                                  />
+                                )}
+                              </TouchableOpacity>
+                            ) : (
+                              <View style={styles.sideControlButton} />
+                            )}
+                          </View>
+
+                          {/* Pílulas de Navegação Rápida de Seção */}
+                          <View style={styles.sheetTabsRow}>
+                            <TouchableOpacity
+                              style={[
+                                styles.sheetTabButton,
+                                (isQueueSheetVisible || activePlayerTab === 'upnext') &&
+                                styles.sheetTabButtonActive,
+                              ]}
+                              onPress={openQueueSheet}
+                              accessibilityRole="button"
+                              accessibilityLabel="Fila"
+                            >
+                              <Text
+                                style={[
+                                  styles.sheetTabText,
+                                  (isQueueSheetVisible || activePlayerTab === 'upnext') &&
+                                  styles.sheetTabTextActive,
+                                ]}
+                              >
+                                FILA
+                              </Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                              style={[
+                                styles.sheetTabButton,
+                                activePlayerTab === 'lyrics' && styles.sheetTabButtonActive,
+                              ]}
+                              onPress={() => scrollToSection('lyrics')}
+                              accessibilityRole="button"
+                              accessibilityLabel="Letras"
+                            >
+                              <Text
+                                style={[
+                                  styles.sheetTabText,
+                                  activePlayerTab === 'lyrics' && styles.sheetTabTextActive,
+                                ]}
+                              >
+                                LETRAS
+                              </Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                              style={[
+                                styles.sheetTabButton,
+                                activePlayerTab === 'related' && styles.sheetTabButtonActive,
+                              ]}
+                              onPress={() => scrollToSection('related')}
+                              accessibilityRole="button"
+                              accessibilityLabel="Relacionados"
+                            >
+                              <Text
+                                style={[
+                                  styles.sheetTabText,
+                                  activePlayerTab === 'related' && styles.sheetTabTextActive,
+                                ]}
+                              >
+                                RELACIONADOS
+                              </Text>
+                            </TouchableOpacity>
+                          </View>
+                        </Animated.View>
+                      </View>
+
+                      {/* 2. CARD DE LETRAS (SPOTIFY LYRICS CARD - Componente desacoplado e memoizado) */}
+                      <Animated.View style={{ opacity: morphInterpolations.expandedControlsOpacity }}>
+                        <PlayerLyricsSection
+                          track={track}
+                          fallbackPosition={fallbackPosition}
+                          lyricsPayload={lyricsPayload}
+                          syncedLyricsProp={syncedLyrics}
+                          isLoading={isLoadingLyrics}
+                          isExpanded={isLyricsExpanded}
+                          onToggleExpand={handleLyricsToggleExpand}
+                          onHeaderPress={handleLyricsHeaderPress}
+                          onSeekTo={handleLyricsSeekTo}
+                          onRetry={handleLyricsRetry}
+                          ambientColor={ambientColor}
+                          onCardLayout={handleLyricsCardLayout}
+                        />
+                      </Animated.View>
+
+                      {/* 3. CARD DE RELACIONADOS E SOBRE O ARTISTA (SPOTIFY ARTIST & RECOMMENDATIONS) */}
+                      <Animated.View
+                        style={[
+                          styles.spotifyArtistCard,
+                          { opacity: morphInterpolations.expandedControlsOpacity },
+                        ]}
+                        onLayout={(e) => {
+                          const y = e.nativeEvent.layout.y;
+                          setCardPositions((prev) => ({ ...prev, related: y }));
+                        }}
+                      >
+                        <Text style={styles.spotifyCardTitle}>Sobre o artista</Text>
+
+                        <TouchableOpacity
+                          style={styles.spotifyArtistHero}
+                          onPress={() => setIsArtistModalVisible(true)}
+                          activeOpacity={0.8}
+                          accessibilityRole="button"
+                          accessibilityLabel="Abrir perfil do artista"
+                        >
+                          <View style={styles.spotifyArtistAvatar}>
+                            {artistProfile?.avatarUrl ? (
+                              <Image
+                                source={{ uri: artistProfile.avatarUrl }}
+                                style={styles.spotifyArtistAvatarImg}
+                                resizeMode="cover"
+                                accessibilityRole="image"
+                                accessibilityLabel={`Foto de ${track.artist || 'Artista'}`}
+                              />
+                            ) : (
+                              <Sparkles color="#FFFFFF" size={24} />
+                            )}
+                          </View>
+                          <View style={styles.spotifyArtistMeta}>
+                            <Text style={styles.spotifyArtistName} numberOfLines={1}>
+                              {artistProfile?.name || effectiveArtistName}
+                            </Text>
+                            <Text style={styles.spotifyArtistSub} numberOfLines={1}>
+                              {`${artistProfile?.subscriberCountText || 'Artista Verificado'} • Explorar discografia e canais recomendados`}
+                            </Text>
+                          </View>
+                          <ChevronRight color="#AAAAAA" size={20} />
+                        </TouchableOpacity>
+
+                        <Text style={styles.spotifyArtistBio}>
+                          {artistProfile?.bio ||
+                            'Ouça os maiores sucessos, novas faixas e mergulhe na rádio personalizada com base nas suas preferências musicais.'}
+                        </Text>
+
+                        <View style={styles.spotifyDivider} />
+
+                        <Text style={styles.spotifySectionHeading}>Você também pode gostar</Text>
+
+                        {/* Ação 1: Rádio da Música (Track Radio) */}
+                        <View style={styles.spotifyRelatedCard}>
+                          <View style={styles.spotifyRelatedLeft}>
+                            <View style={styles.spotifyRelatedIconBadge}>
+                              <Music2 color="#FFFFFF" size={20} />
+                            </View>
+                            <View style={styles.spotifyRelatedInfo}>
+                              <Text style={styles.spotifyRelatedTrackTitle} numberOfLines={1}>
+                                {`Mix Especial de ${resolvedTrackMeta.cleanTitle || track.title || 'Músicas'}`}
+                              </Text>
+                              <Text style={styles.spotifyRelatedSubtitle}>
+                                Sonary Smart Radio
+                              </Text>
+                            </View>
+                          </View>
+
+                          <TouchableOpacity
+                            style={styles.spotifyPlayCircle}
+                            onPress={() => {
+                              if (onStartTrackRadio) {
+                                onStartTrackRadio();
+                              } else {
+                                onTogglePlay();
+                              }
+                            }}
+                            accessibilityRole="button"
+                            accessibilityLabel="Tocar mix relacionado"
+                          >
+                            {isLoadingRadio ? (
+                              <ActivityIndicator color="#030303" size="small" />
+                            ) : (
+                              <Play color="#030303" size={16} fill="#030303" style={{ marginLeft: 2 }} />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+
+                        {/* Ação 2: Rádio do Artista (Artist Radio) */}
+                        <TouchableOpacity
+                          style={styles.spotifyRelatedCard}
+                          onPress={() => {
+                            if (onStartArtistRadio) {
+                              onStartArtistRadio(
+                                effectiveArtistName,
+                                artistProfile?.channelId
+                              );
+                            } else {
+                              onTogglePlay();
+                            }
+                          }}
+                          activeOpacity={0.8}
+                          accessibilityRole="button"
+                          accessibilityLabel="Iniciar rádio do artista"
+                        >
+                          <View style={styles.spotifyRelatedLeft}>
+                            <View style={[styles.spotifyRelatedIconBadge, { backgroundColor: '#333333' }]}>
+                              <Radio color="#FFFFFF" size={20} />
+                            </View>
+                            <View style={styles.spotifyRelatedInfo}>
+                              <Text style={styles.spotifyRelatedTrackTitle} numberOfLines={1}>
+                                {`Rádio de ${effectiveArtistName}`}
+                              </Text>
+                              <Text style={styles.spotifyRelatedSubtitle}>
+                                Descobertas e faixas similares
+                              </Text>
+                            </View>
+                          </View>
+
+                          <View style={styles.spotifyPillBadge}>
+                            <Text style={styles.spotifyPillBadgeText}>Mix Contínuo</Text>
+                          </View>
+                        </TouchableOpacity>
+
+                        {/* Lista Dinâmica de Faixas Relacionadas Reais */}
+                        {(isLoadingRelated || isFetchingRelated) &&
+                          effectiveRelatedTracks.length === 0 ? (
+                          <View style={styles.relatedSkeletonWrap}>
+                            <TrackRowSkeleton
+                              count={4}
+                              thumbnailSize={40}
+                              thumbnailRadius={8}
+                              horizontalPadding={0}
+                              showDuration={false}
+                            />
+                          </View>
+                        ) : (
+                          effectiveRelatedTracks.slice(0, 6).map((relTrack, rIdx) => (
+                            <TouchableOpacity
+                              key={`${relTrack.id}-${rIdx}`}
+                              style={styles.spotifyRelatedCard}
+                              onPress={() => onPlayRelatedTrack?.(relTrack)}
+                              activeOpacity={0.8}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Tocar relacionada ${relTrack.title}`}
+                            >
+                              <View style={styles.spotifyRelatedLeft}>
+                                {relTrack.thumbnailUrl ? (
+                                  <Image
+                                    source={{ uri: relTrack.thumbnailUrl }}
+                                    style={styles.relatedThumbImg}
+                                    resizeMode="cover"
+                                  />
+                                ) : (
+                                  <View style={styles.spotifyRelatedIconBadge}>
+                                    <Music2 color="#FFFFFF" size={18} />
+                                  </View>
+                                )}
+                                <View style={styles.spotifyRelatedInfo}>
+                                  <MarqueeText
+                                    active={track?.id === relTrack.id}
+                                    style={styles.spotifyRelatedTrackTitle}
+                                  >
+                                    {relTrack.title}
+                                  </MarqueeText>
+                                  <TrackMetaRow
+                                    style={styles.spotifyRelatedMetaRow}
+                                    active={track?.id === relTrack.id}
+                                    artistText={relTrack.artist}
+                                    textStyle={styles.spotifyRelatedSubtitle}
+                                  />
+                                </View>
+                              </View>
+
+                              <Text style={styles.relatedDurationText} numberOfLines={1}>
+                                {relTrack.formattedDuration || '3:30'}
+                              </Text>
+
+                              {onAddRelatedToQueue ? (
+                                <TouchableOpacity
+                                  style={styles.relatedQueueAddBtn}
+                                  onPress={(e) => {
+                                    e?.stopPropagation?.();
+                                    onAddRelatedToQueue(relTrack);
+                                  }}
+                                  accessibilityRole="button"
+                                  accessibilityLabel={`Adicionar ${relTrack.title} à fila`}
+                                >
+                                  <ListPlus color="#FFFFFF" size={18} />
+                                </TouchableOpacity>
+                              ) : (
+                                <View style={styles.spotifyPlayCircle}>
+                                  <Play color="#030303" size={14} fill="#030303" style={{ marginLeft: 2 }} />
+                                </View>
+                              )}
+                            </TouchableOpacity>
+                          ))
+                        )}
+                      </Animated.View>
+                    </GHScrollView>
+                  </Animated.View>
+                </PanGestureHandler>
+              </SafeAreaView>
+
               <Animated.View
+                pointerEvents="none"
+                accessible={false}
+                testID="player-morph-mini-bar"
                 style={[
-                  styles.queueSheetContainer,
+                  styles.compactMiniBar,
                   {
-                    transform: [{ translateY: queueSheetTranslateY }],
+                    opacity: morphInterpolations.miniBarOpacity,
                   },
                 ]}
-                onStartShouldSetResponder={() => true}
-                onTouchEnd={(e) => e?.stopPropagation?.()}
               >
-                <View
-                  style={styles.sheetDragArea}
-                  {...queueSheetPanResponder.panHandlers}
-                  accessibilityRole="adjustable"
-                  accessibilityLabel="Arraste para baixo para fechar a fila"
-                >
-                  <View style={styles.sheetDragHandle} />
-                </View>
-
-                <View style={styles.queueSheetHeaderRow} {...queueSheetPanResponder.panHandlers}>
-                  <View style={styles.sheetHeaderInfo}>
-                    <Text style={styles.queueSheetTitle}>Fila</Text>
-                    <Text style={styles.queueSheetSubtitle} numberOfLines={1}>
-                      {`Tocando agora • ${track.album || 'Sonary'}`}
-                    </Text>
+                <Animated.View
+                  pointerEvents="none"
+                  style={[
+                    StyleSheet.absoluteFillObject,
+                    {
+                      backgroundColor: dominantBgColor,
+                      borderRadius: 8,
+                      borderWidth: 1,
+                      borderColor: 'rgba(255, 255, 255, 0.08)',
+                      opacity: morphInterpolations.miniProgressOpacity,
+                    },
+                  ]}
+                />
+                <View style={styles.compactMiniContentRow}>
+                  <View style={styles.compactMiniLeftCluster}>
+                    <View style={styles.compactMiniThumbSpacer} />
+                    <Animated.View
+                      style={{
+                        flex: 1,
+                        marginLeft: 10,
+                        justifyContent: 'center',
+                        minWidth: 0,
+                        transform: [{ translateX: morphInterpolations.miniMetaTranslateX }],
+                      }}
+                    >
+                      <Text style={styles.compactMiniTitle} numberOfLines={1}>
+                        {track.title || 'Música'}
+                      </Text>
+                      <Text style={styles.compactMiniArtist} numberOfLines={1}>
+                        {track.artist || 'Artista'}
+                      </Text>
+                    </Animated.View>
                   </View>
-
-                  <TouchableOpacity
-                    style={[styles.queueEditButton, isEditingQueue && styles.queueEditButtonActive]}
-                    onPress={() => {
-                      resetQueueDrag();
-                      setIsEditingQueue((prev) => !prev);
-                    }}
-                    accessibilityRole="button"
-                    accessibilityLabel={isEditingQueue ? 'Concluir edição da fila' : 'Editar fila'}
-                  >
-                    <Text style={styles.queueEditButtonText}>
-                      {isEditingQueue ? 'Concluído' : 'Editar'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* Faixa Atual */}
-                <View style={styles.queueNowPlayingRow}>
-                  <View style={styles.queueNowPlayingThumbContainer}>
-                    {track.artwork ? (
-                      <Image
-                        source={typeof track.artwork === 'string' ? { uri: track.artwork } : track.artwork}
-                        style={styles.queueThumbImg}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <View style={styles.queueThumbFallback}>
-                        <Music2 color="#FFFFFF" size={18} />
+                  <View style={styles.compactMiniRightControls}>
+                    {onToggleFavorite && (
+                      <View style={styles.compactMiniIconBtn}>
+                        <Heart
+                          color={isFavorite ? '#FF0000' : '#B3B3B3'}
+                          fill={isFavorite ? '#FF0000' : 'transparent'}
+                          size={18}
+                        />
                       </View>
                     )}
-                    <PlayingEqualizer isPlaying={isPlaying} />
-                  </View>
-
-                  <View style={styles.queueItemMeta}>
-                    <MarqueeText active={true} style={styles.queueNowPlayingTitle}>
-                      {track.title || 'Faixa sem título'}
-                    </MarqueeText>
-                    <MarqueeText active={true} style={styles.queueItemArtist}>
-                      {track.artist || 'Artista'}
-                    </MarqueeText>
-                  </View>
-
-                  <TouchableOpacity
-                    style={styles.queueNowPlayingPlayBtn}
-                    onPress={onTogglePlay}
-                    accessibilityRole="button"
-                    accessibilityLabel={isPlaying ? 'Pausar música atual' : 'Tocar música atual'}
-                  >
-                    {isPlaying ? (
-                      <Pause color="#030303" size={18} fill="#030303" />
-                    ) : (
-                      <Play color="#030303" size={18} fill="#030303" style={{ marginLeft: 2 }} />
-                    )}
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.queueSheetDivider} />
-
-                {/* Próximas Faixas */}
-                <View style={styles.queueSectionHeader}>
-                  <Text style={styles.queueSectionLabel}>A seguir</Text>
-                  {displayedQueue.length > 0 && (
-                    <Text style={styles.queueSectionMeta}>
-                      {displayedQueue.length}{' '}
-                      {displayedQueue.length === 1 ? 'música' : 'músicas'} •{' '}
-                      {formatTime(displayedQueue.reduce((acc, t) => acc + (t.duration || 0), 0))}
-                    </Text>
-                  )}
-                </View>
-
-                <GHScrollView
-                  ref={queueScrollRef}
-                  style={styles.queueSheetList}
-                  contentContainerStyle={styles.queueSheetListContent}
-                  showsVerticalScrollIndicator={false}
-                  nestedScrollEnabled
-                  scrollEnabled
-                  scrollEventThrottle={16}
-                  onLayout={(e) => {
-                    queueListHeightRef.current = e.nativeEvent.layout.height;
-                    getQueueScrollBounds(displayedQueueRef.current.length);
-                  }}
-                  onContentSizeChange={(_, h) => {
-                    queueContentHeightRef.current = h;
-                    getQueueScrollBounds(displayedQueueRef.current.length);
-                  }}
-                  onScroll={(e) => {
-                    if (draggingQueueIdxRef.current === null) {
-                      const nextY = e.nativeEvent.contentOffset.y;
-                      queueScrollOffsetRef.current = nextY;
-                      queueCurrentScrollYSV.value = nextY;
-                    }
-                  }}
-                >
-                  {displayedQueue.length > 0 ? (
-                    <View
-                      key={`queue-slots-${queueLayoutEpochRef.current}`}
-                      style={[
-                        styles.queueSheetListSlots,
-                        { height: displayedQueue.length * QUEUE_ROW_HEIGHT },
-                      ]}
-                    >
-                      {stableQueueEntries.map(({ qTrack, qIdx, key }) => (
-                        <QueueTrackRow
-                          key={key}
-                          rowKey={key}
-                          rowEpoch={queueLayoutEpochRef.current}
-                          qTrack={qTrack}
-                          qIdx={qIdx}
-                          isEditingQueue={isEditingQueue}
-                          canReorder={Boolean(onMoveQueueTrack) && displayedQueue.length > 1}
-                          isFirst={qIdx === 0}
-                          isLast={qIdx === displayedQueue.length - 1}
-                          basePositionsEpochSV={queueBasePositionsEpochSV}
-                          basePositionsSV={queueBasePositionsSV}
-                          positionsSV={queuePositionsSV}
-                          activeDragKeySV={activeQueueDragKeySV}
-                          activeDragIdxSV={activeQueueDragIdxSV}
-                          dragTargetIdxSV={queueDragTargetIdxSV}
-                          dragOffsetYSV={queueDragOffsetYSV}
-                          listLengthSV={queueListLengthSV}
-                          scrollDeltaSV={queueScrollDeltaSV}
-                          scrollViewportHeightSV={queueViewportHeightSV}
-                          maxScrollYSV={queueMaxScrollYSV}
-                          scrollStartSV={queueScrollStartSV}
-                          currentScrollYSV={queueCurrentScrollYSV}
-                          onStartDrag={startQueueDrag}
-                          onEdgeAutoScroll={triggerQueueEdgeAutoScroll}
-                          onStopAutoScroll={stopQueueAutoScroll}
-                          onEndDrag={endQueueDrag}
-                          onSelectTrack={selectQueueTrackStable}
-                          onMoveTrack={onMoveQueueTrack ? moveQueueTrackStable : undefined}
-                          onRemoveTrack={onRemoveQueueTrack ? removeQueueTrackStable : undefined}
-                        />
-                      ))}
+                    <View style={styles.compactMiniIconBtn}>
+                      <SkipBack color="#FFFFFF" size={18} fill="#FFFFFF" />
                     </View>
-                  ) : (
-                    <View style={styles.queuePlaceholderBox}>
-                      <Radio color="#717171" size={32} />
-                      <Text style={styles.queuePlaceholderTitle}>Fila Contínua Automática</Text>
-                      <Text style={styles.queuePlaceholderSub}>
-                        {`Reproduzindo rádio infinita baseada em ${track.artist || 'suas preferências'}.`}
-                      </Text>
+                    <View style={styles.compactMiniPlayBtn}>
+                      {isBuffering ? (
+                        <ActivityIndicator color="#FFFFFF" size="small" />
+                      ) : isPlaying ? (
+                        <Pause color="#FFFFFF" size={22} fill="#FFFFFF" />
+                      ) : (
+                        <Play color="#FFFFFF" size={22} fill="#FFFFFF" style={{ marginLeft: 1.5 }} />
+                      )}
                     </View>
-                  )}
-                </GHScrollView>
-
-                {/* Barra Inferior Estilo Spotify: Aleatório, Repetir e Fechar */}
-                <View style={styles.queueBottomBar}>
-                  <TouchableOpacity
-                    style={styles.queueBottomAction}
-                    onPress={() => onToggleShuffle?.()}
-                    accessibilityRole="button"
-                    accessibilityLabel="Aleatório"
-                  >
-                    <Shuffle color={isShuffleActive ? '#1DB954' : '#FFFFFF'} size={20} />
-                    <Text
-                      style={[
-                        styles.queueBottomActionText,
-                        isShuffleActive && styles.queueBottomActionTextActive,
-                      ]}
-                    >
-                      Aleatório
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.queueBottomAction}
-                    onPress={() => onToggleRepeat?.()}
-                    accessibilityRole="button"
-                    accessibilityLabel="Repetir"
-                  >
-                    {repeatMode === RepeatMode.Track ? (
-                      <Repeat1 color="#1DB954" size={20} />
-                    ) : (
-                      <Repeat
-                        color={repeatMode !== RepeatMode.Off ? '#1DB954' : '#FFFFFF'}
-                        size={20}
-                      />
-                    )}
-                    <Text
-                      style={[
-                        styles.queueBottomActionText,
-                        repeatMode !== RepeatMode.Off && styles.queueBottomActionTextActive,
-                      ]}
-                    >
-                      Repetir
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.queueBottomAction}
-                    onPress={dismissQueueSheet}
-                    accessibilityRole="button"
-                    accessibilityLabel="Fechar fila"
-                  >
-                    <X color="#FFFFFF" size={20} />
-                    <Text style={styles.queueBottomActionText}>Fechar</Text>
-                  </TouchableOpacity>
+                    <View style={styles.compactMiniIconBtn}>
+                      <SkipForward color="#FFFFFF" size={18} fill="#FFFFFF" />
+                    </View>
+                    <View style={styles.compactMiniIconBtn}>
+                      <ChevronUp color="#B3B3B3" size={18} />
+                    </View>
+                  </View>
                 </View>
+                <Animated.View style={{ opacity: morphInterpolations.miniProgressOpacity }}>
+                  <CompactMiniBarProgress
+                    trackDuration={track.duration}
+                    fallbackPosition={fallbackPosition}
+                  />
+                </Animated.View>
               </Animated.View>
-            </TouchableOpacity>
-          </Animated.View>
-        )}
 
-        {/* Toast flutuante dentro do Modal (Dialog Window do Android fica acima do App) */}
-        <ToastBanner
-          message={!isArtistModalVisible ? toastMessage : null}
-          variant={toastVariant}
-          onDismiss={onDismissToast}
-          topOffset={Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 12 : 54}
-        />
+              {/* Menu Contextual Estilo Bottom Sheet do YouTube Music */}
+              {showContextMenu && (
+                <Animated.View
+                  style={[styles.modalSheetOverlay, { opacity: sheetBackdropOpacity }]}
+                >
+                  <TouchableOpacity
+                    style={styles.sheetBackdrop}
+                    activeOpacity={1}
+                    onPress={() => dismissMenuSheet()}
+                  >
+                    <Animated.View
+                      renderToHardwareTextureAndroid
+                      style={[
+                        styles.sheetContainer,
+                        {
+                          transform: [{ translateY: sheetTranslateY }],
+                        },
+                      ]}
+                      onStartShouldSetResponder={() => true}
+                      onTouchEnd={(e) => e?.stopPropagation?.()}
+                    >
+                      {/* Área de arrasto superior com PanResponder para recolher */}
+                      <View
+                        style={styles.sheetDragArea}
+                        {...sheetPanResponder.panHandlers}
+                        accessibilityRole="adjustable"
+                        accessibilityLabel="Arraste para baixo para recolher o menu"
+                      >
+                        <View style={styles.sheetDragHandle} />
+                      </View>
 
-        {/* Modal Dedicado de Perfil do Artista */}
-        <ArtistProfileModal
-          visible={isArtistModalVisible}
-          onClose={() => setIsArtistModalVisible(false)}
-          artistName={effectiveArtistName}
-          channelId={artistProfile?.channelId}
-          initialProfile={artistProfile}
-          onPlayTrack={(relTrack) => {
-            if (onPlayRelatedTrack) {
-              onPlayRelatedTrack(relTrack);
-            }
-          }}
-          onAddToQueue={(relTrack) => {
-            if (onAddRelatedToQueue) {
-              onAddRelatedToQueue(relTrack);
-            }
-          }}
-          onStartArtistRadio={(name, cid) => {
-            if (onStartArtistRadio) {
-              onStartArtistRadio(name, cid);
-            }
-          }}
-          toastMessage={toastMessage}
-          onDismissToast={onDismissToast}
-        />
+                      {/* Cabeçalho com Título, Artista, Duração e Botão Fechar */}
+                      <View style={styles.sheetHeader}>
+                        <View
+                          style={styles.sheetHeaderInfo}
+                          {...sheetPanResponder.panHandlers}
+                        >
+                          <Text style={styles.sheetTitle} numberOfLines={1}>
+                            {track.title || 'Faixa sem título'}
+                          </Text>
+                          <Text style={styles.sheetSubtitle} numberOfLines={1}>
+                            {track.artist || 'Artista'}
+                            {effectiveDuration > 0 ? ` • ${formatTime(effectiveDuration)}` : ''}
+                          </Text>
+                        </View>
+
+                        <TouchableOpacity
+                          style={styles.sheetCloseButton}
+                          onPress={() => dismissMenuSheet()}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          accessibilityRole="button"
+                          accessibilityLabel="Fechar menu"
+                        >
+                          <X color="#FFFFFF" size={22} />
+                        </TouchableOpacity>
+                      </View>
+
+                      <View style={styles.sheetDivider} />
+
+                      {/* 3 Blocos de Ação Rápida no Topo (YouTube Music Tiles) */}
+                      <View style={styles.quickTilesRow}>
+                        {onPlayNext ? (
+                          <TouchableOpacity
+                            style={styles.quickTile}
+                            onPress={(e) => {
+                              e?.stopPropagation?.();
+                              dismissMenuSheet();
+                              onPlayNext();
+                            }}
+                            accessibilityRole="button"
+                            accessibilityLabel="Tocar a seguir"
+                          >
+                            <ListPlus color="#FFFFFF" size={22} />
+                            <Text style={styles.quickTileText} numberOfLines={1}>
+                              Tocar a seguir
+                            </Text>
+                          </TouchableOpacity>
+                        ) : (
+                          <TouchableOpacity
+                            style={styles.quickTile}
+                            onPress={(e) => {
+                              e?.stopPropagation?.();
+                              dismissMenuSheet(openQueueSheet);
+                            }}
+                            accessibilityRole="button"
+                            accessibilityLabel="Ver fila"
+                          >
+                            <ListMusic color="#FFFFFF" size={22} />
+                            <Text style={styles.quickTileText} numberOfLines={1}>
+                              Ver fila
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+
+                        <TouchableOpacity
+                          style={styles.quickTile}
+                          onPress={(e) => {
+                            e?.stopPropagation?.();
+                            dismissMenuSheet(openQueueSheet);
+                          }}
+                          accessibilityRole="button"
+                          accessibilityLabel="Fila / Rádio"
+                        >
+                          <Radio color="#FFFFFF" size={22} />
+                          <Text style={styles.quickTileText} numberOfLines={1}>
+                            Fila / Rádio
+                          </Text>
+                        </TouchableOpacity>
+
+                        {onAddToPlaylist && (
+                          <TouchableOpacity
+                            style={styles.quickTile}
+                            onPress={(e) => {
+                              e?.stopPropagation?.();
+                              dismissMenuSheet();
+                              onAddToPlaylist();
+                            }}
+                            accessibilityRole="button"
+                            accessibilityLabel="Playlist"
+                          >
+                            <Plus color="#FFFFFF" size={22} />
+                            <Text style={styles.quickTileText} numberOfLines={1}>
+                              Playlist
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+
+                      {/* Lista Vertical de Opções */}
+                      <View style={styles.sheetActionsList}>
+                        {onAddToQueue && (
+                          <TouchableOpacity
+                            style={styles.sheetActionRow}
+                            onPress={(e) => {
+                              e?.stopPropagation?.();
+                              dismissMenuSheet();
+                              onAddToQueue();
+                            }}
+                            accessibilityRole="button"
+                            accessibilityLabel="Adicionar ao fim da fila"
+                          >
+                            <ListMusic color="#FFFFFF" size={22} />
+                            <Text style={styles.sheetActionText}>Adicionar ao fim da fila</Text>
+                          </TouchableOpacity>
+                        )}
+
+                        <TouchableOpacity
+                          style={styles.sheetActionRow}
+                          onPress={(e) => {
+                            e?.stopPropagation?.();
+                            dismissMenuSheet(openQueueSheet);
+                          }}
+                          accessibilityRole="button"
+                          accessibilityLabel="Ver fila de reprodução"
+                        >
+                          <ListMusic color="#FFFFFF" size={22} />
+                          <Text style={styles.sheetActionText}>Ver fila de reprodução</Text>
+                        </TouchableOpacity>
+
+                        {onDownload && (
+                          <TouchableOpacity
+                            style={styles.sheetActionRow}
+                            onPress={(e) => {
+                              e?.stopPropagation?.();
+                              dismissMenuSheet();
+                              if (!isDownloaded && !isDownloading && !isQueued) {
+                                onDownload();
+                              }
+                            }}
+                            accessibilityRole="button"
+                            accessibilityLabel={
+                              isDownloaded
+                                ? 'Música salva offline'
+                                : isDownloading
+                                  ? 'Baixando música'
+                                  : isQueued
+                                    ? 'Na fila de downloads'
+                                    : 'Salvar offline'
+                            }
+                          >
+                            {isDownloaded ? (
+                              <CheckCircle2 color="#2BA640" size={22} />
+                            ) : isDownloading ? (
+                              <ActivityIndicator color="#FFFFFF" size="small" />
+                            ) : isQueued ? (
+                              <Clock color="#AAAAAA" size={22} />
+                            ) : (
+                              <Download color="#FFFFFF" size={22} />
+                            )}
+                            <Text style={styles.sheetActionText}>
+                              {isDownloaded
+                                ? 'Música já baixada'
+                                : isDownloading
+                                  ? `Baixando${downloadProgress > 0 ? ` (${downloadProgress}%)` : '...'}`
+                                  : isQueued
+                                    ? 'Na fila de downloads'
+                                    : 'Salvar offline'}
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+
+                        {onAddToPlaylist && (
+                          <TouchableOpacity
+                            style={styles.sheetActionRow}
+                            onPress={(e) => {
+                              e?.stopPropagation?.();
+                              dismissMenuSheet();
+                              onAddToPlaylist();
+                            }}
+                            accessibilityRole="button"
+                            accessibilityLabel="Adicionar à playlist"
+                          >
+                            <Plus color="#FFFFFF" size={22} />
+                            <Text style={styles.sheetActionText}>Adicionar à playlist</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </Animated.View>
+                  </TouchableOpacity>
+                </Animated.View>
+              )}
+
+              {/* Modal Bottom Sheet da Fila Estilo Spotify */}
+              {isQueueSheetVisible && (
+                <Animated.View
+                  style={[styles.modalSheetOverlay, { opacity: queueBackdropOpacity }]}
+                >
+                  <TouchableOpacity
+                    style={styles.sheetBackdrop}
+                    activeOpacity={1}
+                    onPress={dismissQueueSheet}
+                  >
+                    <Animated.View
+                      style={[
+                        styles.queueSheetContainer,
+                        {
+                          transform: [{ translateY: queueSheetTranslateY }],
+                        },
+                      ]}
+                      onStartShouldSetResponder={() => true}
+                      onTouchEnd={(e) => e?.stopPropagation?.()}
+                    >
+                      <View
+                        style={styles.sheetDragArea}
+                        {...queueSheetPanResponder.panHandlers}
+                        accessibilityRole="adjustable"
+                        accessibilityLabel="Arraste para baixo para fechar a fila"
+                      >
+                        <View style={styles.sheetDragHandle} />
+                      </View>
+
+                      <View style={styles.queueSheetHeaderRow} {...queueSheetPanResponder.panHandlers}>
+                        <View style={styles.sheetHeaderInfo}>
+                          <Text style={styles.queueSheetTitle}>Fila</Text>
+                          <Text style={styles.queueSheetSubtitle} numberOfLines={1}>
+                            {`Tocando agora • ${track.album || 'Sonary'}`}
+                          </Text>
+                        </View>
+
+                        <TouchableOpacity
+                          style={[styles.queueEditButton, isEditingQueue && styles.queueEditButtonActive]}
+                          onPress={() => {
+                            resetQueueDrag();
+                            setIsEditingQueue((prev) => !prev);
+                          }}
+                          accessibilityRole="button"
+                          accessibilityLabel={isEditingQueue ? 'Concluir edição da fila' : 'Editar fila'}
+                        >
+                          <Text style={styles.queueEditButtonText}>
+                            {isEditingQueue ? 'Concluído' : 'Editar'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+
+                      {/* Faixa Atual */}
+                      <View style={styles.queueNowPlayingRow}>
+                        <View style={styles.queueNowPlayingThumbContainer}>
+                          {track.artwork ? (
+                            <Image
+                              source={typeof track.artwork === 'string' ? { uri: track.artwork } : track.artwork}
+                              style={styles.queueThumbImg}
+                              resizeMode="cover"
+                            />
+                          ) : (
+                            <View style={styles.queueThumbFallback}>
+                              <Music2 color="#FFFFFF" size={18} />
+                            </View>
+                          )}
+                          <PlayingEqualizer isPlaying={isPlaying} />
+                        </View>
+
+                        <View style={styles.queueItemMeta}>
+                          <MarqueeText active={true} style={styles.queueNowPlayingTitle}>
+                            {track.title || 'Faixa sem título'}
+                          </MarqueeText>
+                          <MarqueeText active={true} style={styles.queueItemArtist}>
+                            {track.artist || 'Artista'}
+                          </MarqueeText>
+                        </View>
+
+                        <TouchableOpacity
+                          style={styles.queueNowPlayingPlayBtn}
+                          onPress={onTogglePlay}
+                          accessibilityRole="button"
+                          accessibilityLabel={isPlaying ? 'Pausar música atual' : 'Tocar música atual'}
+                        >
+                          {isPlaying ? (
+                            <Pause color="#030303" size={18} fill="#030303" />
+                          ) : (
+                            <Play color="#030303" size={18} fill="#030303" style={{ marginLeft: 2 }} />
+                          )}
+                        </TouchableOpacity>
+                      </View>
+
+                      <View style={styles.queueSheetDivider} />
+
+                      {/* Próximas Faixas */}
+                      <View style={styles.queueSectionHeader}>
+                        <Text style={styles.queueSectionLabel}>A seguir</Text>
+                        {displayedQueue.length > 0 && (
+                          <Text style={styles.queueSectionMeta}>
+                            {displayedQueue.length}{' '}
+                            {displayedQueue.length === 1 ? 'música' : 'músicas'} •{' '}
+                            {formatTime(displayedQueue.reduce((acc, t) => acc + (t.duration || 0), 0))}
+                          </Text>
+                        )}
+                      </View>
+
+                      <GHScrollView
+                        ref={queueScrollRef}
+                        style={styles.queueSheetList}
+                        contentContainerStyle={styles.queueSheetListContent}
+                        showsVerticalScrollIndicator={false}
+                        nestedScrollEnabled
+                        scrollEnabled
+                        scrollEventThrottle={16}
+                        onLayout={(e) => {
+                          queueListHeightRef.current = e.nativeEvent.layout.height;
+                          getQueueScrollBounds(displayedQueueRef.current.length);
+                        }}
+                        onContentSizeChange={(_, h) => {
+                          queueContentHeightRef.current = h;
+                          getQueueScrollBounds(displayedQueueRef.current.length);
+                        }}
+                        onScroll={(e) => {
+                          if (draggingQueueIdxRef.current === null) {
+                            const nextY = e.nativeEvent.contentOffset.y;
+                            queueScrollOffsetRef.current = nextY;
+                            queueCurrentScrollYSV.value = nextY;
+                          }
+                        }}
+                      >
+                        {displayedQueue.length > 0 ? (
+                          <View
+                            key={`queue-slots-${queueLayoutEpochRef.current}`}
+                            style={[
+                              styles.queueSheetListSlots,
+                              { height: displayedQueue.length * QUEUE_ROW_HEIGHT },
+                            ]}
+                          >
+                            {stableQueueEntries.map(({ qTrack, qIdx, key }) => (
+                              <QueueTrackRow
+                                key={key}
+                                rowKey={key}
+                                rowEpoch={queueLayoutEpochRef.current}
+                                qTrack={qTrack}
+                                qIdx={qIdx}
+                                isEditingQueue={isEditingQueue}
+                                canReorder={Boolean(onMoveQueueTrack) && displayedQueue.length > 1}
+                                isFirst={qIdx === 0}
+                                isLast={qIdx === displayedQueue.length - 1}
+                                basePositionsEpochSV={queueBasePositionsEpochSV}
+                                basePositionsSV={queueBasePositionsSV}
+                                positionsSV={queuePositionsSV}
+                                activeDragKeySV={activeQueueDragKeySV}
+                                activeDragIdxSV={activeQueueDragIdxSV}
+                                dragTargetIdxSV={queueDragTargetIdxSV}
+                                dragOffsetYSV={queueDragOffsetYSV}
+                                listLengthSV={queueListLengthSV}
+                                scrollDeltaSV={queueScrollDeltaSV}
+                                scrollViewportHeightSV={queueViewportHeightSV}
+                                maxScrollYSV={queueMaxScrollYSV}
+                                scrollStartSV={queueScrollStartSV}
+                                currentScrollYSV={queueCurrentScrollYSV}
+                                onStartDrag={startQueueDrag}
+                                onEdgeAutoScroll={triggerQueueEdgeAutoScroll}
+                                onStopAutoScroll={stopQueueAutoScroll}
+                                onEndDrag={endQueueDrag}
+                                onSelectTrack={selectQueueTrackStable}
+                                onMoveTrack={onMoveQueueTrack ? moveQueueTrackStable : undefined}
+                                onRemoveTrack={onRemoveQueueTrack ? removeQueueTrackStable : undefined}
+                              />
+                            ))}
+                          </View>
+                        ) : (
+                          <View style={styles.queuePlaceholderBox}>
+                            <Radio color="#717171" size={32} />
+                            <Text style={styles.queuePlaceholderTitle}>Fila Contínua Automática</Text>
+                            <Text style={styles.queuePlaceholderSub}>
+                              {`Reproduzindo rádio infinita baseada em ${track.artist || 'suas preferências'}.`}
+                            </Text>
+                          </View>
+                        )}
+                      </GHScrollView>
+
+                      {/* Barra Inferior Estilo Spotify: Aleatório, Repetir e Fechar */}
+                      <View style={styles.queueBottomBar}>
+                        <TouchableOpacity
+                          style={styles.queueBottomAction}
+                          onPress={() => onToggleShuffle?.()}
+                          accessibilityRole="button"
+                          accessibilityLabel="Aleatório"
+                        >
+                          <Shuffle color={isShuffleActive ? '#1DB954' : '#FFFFFF'} size={20} />
+                          <Text
+                            style={[
+                              styles.queueBottomActionText,
+                              isShuffleActive && styles.queueBottomActionTextActive,
+                            ]}
+                          >
+                            Aleatório
+                          </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={styles.queueBottomAction}
+                          onPress={() => onToggleRepeat?.()}
+                          accessibilityRole="button"
+                          accessibilityLabel="Repetir"
+                        >
+                          {repeatMode === RepeatMode.Track ? (
+                            <Repeat1 color="#1DB954" size={20} />
+                          ) : (
+                            <Repeat
+                              color={repeatMode !== RepeatMode.Off ? '#1DB954' : '#FFFFFF'}
+                              size={20}
+                            />
+                          )}
+                          <Text
+                            style={[
+                              styles.queueBottomActionText,
+                              repeatMode !== RepeatMode.Off && styles.queueBottomActionTextActive,
+                            ]}
+                          >
+                            Repetir
+                          </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={styles.queueBottomAction}
+                          onPress={dismissQueueSheet}
+                          accessibilityRole="button"
+                          accessibilityLabel="Fechar fila"
+                        >
+                          <X color="#FFFFFF" size={20} />
+                          <Text style={styles.queueBottomActionText}>Fechar</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </Animated.View>
+                  </TouchableOpacity>
+                </Animated.View>
+              )}
+
+              {/* Toast flutuante dentro do Modal (Dialog Window do Android fica acima do App) */}
+              <ToastBanner
+                message={effectiveModalActive && !isArtistModalVisible ? toastMessage : null}
+                variant={toastVariant}
+                onDismiss={onDismissToast}
+                topOffset={Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 12 : 54}
+              />
+
+              {/* Modal Dedicado de Perfil do Artista */}
+              <ArtistProfileModal
+                visible={isArtistModalVisible}
+                onClose={() => setIsArtistModalVisible(false)}
+                artistName={effectiveArtistName}
+                channelId={artistProfile?.channelId}
+                initialProfile={artistProfile}
+                onPlayTrack={(relTrack) => {
+                  if (onPlayRelatedTrack) {
+                    onPlayRelatedTrack(relTrack);
+                  }
+                }}
+                onAddToQueue={(relTrack) => {
+                  if (onAddRelatedToQueue) {
+                    onAddRelatedToQueue(relTrack);
+                  }
+                }}
+                onStartArtistRadio={(name, cid) => {
+                  if (onStartArtistRadio) {
+                    onStartArtistRadio(name, cid);
+                  }
+                }}
+                toastMessage={toastMessage}
+                onDismissToast={onDismissToast}
+              />
             </Animated.View>
-          </PanGestureHandler>
+          </Animated.View>
+        </PanGestureHandler>
+      </View>
+    </RootWrapper>
+    );
+  };
+
+  if (persistentMode) {
+    return (
+      <View
+        pointerEvents={effectiveModalActive ? 'auto' : 'none'}
+        style={styles.inlineDragPreviewOverlay}
+      >
+        {renderModalInnerContent(false)}
+      </View>
+    );
+  }
+
+  return (
+    <>
+      {isMiniDragging && (
+        <View
+          key="inline-drag-bridge"
+          pointerEvents="none"
+          style={styles.inlineDragPreviewOverlay}
+        >
+          {renderModalInnerContent(true)}
         </View>
-      </GestureHandlerRootView>
-    </Modal>
+      )}
+      {effectiveModalActive && (
+        <Modal
+          key="now-playing-modal"
+          visible={visible}
+          animationType="none"
+          transparent={true}
+          statusBarTranslucent={true}
+          hardwareAccelerated={true}
+          onShow={handleModalShow}
+          onRequestClose={handleModalRequestClose}
+        >
+          {renderModalInnerContent(false)}
+        </Modal>
+      )}
+    </>
   );
 }
 
 const styles = StyleSheet.create({
+  inlineDragPreviewOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 999,
+    elevation: 999,
+    backgroundColor: 'transparent',
+  },
   safeContainer: {
     flex: 1,
     backgroundColor: 'transparent',
   },
+  clipWrapper: {
+    flex: 1,
+    overflow: 'hidden',
+    backgroundColor: 'transparent',
+  },
   modalContentWrapper: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: 'transparent',
     overflow: 'hidden',
+  },
+  morphArtworkOverlay: {
+    position: 'absolute',
+    width: ARTWORK_BOX_SIZE,
+    height: ARTWORK_BOX_SIZE,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#161616',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    zIndex: 25,
+  },
+  compactMiniBar: {
+    position: 'absolute',
+    top: 0,
+    left: 8,
+    right: 8,
+    height: 56,
+    borderRadius: 8,
+    overflow: 'hidden',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+    zIndex: 20,
+  },
+  compactMiniContentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingLeft: 8,
+    paddingRight: 8,
+    height: 56,
+  },
+  compactMiniLeftCluster: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 0,
+    marginRight: 6,
+  },
+  compactMiniThumbSpacer: {
+    width: 40,
+    height: 40,
+  },
+  compactMiniMetaCol: {
+    flex: 1,
+    marginLeft: 10,
+    justifyContent: 'center',
+    minWidth: 0,
+  },
+  compactMiniTitle: {
+    fontSize: 13.5,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: -0.1,
+  },
+  compactMiniArtist: {
+    fontSize: 12,
+    fontWeight: '400',
+    color: '#B3B3B3',
+    marginTop: 1,
+  },
+  compactMiniRightControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  compactMiniIconBtn: {
+    padding: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  compactMiniPlayBtn: {
+    padding: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  compactMiniProgressTrack: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 2.5,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  compactMiniProgressFill: {
+    height: '100%',
+    backgroundColor: '#FFFFFF',
   },
   container: {
     flex: 1,
