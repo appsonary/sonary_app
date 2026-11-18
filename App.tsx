@@ -252,18 +252,6 @@ export default function App() {
     [collapseDistance, modalTranslateY]
   );
 
-  const handleBottomDockLayout = useCallback(
-    (e: any) => {
-      const { y, height: h } = e.nativeEvent.layout;
-      if (activeTrack && h >= 100 && y >= 200) {
-        setMeasuredMiniPlayerY((prev) =>
-          prev === null || Math.abs(prev - y) > 1 ? y : prev
-        );
-      }
-    },
-    [activeTrack]
-  );
-
   const navBarTranslateY = React.useMemo(
     () =>
       modalTranslateY.interpolate({
@@ -324,6 +312,19 @@ export default function App() {
         duration: restoredSession.track.duration,
       }
       : undefined);
+
+  const handleBottomDockLayout = useCallback(
+    (e: any) => {
+      const { y, height: h } = e.nativeEvent.layout;
+      if (activeTrack && h >= 100 && y >= 200) {
+        setMeasuredMiniPlayerY((prev) =>
+          prev === null || Math.abs(prev - y) > 1 ? y : prev
+        );
+      }
+    },
+    [activeTrack]
+  );
+
   const [repeatMode, setRepeatModeState] = useState<RepeatMode>(RepeatMode.Off);
   const [isShuffleActive, setIsShuffleActive] = useState<boolean>(false);
   const [volume, setVolumeState] = useState<number>(1.0);
