@@ -61,7 +61,8 @@ function initKeystore(argv = process.argv.slice(2)) {
   }
 
   const storePassword = randomSecret();
-  const keyPassword = randomSecret();
+  // PKCS12 usa a mesma senha para o keystore e para a chave privada no JDK 17+
+  const keyPassword = storePassword;
 
   console.log('\n[SonaryPro] 🔐 Gerando keystore oficial de release via keytool...');
   execFileSync(
