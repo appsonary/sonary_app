@@ -57,6 +57,10 @@ jobs:
               console.error("Erro: SONARY_KEYSTORE_BASE64 está vazio.");
               process.exit(1);
             }
+            if (!/^[A-Za-z0-9+/]+={0,2}$/.test(clean) || clean.length % 4 !== 0) {
+              console.error("Erro: SONARY_KEYSTORE_BASE64 contém caracteres inválidos ou está truncado (tamanho: " + clean.length + "). Use: npm run init:keystore -- --copy-b64");
+              process.exit(1);
+            }
             const buf = Buffer.from(clean, "base64");
             if (buf.length < 500) {
               console.error("Erro: keystore decodificada parece truncada (" + buf.length + " bytes).");
@@ -65,7 +69,12 @@ jobs:
             fs.writeFileSync("sonary-release.keystore", buf);
             console.log("Keystore decodificada:", buf.length, "bytes");
           '
-          keytool -list -keystore sonary-release.keystore -alias "$SONARY_KEY_ALIAS" -storepass "$SONARY_STORE_PASSWORD" >/dev/null
+          if ! KEYTOOL_OUT=$(keytool -list -keystore sonary-release.keystore -alias "$SONARY_KEY_ALIAS" -storepass "$SONARY_STORE_PASSWORD" 2>&1); then
+            echo "Erro ao validar keystore com keytool:"
+            echo "$KEYTOOL_OUT"
+            exit 1
+          fi
+          echo "Keystore validada com sucesso."
 
       - name: Prebuild and patch Android project
         run: |
