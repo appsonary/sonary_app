@@ -87,6 +87,9 @@ test('Updater: compareSemver, isNewerRelease e isTrustedGitHubUrl', () => {
 });
 
 test('Updater: checkForAppUpdate lê latest.json, aplica throttle de 24h e respeita versão ignorada', async () => {
+  NativeModules.SonaryAppUpdater = {
+    getInstalledVersion: async () => ({ versionName: '1.0.1', versionCode: 3 }),
+  };
   let calls = 0;
   const fetchMock = async (url) => {
     calls += 1;
@@ -135,6 +138,9 @@ test('Updater: checkForAppUpdate lê latest.json, aplica throttle de 24h e respe
 });
 
 test('Updater: checkForAppUpdate faz fallback para API do GitHub quando latest.json não existe', async () => {
+  NativeModules.SonaryAppUpdater = {
+    getInstalledVersion: async () => ({ versionName: '1.0.1', versionCode: 3 }),
+  };
   const fetchMock = async (url) => {
     if (url.endsWith('latest.json')) {
       return { ok: false, status: 404, json: async () => ({}) };
