@@ -1618,3 +1618,24 @@ export async function clearPersistedActiveDownloads(): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(`DELETE FROM download_queue WHERE status IN ('pending', 'downloading');`);
 }
+
+export async function getAppSetting(key: string): Promise<string | null> {
+  if (!key) return null;
+  await initDatabase();
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM app_settings WHERE key = ? LIMIT 1;`,
+    [key]
+  );
+  return row?.value ?? null;
+}
+
+export async function setAppSetting(key: string, value: string): Promise<void> {
+  if (!key) return;
+  await initDatabase();
+  const db = await getDatabase();
+  await db.runAsync(
+    `INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?);`,
+    [key, value]
+  );
+}

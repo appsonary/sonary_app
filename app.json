@@ -37,7 +37,8 @@
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.VIBRATE"
+        "android.permission.VIBRATE",
+        "android.permission.REQUEST_INSTALL_PACKAGES"
       ]
     },
     "plugins": [
@@ -58,6 +59,8 @@
       "./plugins/withTrackPlayerFGS",
       "./plugins/withAndroidStartupFix",
       "./plugins/withBackgroundDownloads",
+      "./plugins/withReleaseSigning",
+      "./plugins/withAppUpdater",
       "expo-notifications",
       [
         "expo-image-picker",

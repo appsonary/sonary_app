@@ -163,6 +163,15 @@ import {
   triggerSupportNotificationIfEligible,
 } from './services/supportNotifications';
 import { BACK_PRIORITY, useBackHandler } from './services/backNavigation';
+import { UpdateModal } from './components/UpdateModal';
+import {
+  checkForAppUpdate,
+  cleanupCachedUpdateApks,
+  getInstalledAppVersion,
+  InstalledAppVersion,
+  RemoteReleaseInfo,
+  skipAppUpdateVersion,
+} from './services/updater';
 
 type PlayableTrack = TrackSummary | DownloadedTrack | PlaylistTrackItem;
 type NavHistoryEntry = { tab: MainTab; playlistId: string | null };
@@ -198,6 +207,10 @@ export default function App() {
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [downloadQueue, setDownloadQueue] = useState<DownloadQueueItem[]>([]);
   const [isDownloadQueueVisible, setIsDownloadQueueVisible] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState<RemoteReleaseInfo | null>(null);
+  const [installedAppVersion, setInstalledAppVersion] = useState<InstalledAppVersion | null>(null);
+  const [isUpdateModalVisible, setIsUpdateModalVisible] = useState(false);
+  const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
   const [downloadedIds, setDownloadedIds] = useState<Set<string>>(new Set());
   const [favoriteTrackIds, setFavoriteTrackIds] = useState<Set<string>>(new Set());
   const [isCurrentFavorite, setIsCurrentFavorite] = useState(false);
@@ -911,8 +924,38 @@ export default function App() {
     const permTimer = setTimeout(() => {
       requestNotificationPermission();
     }, 1200);
+    if (typeof (permTimer as any).unref === 'function') {
+      (permTimer as any).unref();
+    }
+
+    let isMounted = true;
+    void getInstalledAppVersion()
+      .then((info) => {
+        if (isMounted) setInstalledAppVersion(info);
+      })
+      .catch(() => {});
+
+    const updateTimer = setTimeout(() => {
+      if (!isMounted) return;
+      void cleanupCachedUpdateApks();
+      void checkForAppUpdate()
+        .then((res) => {
+          if (!isMounted) return;
+          setInstalledAppVersion(res.installed);
+          if (res.status === 'update_available') {
+            setAvailableUpdate(res.release);
+          }
+        })
+        .catch(() => {});
+    }, 3500);
+    if (typeof (updateTimer as any).unref === 'function') {
+      (updateTimer as any).unref();
+    }
+
     return () => {
+      isMounted = false;
       clearTimeout(permTimer);
+      clearTimeout(updateTimer);
       appStateSub?.remove?.();
     };
   }, []);
@@ -1288,10 +1331,38 @@ export default function App() {
     }
   }, [isNowPlayingVisible, activeTrack, closeNowPlayingImmediate]);
 
+  const handleCheckUpdates = useCallback(
+    async (openIfFoundOnlyWhenAvailable: boolean = false) => {
+      if (isCheckingUpdates) return;
+      if (availableUpdate && openIfFoundOnlyWhenAvailable) {
+        setIsUpdateModalVisible(true);
+        return;
+      }
+      setIsCheckingUpdates(true);
+      try {
+        const res = await checkForAppUpdate({ force: true });
+        setInstalledAppVersion(res.installed);
+        if (res.status === 'update_available') {
+          setAvailableUpdate(res.release);
+          setIsUpdateModalVisible(true);
+        } else if (res.status === 'up_to_date') {
+          setAvailableUpdate(null);
+          showToast(`Você já está na versão mais recente (v${res.installed.versionName})`, 'success');
+        } else if (res.status === 'error') {
+          showToast(res.error, 'error');
+        }
+      } finally {
+        setIsCheckingUpdates(false);
+      }
+    },
+    [availableUpdate, isCheckingUpdates, showToast]
+  );
+
   const hasBlockingModalOpen = Boolean(
     (isNowPlayingVisible && activeTrack) ||
     isAddToPlaylistVisible ||
     isDownloadQueueVisible ||
+    isUpdateModalVisible ||
     (isDevMode && isDevMenuVisible)
   );
 
@@ -2406,6 +2477,8 @@ export default function App() {
                   onOpenDownloadQueue={() => setIsDownloadQueueVisible(true)}
                   downloadQueueCount={downloadQueueBadgeCount}
                   hasDownloadErrors={hasDownloadErrors}
+                  onOpenUpdates={() => void handleCheckUpdates(true)}
+                  hasAvailableUpdate={Boolean(availableUpdate)}
                 />
 
                 {/* Alerta de Erro */}
@@ -2743,7 +2816,13 @@ export default function App() {
                   {/* Aba Apoiar (Contribuição Voluntária via Pix) */}
                   {activeTab === 'support' && (
                     <View style={styles.tabContent}>
-                      <SupportSection onShowToast={setToastMessage} />
+                      <SupportSection
+                        onShowToast={setToastMessage}
+                        appVersion={installedAppVersion?.versionName}
+                        onCheckUpdates={() => void handleCheckUpdates(true)}
+                        isCheckingUpdates={isCheckingUpdates}
+                        hasAvailableUpdate={Boolean(availableUpdate)}
+                      />
                     </View>
                   )}
                 </Animated.View>
@@ -2994,6 +3073,19 @@ export default function App() {
           }}
           onClearFinished={() => {
             clearFinishedDownloads();
+          }}
+        />
+
+        {/* Modal de Atualização In-App via GitHub Releases */}
+        <UpdateModal
+          visible={isUpdateModalVisible}
+          release={availableUpdate}
+          installedVersion={installedAppVersion}
+          onClose={() => setIsUpdateModalVisible(false)}
+          onSkipVersion={(versionName) => {
+            void skipAppUpdateVersion(versionName);
+            setAvailableUpdate(null);
+            showToast(`Atualização v${versionName} silenciada`, 'success');
           }}
         />
 

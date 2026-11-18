@@ -19,6 +19,8 @@ const { execSync } = require('child_process');
 const { applyBlackSplashTheme } = require('../plugins/withAndroidStartupFix');
 const { patchTrackPlayerMusicService } = require('../plugins/withTrackPlayerFGS');
 const { applyBackgroundDownloadPatches } = require('../plugins/withBackgroundDownloads');
+const { applyReleaseSigningPatch } = require('../plugins/withReleaseSigning');
+const { applyAppUpdaterPatches } = require('../plugins/withAppUpdater');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const ANDROID_DIR = path.join(PROJECT_ROOT, 'android');
@@ -370,6 +372,22 @@ if (applyBackgroundDownloadPatches(PROJECT_ROOT)) {
   console.log('[SonaryPro] ✅ Background Downloads: WorkManager, FGS dataSync e módulo nativo aplicados.');
 } else {
   console.log('[SonaryPro] ✔️ Background Downloads: Já está atualizado.');
+}
+
+// 4g. Patch: Assinatura oficial de Release (env vars ou release-signing.properties)
+if (applyReleaseSigningPatch(PROJECT_ROOT)) {
+  patchesApplied++;
+  console.log('[SonaryPro] ✅ Release Signing: Configuração de assinatura aplicada ao build.gradle.');
+} else {
+  console.log('[SonaryPro] ✔️ Release Signing: Já está atualizado.');
+}
+
+// 4h. Patch: Auto-Updater nativo (REQUEST_INSTALL_PACKAGES, FileProvider e SonaryUpdaterModule)
+if (applyAppUpdaterPatches(PROJECT_ROOT)) {
+  patchesApplied++;
+  console.log('[SonaryPro] ✅ App Updater: Permissão, FileProvider e módulo nativo aplicados.');
+} else {
+  console.log('[SonaryPro] ✔️ App Updater: Já está atualizado.');
 }
 
 // 5. Configura adb reverse para o Metro Bundler na porta 8081 se houver dispositivo conectado

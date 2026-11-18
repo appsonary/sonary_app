@@ -1,13 +1,16 @@
 node_modules/
 .expo/
 dist/
+dist-release/
 npm-debug.*
 *.jks
+*.keystore
 *.p8
 *.p12
 *.key
 *.mobileprovision
 *.orig.*
+release-signing.properties
 web-build/
 
 # Android generated

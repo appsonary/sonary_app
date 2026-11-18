@@ -15,6 +15,7 @@
     "web": "expo start --web",
     "prebuild": "expo prebuild && node scripts/patch-android.js",
     "prebuild:clean": "expo prebuild --clean && node scripts/patch-android.js",
+    "init:keystore": "node scripts/init-keystore.js",
     "build:apk": "node scripts/build-apk.js prod",
     "build:apk:dev": "node scripts/build-apk.js dev"
   },

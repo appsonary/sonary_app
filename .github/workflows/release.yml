@@ -1,0 +1,87 @@
+name: Build & Publish Android Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  android-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Validate release signing secrets
+        run: |
+          if [ -z "${{ secrets.SONARY_KEYSTORE_BASE64 }}" ] || \
+             [ -z "${{ secrets.SONARY_STORE_PASSWORD }}" ] || \
+             [ -z "${{ secrets.SONARY_KEY_ALIAS }}" ] || \
+             [ -z "${{ secrets.SONARY_KEY_PASSWORD }}" ]; then
+            echo "Erro: configure SONARY_KEYSTORE_BASE64, SONARY_STORE_PASSWORD, SONARY_KEY_ALIAS e SONARY_KEY_PASSWORD nos Secrets do repositório."
+            exit 1
+          fi
+
+      - name: Decode release keystore
+        run: |
+          echo "${{ secrets.SONARY_KEYSTORE_BASE64 }}" | base64 --decode > sonary-release.keystore
+
+      - name: Prebuild and patch Android project
+        run: |
+          npx expo prebuild --clean --platform android
+          node scripts/patch-android.js
+
+      - name: Build signed Release APK
+        env:
+          SONARY_REQUIRE_RELEASE_SIGNING: '1'
+          SONARY_UPLOAD_STORE_FILE: 'sonary-release.keystore'
+          SONARY_UPLOAD_STORE_PASSWORD: ${{ secrets.SONARY_STORE_PASSWORD }}
+          SONARY_UPLOAD_KEY_ALIAS: ${{ secrets.SONARY_KEY_ALIAS }}
+          SONARY_UPLOAD_KEY_PASSWORD: ${{ secrets.SONARY_KEY_PASSWORD }}
+        run: npm run build:apk
+
+      - name: Verify APK signature
+        run: |
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Generate release artifacts (latest.json & checksums.txt)
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          node scripts/generate-release-manifest.js
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -e "console.log(require('./app.json').expo.version)")
+          TAG="v${VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist-release/* --clobber
+          else
+            gh release create "$TAG" dist-release/* \
+              --title "Sonary Pro $TAG" \
+              --generate-notes
+          fi

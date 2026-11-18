@@ -13,6 +13,8 @@ export interface BrandHeaderProps {
   onOpenDownloadQueue?: () => void;
   downloadQueueCount?: number;
   hasDownloadErrors?: boolean;
+  onOpenUpdates?: () => void;
+  hasAvailableUpdate?: boolean;
 }
 
 export const BrandHeader: React.FC<BrandHeaderProps> = ({
@@ -21,6 +23,8 @@ export const BrandHeader: React.FC<BrandHeaderProps> = ({
   onOpenDownloadQueue,
   downloadQueueCount = 0,
   hasDownloadErrors = false,
+  onOpenUpdates,
+  hasAvailableUpdate = false,
 }) => {
   const showDevButton = isDevMenuEnabled() && typeof onOpenDevMenu === 'function';
 
@@ -83,9 +87,18 @@ export const BrandHeader: React.FC<BrandHeaderProps> = ({
               <View style={styles.queueErrorDot} />
             ) : null}
           </TouchableOpacity>
-          <View style={styles.notificationsButton} accessibilityLabel="Notificações">
+          <TouchableOpacity
+            style={styles.notificationsButton}
+            onPress={onOpenUpdates}
+            disabled={typeof onOpenUpdates !== 'function'}
+            activeOpacity={0.75}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            accessibilityRole="button"
+            accessibilityLabel="Notificações"
+          >
             <Bell color="#FFFFFF" size={22} />
-          </View>
+            {hasAvailableUpdate ? <View style={styles.queueErrorDot} /> : null}
+          </TouchableOpacity>
         </View>
       </View>
     </View>
