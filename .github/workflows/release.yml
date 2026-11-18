@@ -19,11 +19,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Setup JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -44,9 +44,28 @@ jobs:
             exit 1
           fi
 
-      - name: Decode release keystore
+      - name: Decode and verify release keystore
+        env:
+          SONARY_KEYSTORE_BASE64: ${{ secrets.SONARY_KEYSTORE_BASE64 }}
+          SONARY_STORE_PASSWORD: ${{ secrets.SONARY_STORE_PASSWORD }}
+          SONARY_KEY_ALIAS: ${{ secrets.SONARY_KEY_ALIAS }}
         run: |
-          echo "${{ secrets.SONARY_KEYSTORE_BASE64 }}" | base64 --decode > sonary-release.keystore
+          node -e '
+            const fs = require("fs");
+            const clean = (process.env.SONARY_KEYSTORE_BASE64 || "").replace(/\s+/g, "");
+            if (!clean) {
+              console.error("Erro: SONARY_KEYSTORE_BASE64 está vazio.");
+              process.exit(1);
+            }
+            const buf = Buffer.from(clean, "base64");
+            if (buf.length < 500) {
+              console.error("Erro: keystore decodificada parece truncada (" + buf.length + " bytes).");
+              process.exit(1);
+            }
+            fs.writeFileSync("sonary-release.keystore", buf);
+            console.log("Keystore decodificada:", buf.length, "bytes");
+          '
+          keytool -list -keystore sonary-release.keystore -alias "$SONARY_KEY_ALIAS" -storepass "$SONARY_STORE_PASSWORD" >/dev/null
 
       - name: Prebuild and patch Android project
         run: |

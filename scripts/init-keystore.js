@@ -20,14 +20,42 @@ function randomSecret() {
   return crypto.randomBytes(18).toString('base64url');
 }
 
-function initKeystore() {
+function copyToClipboard(text) {
+  try {
+    if (process.platform === 'win32') {
+      execFileSync('clip', [], { input: text });
+      return true;
+    }
+    if (process.platform === 'darwin') {
+      execFileSync('pbcopy', [], { input: text });
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function initKeystore(argv = process.argv.slice(2)) {
+  const shouldCopyB64 = argv.includes('--copy-b64');
+
   if (fs.existsSync(KEYSTORE_PATH) || fs.existsSync(PROPS_PATH)) {
     console.log('\n[SonaryPro] ℹ️ Keystore ou release-signing.properties já existem.');
     console.log('   Nenhuma alteração foi feita para proteger sua chave de assinatura atual.');
     if (fs.existsSync(KEYSTORE_PATH)) {
       const b64 = fs.readFileSync(KEYSTORE_PATH).toString('base64');
       console.log(`   Keystore: ${KEYSTORE_PATH}`);
-      console.log(`   Base64 length: ${b64.length} caracteres\n`);
+      console.log(`   Base64 length: ${b64.length} caracteres`);
+      if (shouldCopyB64) {
+        if (copyToClipboard(b64)) {
+          console.log('   ✅ Base64 limpo (sem quebras de linha) copiado para a área de transferência!');
+        } else {
+          console.log('   ⚠️ Não foi possível copiar automaticamente. Base64:\n' + b64);
+        }
+      } else {
+        console.log('   👉 Para copiar o Base64 limpo sem quebra de linha: npm run init:keystore -- --copy-b64');
+      }
+      console.log('');
     }
     return;
   }

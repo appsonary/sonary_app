@@ -28,6 +28,7 @@ const {
   patchMainApplicationString,
   patchAndroidManifestString,
 } = require('../plugins/withAppUpdater');
+const { computeNextVersion, parseReleaseArgs } = require('../scripts/release');
 
 test.beforeEach(async () => {
   resetAllMocks();
@@ -337,4 +338,26 @@ class MainApplication {
   assert.ok(patchedManifest.includes('android.permission.REQUEST_INSTALL_PACKAGES'));
   assert.ok(patchedManifest.includes('${applicationId}.updater.fileprovider'));
   assert.strictEqual(patchAndroidManifestString(patchedManifest), patchedManifest);
+});
+
+test('Release script: computeNextVersion e parseReleaseArgs validam bumps e flags', () => {
+  assert.strictEqual(computeNextVersion('1.0.1', 'patch'), '1.0.2');
+  assert.strictEqual(computeNextVersion('1.0.1', 'minor'), '1.1.0');
+  assert.strictEqual(computeNextVersion('1.0.1', 'major'), '2.0.0');
+  assert.strictEqual(computeNextVersion('1.0.1', 'current'), '1.0.1');
+  assert.strictEqual(computeNextVersion('1.0.1', '1.4.0'), '1.4.0');
+
+  assert.throws(() => computeNextVersion('1.0.2', '1.0.1'), /deve ser maior/);
+  assert.throws(() => computeNextVersion('1.0.2', 'invalid'), /inválido/);
+
+  assert.deepStrictEqual(parseReleaseArgs([]), {
+    target: 'patch',
+    dryRun: false,
+    noPush: false,
+  });
+  assert.deepStrictEqual(parseReleaseArgs(['minor', '--dry-run', '--no-push']), {
+    target: 'minor',
+    dryRun: true,
+    noPush: true,
+  });
 });
