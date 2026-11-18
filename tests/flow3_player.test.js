@@ -435,11 +435,16 @@ test('Flow 3: NowPlayingModal native PanGestureHandler dismisses from anywhere w
     'PanResponder must not capture when scrolled down'
   );
 
-  // Scroll back to top -> re-enables full-screen downward drag dismiss
+  // Scroll back to top via onMomentumScrollEnd (even if throttled onScroll missed the final frame) -> re-enables full-screen downward drag dismiss
   await actAsync(async () => {
-    scrollView.props.onScroll({ nativeEvent: { contentOffset: { y: 0 } } });
+    scrollView.props.onMomentumScrollEnd({ nativeEvent: { contentOffset: { y: 3 } } });
   });
-  assert.strictEqual(panHandler.props.enabled, true, 'PanGestureHandler must re-enable when back at top');
+  assert.strictEqual(panHandler.props.enabled, true, 'PanGestureHandler must re-enable when back at top via onMomentumScrollEnd');
+  assert.strictEqual(
+    contentWrapper.props.onMoveShouldSetResponder({}, { dy: 25, dx: 4 }),
+    true,
+    'modalPanResponder fallback must accept downward drag when at top without stealing native RNGH capture'
+  );
 
   // Trigger native downward drag gesture anywhere in the modal
   await actAsync(async () => {
@@ -465,6 +470,36 @@ test('Flow 3: NowPlayingModal native PanGestureHandler dismisses from anywhere w
   });
 
   assert.strictEqual(modalClosed, true, 'Downward PanGestureHandler drag at top should dismiss NowPlayingModal');
+
+  // If a child re-render (e.g. newly selected track loading related/lyrics/queue) cancels an active downward drag
+  // after the user has already dragged past threshold, it must still complete dismissal instead of snapping back.
+  modalClosed = false;
+  await actAsync(async () => {
+    panHandler.props.onHandlerStateChange({
+      nativeEvent: {
+        state: GestureState.ACTIVE,
+        oldState: GestureState.BEGAN,
+        translationY: 20,
+        velocityY: 120,
+      },
+    });
+    panHandler.props.onGestureEvent({
+      nativeEvent: { translationY: 95 },
+    });
+    panHandler.props.onHandlerStateChange({
+      nativeEvent: {
+        state: GestureState.CANCELLED,
+        oldState: GestureState.ACTIVE,
+        translationY: 95,
+        velocityY: 500,
+      },
+    });
+  });
+  assert.strictEqual(
+    modalClosed,
+    true,
+    'Active downward drag cancelled mid-flight past threshold must still close NowPlayingModal'
+  );
 });
 
 test('Flow 3: NowPlayingModal 3-dots menu bottom sheet triggers Play Next, Queue, Playlist, and Download', async () => {

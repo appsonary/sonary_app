@@ -1480,6 +1480,7 @@ export default function NowPlayingModal({
   const [isAtTop, setIsAtTop] = useState(true);
   const isScrubbingRef = useRef(false);
   const isNativePanActiveRef = useRef(false);
+  const isModalPanDraggingRef = useRef(false);
   const isClosingRef = useRef(false);
   const isDismissingMenuRef = useRef(false);
   const isDismissingQueueRef = useRef(false);
@@ -1641,7 +1642,9 @@ export default function NowPlayingModal({
       scrollYRef.current = 0;
       isAtTopRef.current = true;
       setIsAtTop(true);
+      mainScrollRef.current?.scrollTo?.({ y: 0, animated: false });
       isNativePanActiveRef.current = false;
+      isModalPanDraggingRef.current = false;
       isHeaderDraggingRef.current = false;
       isClosingRef.current = false;
       isDismissingMenuRef.current = false;
@@ -1658,6 +1661,8 @@ export default function NowPlayingModal({
       hasModalShownRef.current = false;
       wasMiniDraggingRef.current = false;
       lastHandledMorphEpochRef.current = 0;
+      isNativePanActiveRef.current = false;
+      isModalPanDraggingRef.current = false;
       isHeaderDraggingRef.current = false;
       isClosingRef.current = false;
       stopModalAnim();
@@ -1702,6 +1707,16 @@ export default function NowPlayingModal({
     },
     [clearSwipeFallbackTimer, stopModalAnim]
   );
+
+  const updateTopScrollState = useCallback((rawY: number) => {
+    const y = Math.max(0, rawY || 0);
+    scrollYRef.current = y;
+    const nextAtTop = y <= 14;
+    if (nextAtTop !== isAtTopRef.current) {
+      isAtTopRef.current = nextAtTop;
+      setIsAtTop(nextAtTop);
+    }
+  }, []);
 
   const handleScrubbingChange = useCallback((scrubbing: boolean) => {
     isScrubbingRef.current = scrubbing;
@@ -1762,13 +1777,13 @@ export default function NowPlayingModal({
         extrapolate: 'clamp',
       }),
       inScrollArtworkFade: modalTranslateY.interpolate({
-        inputRange: [0, 6, 8],
-        outputRange: [1, 1, 0],
+        inputRange: [-500, 0, 0.5, D],
+        outputRange: [1, 1, 0, 0],
         extrapolate: 'clamp',
       }),
       morphArtworkOpacity: modalTranslateY.interpolate({
-        inputRange: [0, 6],
-        outputRange: [0, 1],
+        inputRange: [-500, 0, 0.5, D],
+        outputRange: [0, 0, 1, 1],
         extrapolate: 'clamp',
       }),
       morphArtworkTranslateX: modalTranslateY.interpolate({
@@ -1921,7 +1936,7 @@ export default function NowPlayingModal({
 
   const finishDragTranslate = React.useCallback(
     (dy: number, vyPerMs: number) => {
-      if (dy > 80 || vyPerMs > 0.4) {
+      if (dy > 64 || vyPerMs > 0.3 || (dy > 24 && vyPerMs > 0.15)) {
         closeWithSlide();
       } else {
         resetDragTranslate();
@@ -1996,6 +2011,8 @@ export default function NowPlayingModal({
   );
 
   // PanResponder para gesto de arrastar para baixo e recolher o player quando no topo da tela
+  // (Desativado no runtime real onde PanGestureHandler nativo do RNGH gerencia o gesto na UI thread sem competir)
+  const isRngHandlerAttached = persistentMode && typeof requestAnimationFrame === 'function';
   const modalPanResponder = useMemo(
     () =>
       PanResponder.create({
@@ -2003,38 +2020,58 @@ export default function NowPlayingModal({
         onStartShouldSetPanResponderCapture: () => false,
         onMoveShouldSetPanResponder: (_, gestureState) => {
           return (
+            !isRngHandlerAttached &&
             !isNativePanActiveRef.current &&
             !isScrubbingRef.current &&
             !showContextMenu &&
             !isQueueSheetVisible &&
             !isArtistModalVisible &&
-            scrollYRef.current <= 5 &&
+            scrollYRef.current <= 14 &&
             gestureState.dy > 8 &&
-            Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 1.2
+            Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 1.15
           );
+        },
+        onPanResponderGrant: () => {
+          isModalPanDraggingRef.current = true;
         },
         onPanResponderMove: (_, gestureState) => {
           if (!isNativePanActiveRef.current) {
+            isModalPanDraggingRef.current = true;
             updateDragTranslate(gestureState.dy);
           }
         },
         onPanResponderRelease: (_, gestureState) => {
+          isModalPanDraggingRef.current = false;
           if (!isNativePanActiveRef.current) {
             finishDragTranslate(gestureState.dy, gestureState.vy);
           }
         },
-        onPanResponderTerminate: () => {
+        onPanResponderTerminate: (_, gestureState) => {
+          const wasDragging = isModalPanDraggingRef.current;
+          isModalPanDraggingRef.current = false;
           if (!isNativePanActiveRef.current) {
-            resetDragTranslate();
+            if (
+              wasDragging &&
+              gestureState &&
+              (gestureState.dy > 64 ||
+                gestureState.vy > 0.3 ||
+                (gestureState.dy > 24 && gestureState.vy > 0.15))
+            ) {
+              closeWithSlide();
+            } else {
+              resetDragTranslate();
+            }
           }
         },
       }),
     [
+      isRngHandlerAttached,
       showContextMenu,
       isQueueSheetVisible,
       isArtistModalVisible,
       updateDragTranslate,
       finishDragTranslate,
+      closeWithSlide,
       resetDragTranslate,
     ]
   );
@@ -2047,6 +2084,7 @@ export default function NowPlayingModal({
         onStartShouldSetPanResponderCapture: () => false,
         onMoveShouldSetPanResponder: (_, gestureState) => {
           return (
+            !isRngHandlerAttached &&
             !isNativePanActiveRef.current &&
             !showContextMenu &&
             !isQueueSheetVisible &&
@@ -2057,6 +2095,7 @@ export default function NowPlayingModal({
         },
         onMoveShouldSetPanResponderCapture: (_, gestureState) => {
           return (
+            !isRngHandlerAttached &&
             !isNativePanActiveRef.current &&
             !showContextMenu &&
             !isQueueSheetVisible &&
@@ -2084,20 +2123,32 @@ export default function NowPlayingModal({
             finishDragTranslate(gestureState.dy, gestureState.vy);
           }
         },
-        onPanResponderTerminate: () => {
+        onPanResponderTerminate: (_, gestureState) => {
           const wasDragging = isHeaderDraggingRef.current;
           isHeaderDraggingRef.current = false;
           if (!isNativePanActiveRef.current && wasDragging) {
-            resetDragTranslate();
+            if (
+              gestureState &&
+              (gestureState.dy > 64 ||
+                gestureState.vy > 0.3 ||
+                (gestureState.dy > 24 && gestureState.vy > 0.15))
+            ) {
+              closeWithSlide();
+            } else {
+              resetDragTranslate();
+            }
           }
         },
+        onPanResponderTerminationRequest: () => false,
       }),
     [
+      isRngHandlerAttached,
       showContextMenu,
       isQueueSheetVisible,
       isArtistModalVisible,
       updateDragTranslate,
       finishDragTranslate,
+      closeWithSlide,
       resetDragTranslate,
     ]
   );
@@ -2148,39 +2199,51 @@ export default function NowPlayingModal({
   const effectiveArtistName =
     resolvedTrackMeta.primaryArtist || track?.artist || 'Artista';
 
-  // Busca automática de faixas relacionadas e perfil do artista quando o modal está ativo
+  // Busca automática de faixas relacionadas e perfil do artista (cacheado por trackId/artistName para evitar re-renders ao abrir o modal)
+  const lastFetchedRelatedTrackIdRef = useRef<string | null>(null);
+  const lastFetchedArtistNameRef = useRef<string | null>(null);
+
   useEffect(() => {
     let isCancelled = false;
     if (track?.id && !relatedTracks) {
-      setIsFetchingRelated(true);
-      getRelatedTracks(track.id, track.title, track.artist)
-        .then((res) => {
-          if (!isCancelled) {
-            setFetchedRelatedTracks(res || []);
-            setIsFetchingRelated(false);
-          }
-        })
-        .catch(() => {
-          if (!isCancelled) {
-            setFetchedRelatedTracks([]);
-            setIsFetchingRelated(false);
-          }
-        });
+      if (lastFetchedRelatedTrackIdRef.current !== track.id) {
+        lastFetchedRelatedTrackIdRef.current = track.id;
+        setIsFetchingRelated(true);
+        getRelatedTracks(track.id, track.title, track.artist)
+          .then((res) => {
+            if (!isCancelled) {
+              setFetchedRelatedTracks(res || []);
+              setIsFetchingRelated(false);
+            }
+          })
+          .catch(() => {
+            if (!isCancelled) {
+              lastFetchedRelatedTrackIdRef.current = null;
+              setFetchedRelatedTracks([]);
+              setIsFetchingRelated(false);
+            }
+          });
+      }
     }
 
     if (effectiveArtistName) {
-      getArtistProfile(effectiveArtistName)
-        .then((prof) => {
-          if (!isCancelled) {
-            setArtistProfile(prof);
-          }
-        })
-        .catch(() => {
-          if (!isCancelled) {
-            setArtistProfile(null);
-          }
-        });
+      if (lastFetchedArtistNameRef.current !== effectiveArtistName) {
+        lastFetchedArtistNameRef.current = effectiveArtistName;
+        getArtistProfile(effectiveArtistName)
+          .then((prof) => {
+            if (!isCancelled) {
+              setArtistProfile(prof);
+            }
+          })
+          .catch(() => {
+            if (!isCancelled) {
+              lastFetchedArtistNameRef.current = null;
+              setArtistProfile(null);
+            }
+          });
+      }
     } else {
+      lastFetchedArtistNameRef.current = null;
       setArtistProfile(null);
     }
 
@@ -2299,30 +2362,39 @@ export default function NowPlayingModal({
             }
             activeOffsetY={10}
             failOffsetY={-5}
-            failOffsetX={[-15, 15]}
+            failOffsetX={[-28, 28]}
+            shouldCancelWhenOutside={false}
             simultaneousHandlers={horizontalPanRef}
             waitFor={scrubberPanRef}
             onGestureEvent={dismissGestureEvent}
             onHandlerStateChange={(evt: any) => {
-              const { state, oldState, translationY, velocityY } = evt.nativeEvent;
+              const { state, oldState, translationY = 0, velocityY = 0 } = evt.nativeEvent;
               if (state === GestureState.ACTIVE) {
                 isClosingRef.current = false;
                 stopModalAnim();
                 isNativePanActiveRef.current = true;
+                modalTranslateY.setValue(Math.max(0, translationY));
               } else if (
                 state === GestureState.END &&
                 oldState === GestureState.ACTIVE
               ) {
                 isNativePanActiveRef.current = false;
+                if (translationY > 0) {
+                  modalTranslateY.setValue(translationY);
+                }
                 finishDragTranslate(translationY, velocityY / 1000);
               } else if (
                 state === GestureState.CANCELLED ||
                 state === GestureState.FAILED
               ) {
-                if (oldState === GestureState.ACTIVE && isNativePanActiveRef.current) {
-                  resetDragTranslate();
-                }
+                const wasActive = oldState === GestureState.ACTIVE && isNativePanActiveRef.current;
                 isNativePanActiveRef.current = false;
+                if (wasActive) {
+                  if (translationY > 0) {
+                    modalTranslateY.setValue(translationY);
+                  }
+                  finishDragTranslate(translationY, velocityY / 1000);
+                }
               }
             }}
           >
@@ -2482,13 +2554,16 @@ export default function NowPlayingModal({
                       showsVerticalScrollIndicator={false}
                       scrollEventThrottle={16}
                       onScroll={(e) => {
-                        const y = e?.nativeEvent?.contentOffset?.y ?? 0;
-                        scrollYRef.current = y;
-                        const nextAtTop = y <= 5;
-                        if (nextAtTop !== isAtTopRef.current) {
-                          isAtTopRef.current = nextAtTop;
-                          setIsAtTop(nextAtTop);
-                        }
+                        updateTopScrollState(e?.nativeEvent?.contentOffset?.y ?? 0);
+                      }}
+                      onScrollBeginDrag={(e) => {
+                        updateTopScrollState(e?.nativeEvent?.contentOffset?.y ?? 0);
+                      }}
+                      onScrollEndDrag={(e) => {
+                        updateTopScrollState(e?.nativeEvent?.contentOffset?.y ?? 0);
+                      }}
+                      onMomentumScrollEnd={(e) => {
+                        updateTopScrollState(e?.nativeEvent?.contentOffset?.y ?? 0);
                       }}
                       onLayout={(e) => {
                         const { y, height: h } = e.nativeEvent.layout;

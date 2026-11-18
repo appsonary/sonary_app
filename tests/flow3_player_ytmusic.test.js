@@ -1229,6 +1229,26 @@ test('YT Music Morph: Continuous interpolations across p = 0, 0.35, 0.50, 0.65, 
   assert.strictEqual(getTx(clipWrapper.props.style, 'translateY'), 0);
   assert.strictEqual(getTx(contentWrapper.props.style, 'translateY'), 0);
 
+  // Verify morphArtwork and inScrollArtwork never both drop below opacity 1 across the final approach (modalTranslateY in [0..8])
+  const inScrollArtworkNode = mRoot.find(
+    (n) =>
+      n.type === 'View' &&
+      typeof n.props?.onLayout === 'function' &&
+      n.props?.style?.opacity !== undefined
+  );
+  assert.ok(inScrollArtworkNode, 'inScrollArtwork wrapper must exist');
+  for (const ty of [6, 3, 1, 0.5, 0]) {
+    await actAsync(async () => {
+      dismissPan.props.onGestureEvent({ nativeEvent: { translationY: ty } });
+    });
+    const morphOp = getVal(flatten(morphArtwork.props.style).opacity);
+    const scrollOp = getVal(flatten(inScrollArtworkNode.props.style).opacity);
+    assert.ok(
+      morphOp === 1 || scrollOp === 1,
+      `At translationY=${ty}px at least one artwork layer must be at full 1.0 opacity to prevent darkening flicker (got morph=${morphOp}, inScroll=${scrollOp})`
+    );
+  }
+
   // p = 0.35: expanded controls faded out completely, compact mini bar still hidden, artwork morphing
   await setProgress(0.35);
   assert.strictEqual(getVal(flatten(headerToolbar.props.style).opacity), 0);
@@ -1701,6 +1721,40 @@ test('YT Music Morph: BEGAN->FAILED tap during enter/close does not freeze, and 
       true,
       'headerPanResponder must still accept touch start on the top bar'
     );
+
+    const prevRaf = global.requestAnimationFrame;
+    global.requestAnimationFrame = (cb) => setTimeout(cb, 16);
+    try {
+      let persistentModalTree;
+      await actAsync(async () => {
+        persistentModalTree = renderer.create(
+          React.createElement(NowPlayingModal, {
+            visible: true,
+            persistentMode: true,
+            onClose: () => {},
+            track: sampleTracks[0],
+            isPlaying: true,
+            isBuffering: false,
+            onTogglePlay: () => {},
+            onSkipNext: () => {},
+            onSkipPrevious: () => {},
+          })
+        );
+      });
+      const persistentContentWrapper = persistentModalTree.root.findByProps({
+        testID: 'now-playing-modal-content',
+      });
+      assert.strictEqual(
+        persistentContentWrapper.props.onMoveShouldSetResponder?.({}, { dy: 9, dx: 0 }),
+        false,
+        'In persistentMode with native PanGestureHandler attached, modalPanResponder must not steal slow downward drags at dy=9px before activeOffsetY=10px'
+      );
+      await actAsync(async () => {
+        persistentModalTree.unmount();
+      });
+    } finally {
+      global.requestAnimationFrame = prevRaf;
+    }
 
     await actAsync(async () => {
       dismissPan.props.onHandlerStateChange({
