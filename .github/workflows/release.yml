@@ -49,6 +49,7 @@ jobs:
           SONARY_KEYSTORE_BASE64: ${{ secrets.SONARY_KEYSTORE_BASE64 }}
           SONARY_STORE_PASSWORD: ${{ secrets.SONARY_STORE_PASSWORD }}
           SONARY_KEY_ALIAS: ${{ secrets.SONARY_KEY_ALIAS }}
+          SONARY_KEY_PASSWORD: ${{ secrets.SONARY_KEY_PASSWORD }}
         run: |
           node -e '
             const fs = require("fs");
@@ -69,12 +70,33 @@ jobs:
             fs.writeFileSync("sonary-release.keystore", buf);
             console.log("Keystore decodificada:", buf.length, "bytes");
           '
-          if ! KEYTOOL_OUT=$(keytool -list -keystore sonary-release.keystore -alias "$SONARY_KEY_ALIAS" -storepass "$SONARY_STORE_PASSWORD" 2>&1); then
-            echo "Erro ao validar keystore com keytool:"
-            echo "$KEYTOOL_OUT"
-            exit 1
-          fi
-          echo "Keystore validada com sucesso."
+          cat <<'EOF' > /tmp/VerifyKeystore.java
+          import java.io.FileInputStream;
+          import java.security.Key;
+          import java.security.KeyStore;
+
+          public class VerifyKeystore {
+            public static void main(String[] args) throws Exception {
+              String storePass = System.getenv("SONARY_STORE_PASSWORD");
+              String alias = System.getenv("SONARY_KEY_ALIAS");
+              String keyPass = System.getenv("SONARY_KEY_PASSWORD");
+              KeyStore ks = KeyStore.getInstance("PKCS12");
+              try (FileInputStream fis = new FileInputStream("sonary-release.keystore")) {
+                ks.load(fis, storePass.toCharArray());
+              }
+              if (!ks.containsAlias(alias)) {
+                throw new RuntimeException("Alias não encontrado na keystore: " + alias);
+              }
+              Key key = ks.getKey(alias, keyPass.toCharArray());
+              if (key == null) {
+                throw new RuntimeException("Chave privada retornou null para o alias: " + alias);
+              }
+              System.out.println("Keystore, alias e SONARY_KEY_PASSWORD validados com sucesso.");
+            }
+          }
+          EOF
+          java /tmp/VerifyKeystore.java
+          rm -f /tmp/VerifyKeystore.java
 
       - name: Prebuild and patch Android project
         run: |
