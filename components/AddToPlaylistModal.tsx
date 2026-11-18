@@ -4,6 +4,7 @@ import {
   Animated,
   Easing,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -12,6 +13,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import {
@@ -57,6 +59,8 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [addedPlaylistId, setAddedPlaylistId] = useState<string | null>(null);
   const [duplicateWarningPlaylist, setDuplicateWarningPlaylist] = useState<PlaylistSummary | null>(null);
+  const [keyboardHeight, setKeyboardHeight] = useState<number>(0);
+  const { height: windowHeight } = useWindowDimensions();
   const listOpacity = useRef(new Animated.Value(0)).current;
   const fadeRef = useRef<Animated.CompositeAnimation | null>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -119,6 +123,26 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
     return () => {
       fadeRef.current?.stop();
       clearCloseTimer();
+    };
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible) {
+      setKeyboardHeight(0);
+      return;
+    }
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard?.addListener?.(showEvent, (event: any) => {
+      const h = event?.endCoordinates?.height;
+      setKeyboardHeight(typeof h === 'number' && h > 0 ? h : 0);
+    });
+    const hideSub = Keyboard?.addListener?.(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+    return () => {
+      showSub?.remove?.();
+      hideSub?.remove?.();
     };
   }, [visible]);
 
@@ -215,11 +239,17 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
       <Animated.View style={{ flex: 1, opacity: backdropOpacity }}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.overlay}
+        style={[
+          styles.overlay,
+          Platform.OS === 'android' && keyboardHeight > 0 && { paddingBottom: keyboardHeight },
+        ]}
       >
         <Animated.View
           style={[
             styles.sheetContainer,
+            keyboardHeight > 0 && {
+              maxHeight: Math.max(240, windowHeight - keyboardHeight - 40),
+            },
             { transform: [{ translateY: sheetTranslateY }] },
           ]}
         >
@@ -336,10 +366,19 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
           )}
 
           {/* Lista de Playlists Existentes (fade suave sem skeleton flash) */}
-          <Animated.View style={{ opacity: listOpacity, maxHeight: 360 }}>
+          <Animated.View
+            style={{
+              opacity: listOpacity,
+              maxHeight:
+                keyboardHeight > 0
+                  ? Math.max(72, windowHeight - keyboardHeight - 250)
+                  : 360,
+            }}
+          >
             <FlatList
               data={playlists}
               keyExtractor={(item) => item.id}
+              keyboardShouldPersistTaps="handled"
               contentContainerStyle={styles.listContent}
               showsVerticalScrollIndicator={false}
               renderItem={({ item }) => {

@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Animated,
   Easing,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -11,6 +12,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { ImagePlus, RotateCcw, X } from 'lucide-react-native';
@@ -56,6 +58,8 @@ export const EditPlaylistModal: React.FC<EditPlaylistModalProps> = ({
   const [pendingCropAsset, setPendingCropAsset] = useState<PickedCoverAsset | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const { height: windowHeight } = useWindowDimensions();
   const cardOpacity = useRef(new Animated.Value(0)).current;
   const cardTranslateY = useRef(new Animated.Value(24)).current;
   const isDialogVisible = Boolean(visible && playlist && !pendingCropAsset);
@@ -98,6 +102,26 @@ export const EditPlaylistModal: React.FC<EditPlaylistModalProps> = ({
       setIsSaving(false);
     }
   }, [visible, playlist?.id]);
+
+  useEffect(() => {
+    if (!isDialogVisible) {
+      setKeyboardHeight(0);
+      return;
+    }
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard?.addListener?.(showEvent, (event: any) => {
+      const h = event?.endCoordinates?.height;
+      setKeyboardHeight(typeof h === 'number' && h > 0 ? h : 0);
+    });
+    const hideSub = Keyboard?.addListener?.(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+    return () => {
+      showSub?.remove?.();
+      hideSub?.remove?.();
+    };
+  }, [isDialogVisible]);
 
   if (!visible || !playlist) return null;
 
@@ -182,11 +206,17 @@ export const EditPlaylistModal: React.FC<EditPlaylistModalProps> = ({
       >
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.overlay}
+        style={[
+          styles.overlay,
+          Platform.OS === 'android' && keyboardHeight > 0 && { paddingBottom: keyboardHeight },
+        ]}
       >
         <Animated.View
           style={[
             styles.card,
+            keyboardHeight > 0 && {
+              maxHeight: Math.max(240, windowHeight - keyboardHeight - 40),
+            },
             {
               opacity: cardOpacity,
               transform: [{ translateY: cardTranslateY }],

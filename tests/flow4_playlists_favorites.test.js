@@ -126,6 +126,58 @@ test('Flow 4: AddToPlaylistModal adds track to existing playlist and creates new
   assert.strictEqual(detail.tracks[0].title, 'Comfortably Numb');
 });
 
+test('Flow 4: AddToPlaylistModal shifts sheet above Android software keyboard when creating a new playlist', async () => {
+  const { Keyboard, StyleSheet } = require('react-native');
+  const sampleTrack = {
+    id: 'track_kb_1',
+    title: 'The Emptiness Machine',
+    artist: 'Linkin Park',
+    duration: 190,
+    thumbnailUrl: 'https://example.com/lp.jpg',
+  };
+
+  let modalTree;
+  await actAsync(async () => {
+    modalTree = renderer.create(
+      React.createElement(AddToPlaylistModal, {
+        visible: true,
+        track: sampleTrack,
+        onClose: () => {},
+      })
+    );
+  });
+
+  const modalRoot = modalTree.root;
+  const createBtn = modalRoot.findByProps({ accessibilityLabel: 'Criar nova playlist' });
+  await actAsync(async () => {
+    createBtn.props.onPress();
+  });
+
+  const nameInput = modalRoot.findByProps({ accessibilityLabel: 'Nome da nova playlist' });
+  assert.ok(nameInput, 'New playlist TextInput must be visible');
+
+  const kav = modalRoot.findByType('KeyboardAvoidingView');
+  assert.strictEqual(StyleSheet.flatten(kav.props.style).paddingBottom, undefined);
+
+  // Emit Android keyboardDidShow (e.g. 320px keyboard height under adjustNothing)
+  await actAsync(async () => {
+    Keyboard.__emit('keyboardDidShow', { endCoordinates: { height: 320 } });
+  });
+
+  const kavStyleWithKeyboard = StyleSheet.flatten(kav.props.style);
+  assert.strictEqual(
+    kavStyleWithKeyboard.paddingBottom,
+    320,
+    'AddToPlaylistModal overlay must apply keyboardHeight paddingBottom on Android so the input stays above the keyboard'
+  );
+
+  // Emit keyboardDidHide -> restores paddingBottom
+  await actAsync(async () => {
+    Keyboard.__emit('keyboardDidHide', {});
+  });
+  assert.strictEqual(StyleSheet.flatten(kav.props.style).paddingBottom, undefined);
+});
+
 test('Flow 4: AddToPlaylistModal alerts when track is duplicate and allows confirming or cancelling', async () => {
   const pl = await createPlaylist('Duplicate Test Pl');
   const track = {

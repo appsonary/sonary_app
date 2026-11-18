@@ -228,7 +228,7 @@ export default function App() {
   );
   const collapseDistance =
     measuredMiniPlayerY !== null && measuredMiniPlayerY >= 200
-      ? measuredMiniPlayerY
+      ? Math.max(defaultCollapseDistance, measuredMiniPlayerY)
       : defaultCollapseDistance;
   const modalTranslateY = useRef(new Animated.Value(defaultCollapseDistance)).current;
   const activeMorphAnimRef = useRef<Animated.CompositeAnimation | null>(null);
@@ -250,6 +250,18 @@ export default function App() {
         extrapolate: 'clamp',
       }),
     [collapseDistance, modalTranslateY]
+  );
+
+  const handleBottomDockLayout = useCallback(
+    (e: any) => {
+      const { y, height: h } = e.nativeEvent.layout;
+      if (activeTrack && h >= 100 && y >= 200) {
+        setMeasuredMiniPlayerY((prev) =>
+          prev === null || Math.abs(prev - y) > 1 ? y : prev
+        );
+      }
+    },
+    [activeTrack]
   );
 
   const navBarTranslateY = React.useMemo(
@@ -2836,14 +2848,7 @@ export default function App() {
         <View
           style={!isDesktop ? styles.bottomDock : undefined}
           pointerEvents="box-none"
-          onLayout={(e) => {
-            const { y } = e.nativeEvent.layout;
-            if (activeTrack && y >= 200) {
-              setMeasuredMiniPlayerY((prev) =>
-                prev === null || Math.abs(prev - y) > 1 ? y : prev
-              );
-            }
-          }}
+          onLayout={handleBottomDockLayout}
         >
           {/* Mini Player Persistente (Sincronizado Nativo com MediaSession & Tocável para Expandir) */}
           {activeTrack && (

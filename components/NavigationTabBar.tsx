@@ -21,7 +21,7 @@ const GRADIENT_STOPS = [
   { offset: '50%', opacity: '0.8105' },
   { offset: '62.5%', opacity: '0.9049' },
   { offset: '75%', opacity: '0.9640' },
-  { offset: '87.5%', opacity: '0.9932' },
+  { offset: '87.5%', opacity: '1' },
   { offset: '100%', opacity: '1' },
 ];
 
@@ -58,7 +58,7 @@ export const NavigationTabBar: React.FC<NavigationTabBarProps> = ({
               ))}
             </LinearGradient>
           </Defs>
-          <Rect x="0" y="0" width="1" height="94" fill="url(#spotifyNavFade)" />
+          <Rect x="0" y="0" width="1" height="96" fill="url(#spotifyNavFade)" />
         </Svg>
       </View>
 
@@ -209,7 +209,7 @@ const styles = StyleSheet.create({
   },
   gradientContainer: {
     ...StyleSheet.absoluteFillObject,
-    height: 94,
+    bottom: -4,
   },
   tabItem: {
     flex: 1,

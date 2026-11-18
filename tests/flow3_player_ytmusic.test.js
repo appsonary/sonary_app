@@ -1336,6 +1336,16 @@ test('YT Music Morph: Single-player handoff, NavigationTabBar proportional slide
   const countModalContent = () =>
     root.findAll((n) => n.type === 'View' && n.props.testID === 'now-playing-modal-content').length;
 
+  // Stale pre-track bottomDock layout (height < 100, e.g. only 66px navBar before mini player mounted)
+  // must NOT overwrite collapseDistance and strand the morphed mini player higher up above the tab bar.
+  const bottomDock = root.find(
+    (n) => n.type === 'View' && n.props.pointerEvents === 'box-none' && typeof n.props.onLayout === 'function'
+  );
+  assert.ok(bottomDock, 'bottomDock with onLayout must exist');
+  await actAsync(async () => {
+    bottomDock.props.onLayout({ nativeEvent: { layout: { x: 0, y: 746, width: 375, height: 66 } } });
+  });
+
   // Resting collapsed state: 1 player visible (PersistentMiniPlayer), NowPlayingModal unmounted, NavigationTabBar visible
   assert.strictEqual(getStyleNum(miniAnimWrapper, 'opacity'), 1);
   assert.strictEqual(miniAnimWrapper.props.pointerEvents, 'auto');
