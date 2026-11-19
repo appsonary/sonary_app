@@ -21,6 +21,7 @@ export interface SearchPillInputProps {
   placeholder?: string;
   accessibilityLabel?: string;
   clearAccessibilityLabel?: string;
+  onClear?: () => void;
   onFocus?: () => void;
   onBlur?: () => void;
   onSubmitEditing?: () => void;
@@ -39,6 +40,7 @@ export const SearchPillInput: React.FC<SearchPillInputProps> = ({
   placeholder = 'Buscar...',
   accessibilityLabel = 'Campo de busca',
   clearAccessibilityLabel = 'Limpar busca',
+  onClear,
   onFocus,
   onBlur,
   onSubmitEditing,
@@ -89,6 +91,7 @@ export const SearchPillInput: React.FC<SearchPillInputProps> = ({
       autoCorrect={false}
       accessibilityLabel={accessibilityLabel}
       clearAccessibilityLabel={clearAccessibilityLabel}
+      onClear={onClear}
     />
   );
 };
@@ -199,6 +202,16 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
           placeholder="Buscar faixas, artistas ou álbuns..."
           accessibilityLabel="Campo de busca de músicas"
           clearAccessibilityLabel="Limpar busca"
+          onClear={
+            hasResults && onClearSearch
+              ? () => {
+                  updateFocus(false);
+                  searchInputRef.current?.blur?.();
+                  Keyboard?.dismiss?.();
+                  onClearSearch();
+                }
+              : undefined
+          }
           onFocus={() => updateFocus(true)}
           onBlur={() => updateFocus(false)}
           onSubmitEditing={handleSubmit}

@@ -9,7 +9,7 @@ import {
   View,
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
-import { Check, Copy, RefreshCw } from 'lucide-react-native';
+import { Check, Copy } from 'lucide-react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { theme } from '../theme';
 import {
@@ -28,19 +28,11 @@ import { snoozeSupportNotificationsUntilNextMonth } from '../services/database';
 export interface SupportSectionProps {
   onShowToast?: (message: string) => void;
   onPixCopied?: () => void;
-  appVersion?: string;
-  onCheckUpdates?: () => void;
-  isCheckingUpdates?: boolean;
-  hasAvailableUpdate?: boolean;
 }
 
 export const SupportSection: React.FC<SupportSectionProps> = ({
   onShowToast,
   onPixCopied,
-  appVersion,
-  onCheckUpdates,
-  isCheckingUpdates = false,
-  hasAvailableUpdate = false,
 }) => {
   const [selectedPreset, setSelectedPreset] = useState<PixPresetId>('5');
   const [customAmountText, setCustomAmountText] = useState('');
@@ -238,26 +230,6 @@ export const SupportSection: React.FC<SupportSectionProps> = ({
           Contribuição voluntária • Sem cobrança recorrente • Acesso livre para
           todos
         </Text>
-
-        {typeof onCheckUpdates === 'function' && (
-          <TouchableOpacity
-            style={styles.updateButton}
-            onPress={onCheckUpdates}
-            disabled={isCheckingUpdates}
-            activeOpacity={0.75}
-            accessibilityRole="button"
-            accessibilityLabel="Verificar atualizações do aplicativo"
-          >
-            <RefreshCw color="#FFFFFF" size={14} />
-            <Text style={styles.updateButtonText}>
-              {isCheckingUpdates
-                ? 'Verificando atualizações...'
-                : hasAvailableUpdate
-                  ? `Atualização disponível${appVersion ? ` (atual: v${appVersion})` : ''}`
-                  : `Verificar atualizações${appVersion ? ` • v${appVersion}` : ''}`}
-            </Text>
-          </TouchableOpacity>
-        )}
       </ScrollView>
     </View>
   );
@@ -421,23 +393,6 @@ const styles = StyleSheet.create({
     color: theme.colors.textMuted,
     textAlign: 'center',
     paddingHorizontal: 8,
-  },
-  updateButton: {
-    alignSelf: 'center',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: theme.radii.circular,
-    backgroundColor: '#16161A',
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-  updateButtonText: {
-    fontSize: theme.typography.fontSize.caption,
-    fontWeight: theme.typography.fontWeight.semiBold,
-    color: theme.colors.textPrimary,
   },
 });
 

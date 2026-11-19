@@ -417,7 +417,7 @@ test('Updater UI: UpdateModal exibe estado atualizado e verificando quando relea
   assert.strictEqual(checkNowCalls, 1);
 });
 
-test('Updater App: aba Apoiar acessível pelo menu lateral abre UpdateModal mesmo sem atualização disponível', async () => {
+test('Updater App: aba Apoiar não exibe botão de atualizações e menu lateral abre UpdateModal mesmo sem atualização disponível', async () => {
   const App = require('../App').default;
   const originalFetch = global.fetch;
   global.fetch = async () => ({
@@ -439,14 +439,18 @@ test('Updater App: aba Apoiar acessível pelo menu lateral abre UpdateModal mesm
     await actAsync(async () => {
       appTree = renderer.create(React.createElement(App));
     });
-    const menuBtn = appTree.root.find(
-      (n) =>
-        n.type === 'TouchableOpacity' &&
-        n.props.accessibilityLabel === 'Abrir menu'
-    );
-    await actAsync(async () => {
-      menuBtn.props.onPress();
-    });
+    const openMenu = async () => {
+      const menuBtn = appTree.root.find(
+        (n) =>
+          n.type === 'TouchableOpacity' &&
+          n.props.accessibilityLabel === 'Abrir menu'
+      );
+      await actAsync(async () => {
+        menuBtn.props.onPress();
+      });
+    };
+
+    await openMenu();
     const supportBtn = appTree.root.find(
       (n) =>
         n.type === 'TouchableOpacity' &&
@@ -455,13 +459,21 @@ test('Updater App: aba Apoiar acessível pelo menu lateral abre UpdateModal mesm
     await actAsync(async () => {
       supportBtn.props.onPress();
     });
-    const checkUpdatesBtn = appTree.root.find(
+    const supportUpdateBtns = appTree.root.findAll(
       (n) =>
         n.type === 'TouchableOpacity' &&
         n.props.accessibilityLabel === 'Verificar atualizações do aplicativo'
     );
+    assert.strictEqual(supportUpdateBtns.length, 0);
+
+    await openMenu();
+    const drawerUpdatesBtn = appTree.root.find(
+      (n) =>
+        n.type === 'TouchableOpacity' &&
+        n.props.accessibilityLabel === 'Atualizações do aplicativo'
+    );
     await actAsync(async () => {
-      checkUpdatesBtn.props.onPress();
+      drawerUpdatesBtn.props.onPress();
     });
     const text = getAllText(appTree.root);
     assert.ok(text.includes('App atualizado'));

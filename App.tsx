@@ -44,6 +44,8 @@ import {
 import { PersistentMiniPlayer } from './components/PersistentMiniPlayer';
 import { YouTubeMusicSidebar } from './components/YouTubeMusicSidebar';
 import { QuickPicksSection } from './components/QuickPicksSection';
+import { ArtistResultsSection } from './components/ArtistResultsSection';
+import { ArtistProfileModal } from './components/ArtistProfileModal';
 import { AtmosphericGradient } from './components/AtmosphericGradient';
 import { TrackRowSkeleton } from './components/TrackRowSkeleton';
 import { ToastBanner, ToastVariant } from './components/ToastBanner';
@@ -80,6 +82,7 @@ import {
   Zap,
 } from 'lucide-react-native';
 import {
+  ArtistSearchResult,
   TrackSummary,
   searchTracksPage,
   getAudioStream,
@@ -206,6 +209,8 @@ export default function App() {
   const [recentSearchQueries, setRecentSearchQueries] = useState<string[]>([]);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [searchResults, setSearchResults] = useState<TrackSummary[]>([]);
+  const [searchArtistsResults, setSearchArtistsResults] = useState<ArtistSearchResult[]>([]);
+  const [selectedSearchArtist, setSelectedSearchArtist] = useState<ArtistSearchResult | null>(null);
   const [searchContinuationToken, setSearchContinuationToken] = useState<string | null>(null);
   const [lastSearchedQuery, setLastSearchedQuery] = useState<string>('');
   const [isLoadingMoreSearch, setIsLoadingMoreSearch] = useState(false);
@@ -620,7 +625,11 @@ export default function App() {
    * Inicia explicitamente a Rádio do Artista: substitui a fila futura pelo mix do artista
    * sem interromper a música atual.
    */
-  const handleStartArtistRadio = async (artistName: string, channelId?: string) => {
+  const handleStartArtistRadio = async (
+    artistName: string,
+    channelId?: string,
+    sourceTrackTitle?: string
+  ) => {
     if (!artistName || isLoadingRadio) return;
     if (!nativeActiveTrack && restoredSession) {
       const resumed = await resumeRestoredSession(restoredSession);
@@ -633,7 +642,7 @@ export default function App() {
       const radioRes = await getArtistRadio(
         artistName,
         channelId,
-        activeTrack?.title
+        sourceTrackTitle
       );
       if (queueGenerationRef.current !== radioEpoch) return;
       radioContinuationRef.current = radioRes.continuationToken;
@@ -1817,6 +1826,7 @@ export default function App() {
 
     setIsSearching(true);
     setIsLoadingMoreSearch(false);
+    setSearchArtistsResults([]);
     setSearchContinuationToken(null);
     setLastSearchedQuery(trimmed);
     setErrorMessage(null);
@@ -1824,6 +1834,7 @@ export default function App() {
     try {
       const page = await searchTracksPage(trimmed, { targetCount: 30 });
       setSearchResults(page.tracks);
+      setSearchArtistsResults(page.artists ?? []);
       setSearchContinuationToken(page.continuationToken);
 
       // Consulta em lote no SQLite sem descartar IDs já carregados de playlists/aba Baixadas
@@ -2665,7 +2676,7 @@ export default function App() {
                         onSearch={handleSearch}
                         isSearching={isSearching}
                         recentQueries={recentSearchQueries}
-                        hasResults={searchResults.length > 0}
+                        hasResults={searchResults.length > 0 || searchArtistsResults.length > 0}
                         onFocusChange={setIsSearchFocused}
                         onRemoveRecentQuery={async (item) => {
                           try {
@@ -2683,6 +2694,7 @@ export default function App() {
                           lastBackExitPressRef.current = 0;
                           setQuery('');
                           setSearchResults([]);
+                          setSearchArtistsResults([]);
                           setSearchContinuationToken(null);
                           setLastSearchedQuery('');
                           setErrorMessage(null);
@@ -2697,45 +2709,53 @@ export default function App() {
                           keyboardShouldPersistTaps="handled"
                           contentContainerStyle={styles.listContent}
                           ListHeaderComponent={
-                            searchResults.length > 0 ? (
+                            searchResults.length > 0 || searchArtistsResults.length > 0 ? (
                               <View style={styles.searchResultsHeaderContainer}>
-                                <QuickPicksSection
-                                  tracks={searchResults.slice(0, 8).map((t) => ({
-                                    id: t.id,
-                                    title: t.title,
-                                    artist: t.artist,
-                                    duration: t.duration,
-                                    formattedDuration: t.formattedDuration,
-                                    thumbnailUrl: t.thumbnailUrl,
-                                  }))}
-                                  activeTrackId={activeTrack?.id}
-                                  isPlaying={isPlaying}
-                                  downloadedTrackIds={downloadedIds}
-                                  onSelectTrack={(track, index) => {
-                                    const found = searchResults.find((r) => r.id === track.id);
-                                    if (found) handleSelectTrack(found, index);
-                                  }}
-                                  onAddToPlaylist={(track) => {
-                                    const found = searchResults.find((r) => r.id === track.id);
-                                    if (found) handleOpenAddToPlaylist(found);
-                                  }}
+                                <ArtistResultsSection
+                                  artists={searchArtistsResults}
+                                  onSelectArtist={(artist) => setSelectedSearchArtist(artist)}
                                 />
-                                <View style={styles.resultsDivider} />
-                                <View style={styles.resultsHeaderRow}>
-                                  <Text style={styles.resultsHeaderTitle}>Músicas e Resultados</Text>
-                                  <View style={styles.resultsBadge}>
-                                    <Text style={styles.resultsBadgeText}>
-                                      {`${searchResults.length} faixas`}
-                                    </Text>
-                                  </View>
-                                </View>
+                                {searchResults.length > 0 && (
+                                  <>
+                                    <QuickPicksSection
+                                      tracks={searchResults.slice(0, 8).map((t) => ({
+                                        id: t.id,
+                                        title: t.title,
+                                        artist: t.artist,
+                                        duration: t.duration,
+                                        formattedDuration: t.formattedDuration,
+                                        thumbnailUrl: t.thumbnailUrl,
+                                      }))}
+                                      activeTrackId={activeTrack?.id}
+                                      isPlaying={isPlaying}
+                                      downloadedTrackIds={downloadedIds}
+                                      onSelectTrack={(track, index) => {
+                                        const found = searchResults.find((r) => r.id === track.id);
+                                        if (found) handleSelectTrack(found, index);
+                                      }}
+                                      onAddToPlaylist={(track) => {
+                                        const found = searchResults.find((r) => r.id === track.id);
+                                        if (found) handleOpenAddToPlaylist(found);
+                                      }}
+                                    />
+                                    <View style={styles.resultsDivider} />
+                                    <View style={styles.resultsHeaderRow}>
+                                      <Text style={styles.resultsHeaderTitle}>Músicas e Resultados</Text>
+                                      <View style={styles.resultsBadge}>
+                                        <Text style={styles.resultsBadgeText}>
+                                          {`${searchResults.length} faixas`}
+                                        </Text>
+                                      </View>
+                                    </View>
+                                  </>
+                                )}
                               </View>
                             ) : null
                           }
                           ListEmptyComponent={
                             isSearching ? (
                               <TrackRowSkeleton count={searchSkeletonRows} fadeBottom />
-                            ) : (
+                            ) : searchArtistsResults.length > 0 ? null : (
                               <View style={styles.emptyContainer}>
                                 {/* Seção de Descoberta Rápida por Gênero */}
                                 <View style={styles.exploreSection}>
@@ -2969,13 +2989,7 @@ export default function App() {
                   {/* Aba Apoiar (Contribuição Voluntária via Pix) */}
                   {activeTab === 'support' && (
                     <View style={styles.tabContent}>
-                      <SupportSection
-                        onShowToast={setToastMessage}
-                        appVersion={installedAppVersion?.versionName}
-                        onCheckUpdates={() => void handleCheckUpdates(true)}
-                        isCheckingUpdates={isCheckingUpdates}
-                        hasAvailableUpdate={Boolean(availableUpdate)}
-                      />
+                      <SupportSection onShowToast={setToastMessage} />
                     </View>
                   )}
                 </Animated.View>
@@ -3186,7 +3200,9 @@ export default function App() {
                 : undefined
             }
             onStartTrackRadio={handleStartTrackRadio}
-            onStartArtistRadio={handleStartArtistRadio}
+            onStartArtistRadio={(name, cid) =>
+              handleStartArtistRadio(name, cid, activeTrack?.title)
+            }
             isLoadingRadio={isLoadingRadio}
             onPlayRelatedTrack={(relTrack) => {
               handleSelectTrack(relTrack);
@@ -3264,6 +3280,21 @@ export default function App() {
             showToast(`Atualização v${versionName} silenciada`, 'success');
           }}
         />
+
+        {/* Modal de Perfil do Artista aberto a partir da busca */}
+        {selectedSearchArtist && (
+          <ArtistProfileModal
+            visible={Boolean(selectedSearchArtist)}
+            onClose={() => setSelectedSearchArtist(null)}
+            artistName={selectedSearchArtist.name}
+            channelId={selectedSearchArtist.id}
+            onPlayTrack={(track) => handleSelectTrack(track, 0)}
+            onAddToQueue={(track) => handleAddToQueue(track)}
+            onStartArtistRadio={handleStartArtistRadio}
+            toastMessage={toastMessage}
+            onDismissToast={() => setToastMessage(null)}
+          />
+        )}
 
         {/* Modal de Adicionar à Playlist */}
         {isAddToPlaylistVisible && (

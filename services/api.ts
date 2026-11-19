@@ -59,8 +59,16 @@ export interface TrackSummary {
   thumbnailUrl: string;
 }
 
+export interface ArtistSearchResult {
+  id: string; // YouTube channelId / browseId (ex: "UCxVTgYCPCz5Iib9iik9M2bg")
+  name: string;
+  subtitle?: string;
+  thumbnailUrl: string;
+}
+
 export interface SearchPageResult {
   tracks: TrackSummary[];
+  artists?: ArtistSearchResult[];
   continuationToken: string | null;
 }
 
@@ -218,11 +226,122 @@ function formatDurationSeconds(totalSeconds: number): string {
 // 5. FUNÇÕES PÚBLICAS EXPORTADAS
 // ==========================================
 
-declare const module: { exports?: { searchTracks?: (query: string) => Promise<TrackSummary[]> } } | undefined;
+declare const module: {
+  exports?: {
+    searchTracks?: (query: string) => Promise<TrackSummary[]>;
+    searchArtists?: (query: string, limit?: number) => Promise<ArtistSearchResult[]>;
+  };
+} | undefined;
 
 const DEFAULT_SEARCH_TARGET_COUNT = 30;
+const DEFAULT_ARTIST_SEARCH_LIMIT = 12;
 const MAX_SEARCH_PAGES_PER_BATCH = 4;
 const FALLBACK_CURSOR_PREFIX = '__fb__:';
+const YTM_ARTIST_SEARCH_PARAMS = 'EgWKAQIgAWoKEAkQChADEAUQBA%3D%3D';
+
+function upgradeArtistThumbUrl(rawUrl: string): string {
+  if (!rawUrl) return '';
+  return rawUrl.replace(/=w\d+-h\d+/i, '=w240-h240');
+}
+
+function parseYouTubeMusicArtistsResponse(
+  data: any,
+  limit: number = DEFAULT_ARTIST_SEARCH_LIMIT
+): ArtistSearchResult[] {
+  const tabs = data?.contents?.tabbedSearchResultsRenderer?.tabs;
+  const firstTab = Array.isArray(tabs) ? tabs[0]?.tabRenderer?.content : undefined;
+  const sections = firstTab?.sectionListRenderer?.contents;
+  if (!Array.isArray(sections)) return [];
+
+  const artists: ArtistSearchResult[] = [];
+  const seenIds = new Set<string>();
+  const seenNames = new Set<string>();
+
+  for (const section of sections) {
+    const items = section?.musicShelfRenderer?.contents;
+    if (!Array.isArray(items)) continue;
+
+    for (const entry of items) {
+      if (artists.length >= limit) return artists;
+      const renderer = entry?.musicResponsiveListItemRenderer;
+      if (!renderer) continue;
+
+      const browseId = renderer?.navigationEndpoint?.browseEndpoint?.browseId;
+      const name =
+        renderer?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text?.trim();
+      if (!browseId || typeof browseId !== 'string' || !browseId.startsWith('UC') || !name) continue;
+
+      const normName = name.toLowerCase();
+      if (seenIds.has(browseId) || seenNames.has(normName)) continue;
+
+      const subRuns =
+        renderer?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
+      const subtitle = Array.isArray(subRuns)
+        ? subRuns.map((r: any) => r?.text || '').join('').trim()
+        : undefined;
+
+      const thumbs = renderer?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails;
+      const rawThumb =
+        Array.isArray(thumbs) && thumbs.length > 0 ? thumbs[thumbs.length - 1]?.url || '' : '';
+
+      seenIds.add(browseId);
+      seenNames.add(normName);
+      artists.push({
+        id: browseId,
+        name,
+        subtitle: subtitle || undefined,
+        thumbnailUrl: upgradeArtistThumbUrl(rawThumb),
+      });
+    }
+  }
+
+  return artists;
+}
+
+/**
+ * Busca os primeiros artistas correspondentes à query no YouTube Music (InnerTube WEB_REMIX).
+ * Falha silenciosamente retornando [] para nunca bloquear a busca de músicas.
+ */
+export async function searchArtists(
+  query: string,
+  limit: number = DEFAULT_ARTIST_SEARCH_LIMIT
+): Promise<ArtistSearchResult[]> {
+  const trimmed = query.trim();
+  const safeLimit = Math.max(1, limit);
+  if (!trimmed) return [];
+
+  try {
+    const response = await fetchWithTimeout(
+      'https://music.youtube.com/youtubei/v1/search?prettyPrint=false',
+      6000,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': INNERTUBE_USER_AGENT,
+        },
+        body: JSON.stringify({
+          context: {
+            client: {
+              clientName: 'WEB_REMIX',
+              clientVersion: '1.20240101.01.00',
+              hl: 'pt',
+              gl: 'BR',
+            },
+          },
+          query: trimmed,
+          params: YTM_ARTIST_SEARCH_PARAMS,
+        }),
+      }
+    );
+
+    if (!response.ok) return [];
+    const data = await response.json();
+    return parseYouTubeMusicArtistsResponse(data, safeLimit);
+  } catch {
+    return [];
+  }
+}
 
 function extractVideoRendererTrack(v: any): TrackSummary | null {
   if (!v || !v.videoId) return null;
@@ -562,6 +681,185 @@ async function fetchFallbackBatch(
   throw new AllInstancesFailedError(instanceErrors);
 }
 
+export interface DominantArtistInference {
+  name: string;
+  count: number;
+  total: number;
+  ratio: number;
+}
+
+const DOMINANT_ARTIST_SAMPLE_SIZE = 12;
+const DOMINANT_ARTIST_MIN_COUNT = 3;
+const DOMINANT_ARTIST_MIN_RATIO = 0.35;
+const STRONG_DIVERGENCE_MIN_COUNT = 4;
+const STRONG_DIVERGENCE_MIN_RATIO = 0.5;
+const GENERIC_ARTIST_NAME_REGEX =
+  /^(?:artista(?:\s+desconhecido)?|various artists|v[aá]rios artistas)$/i;
+const TITLE_DASH_SEPARATOR_REGEX = /\s+[-–—]\s+/;
+const TRIBUTE_OR_COVER_REGEX = /\b(?:tribute|tributo|cover|karaoke|instrumental)\b/;
+
+function normalizeArtistKey(name: string): string {
+  return name.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function normalizeArtistForMatch(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[.,'"`’\-–—_/\\()[\]&+!?]/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+function artistMatchesInferred(artistName: string, inferredName: string): boolean {
+  const a = normalizeArtistForMatch(artistName);
+  const b = normalizeArtistForMatch(inferredName);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (TRIBUTE_OR_COVER_REGEX.test(a) && !TRIBUTE_OR_COVER_REGEX.test(b)) return false;
+  const hasWholePhrase = (haystack: string, needle: string) =>
+    needle.length >= 4 && ` ${haystack} `.includes(` ${needle} `);
+  return (
+    hasWholePhrase(a, b) ||
+    (a.length >= b.length * 0.6 && hasWholePhrase(b, a))
+  );
+}
+
+/**
+ * Infere um artista dominante a partir das primeiras 12 faixas retornadas na busca,
+ * aplicando limiar mínimo anti-alucinação (count >= 3 e ratio >= 0.35).
+ */
+export function inferDominantArtistFromTracks(
+  tracks: TrackSummary[]
+): DominantArtistInference | null {
+  if (!Array.isArray(tracks) || tracks.length === 0) return null;
+
+  const sample = tracks.slice(0, DOMINANT_ARTIST_SAMPLE_SIZE);
+  const extracted = sample.map((track) => {
+    const meta = extractTrackMetadata(track.title, track.artist);
+    const dashParts = (track.title || '').split(TITLE_DASH_SEPARATOR_REGEX);
+    const isLeftSideCleanTitle =
+      dashParts.length >= 2 &&
+      normalizeArtistKey(dashParts[0]) === normalizeArtistKey(meta.cleanTitle || '');
+    return { isLeftSideCleanTitle, meta };
+  });
+
+  const counts = new Map<string, { name: string; count: number }>();
+
+  for (const { meta } of extracted) {
+    const rawName = (meta.primaryArtist || '').trim().replace(/\s+/g, ' ');
+    const key = normalizeArtistKey(rawName);
+    if (!key || GENERIC_ARTIST_NAME_REGEX.test(rawName)) continue;
+
+    const entry = counts.get(key);
+    if (entry) {
+      entry.count += 1;
+    } else {
+      counts.set(key, { name: rawName, count: 1 });
+    }
+  }
+
+  // Reatribui uploads de fãs no formato "Artista - Live ..." cujo lado esquerdo já aparece como artista no lote.
+  for (const { isLeftSideCleanTitle, meta } of extracted) {
+    if (!isLeftSideCleanTitle) continue;
+    const primaryKey = normalizeArtistKey(meta.primaryArtist || '');
+    const titleName = (meta.cleanTitle || '').trim().replace(/\s+/g, ' ');
+    const titleKey = normalizeArtistKey(titleName);
+    if (!titleKey || titleKey === primaryKey || GENERIC_ARTIST_NAME_REGEX.test(titleName)) {
+      continue;
+    }
+
+    const primaryEntry = primaryKey ? counts.get(primaryKey) : undefined;
+    const titleEntry = counts.get(titleKey);
+    if (
+      titleEntry &&
+      (!primaryEntry || primaryEntry.count <= 1 || primaryEntry.count < titleEntry.count)
+    ) {
+      titleEntry.count += 1;
+      if (primaryEntry) {
+        primaryEntry.count -= 1;
+      }
+    }
+  }
+
+  let best: { name: string; count: number } | null = null;
+  for (const entry of counts.values()) {
+    if (!best || entry.count > best.count) {
+      best = entry;
+    }
+  }
+
+  if (!best) return null;
+  const total = sample.length;
+  const ratio = best.count / total;
+  if (best.count < DOMINANT_ARTIST_MIN_COUNT || ratio < DOMINANT_ARTIST_MIN_RATIO) {
+    return null;
+  }
+
+  return { name: best.name, count: best.count, total, ratio };
+}
+
+async function enrichArtistsFromTracks(
+  query: string,
+  tracks: TrackSummary[],
+  primaryArtists: ArtistSearchResult[],
+  fetchArtists: (query: string, limit?: number) => Promise<ArtistSearchResult[]>
+): Promise<ArtistSearchResult[]> {
+  if (tracks.length === 0) return primaryArtists;
+
+  const inferred = inferDominantArtistFromTracks(tracks);
+  if (!inferred) return primaryArtists;
+
+  if (normalizeArtistKey(inferred.name) === normalizeArtistKey(query)) {
+    return primaryArtists;
+  }
+
+  const safeFetchArtists = async (artistQuery: string): Promise<ArtistSearchResult[]> => {
+    try {
+      const res = await fetchArtists(artistQuery, DEFAULT_ARTIST_SEARCH_LIMIT);
+      return Array.isArray(res) ? res : [];
+    } catch {
+      return [];
+    }
+  };
+
+  if (primaryArtists.length === 0) {
+    return safeFetchArtists(inferred.name);
+  }
+
+  if (
+    inferred.count < STRONG_DIVERGENCE_MIN_COUNT ||
+    inferred.ratio < STRONG_DIVERGENCE_MIN_RATIO
+  ) {
+    return primaryArtists;
+  }
+
+  if (primaryArtists.some((a) => artistMatchesInferred(a.name, inferred.name))) {
+    return primaryArtists;
+  }
+
+  const fallbackArtists = await safeFetchArtists(inferred.name);
+  if (fallbackArtists.length === 0) {
+    return primaryArtists;
+  }
+
+  const merged: ArtistSearchResult[] = [];
+  const seenIds = new Set<string>();
+  const seenNames = new Set<string>();
+  for (const artist of [...fallbackArtists, ...primaryArtists]) {
+    if (merged.length >= DEFAULT_ARTIST_SEARCH_LIMIT) break;
+    const normName = artist.name.trim().toLowerCase();
+    if (!artist.id || !normName || seenIds.has(artist.id) || seenNames.has(normName)) {
+      continue;
+    }
+    seenIds.add(artist.id);
+    seenNames.add(normName);
+    merged.push(artist);
+  }
+  return merged;
+}
+
 /**
  * Busca paginada de faixas (mínimo de 30 resultados inéditos por lote quando disponíveis).
  * Respeita automaticamente mocks de `api.searchTracks` em testes automatizados.
@@ -572,18 +870,40 @@ export async function searchTracksPage(
 ): Promise<SearchPageResult> {
   const trimmed = query.trim();
   if (!trimmed) {
-    return { tracks: [], continuationToken: null };
+    return { tracks: [], artists: [], continuationToken: null };
   }
 
   const mockedSearch = module?.exports?.searchTracks;
+  const mockedArtists = module?.exports?.searchArtists;
+  const hasMockedArtists =
+    typeof mockedArtists === 'function' && mockedArtists !== searchArtists;
+  const resolveArtists = hasMockedArtists ? mockedArtists : searchArtists;
+
   if (!options.continuationToken && typeof mockedSearch === 'function' && mockedSearch !== searchTracks) {
-    const mocked = await mockedSearch(trimmed);
-    return { tracks: mocked, continuationToken: null };
+    const [mocked, primaryArtists] = await Promise.all([
+      mockedSearch(trimmed),
+      hasMockedArtists
+        ? Promise.resolve()
+            .then(() => mockedArtists(trimmed, DEFAULT_ARTIST_SEARCH_LIMIT))
+            .catch(() => [])
+        : Promise.resolve([]),
+    ]);
+    const artists =
+      hasMockedArtists && mocked.length > 0
+        ? await enrichArtistsFromTracks(trimmed, mocked, primaryArtists, mockedArtists)
+        : primaryArtists;
+    return { tracks: mocked, artists, continuationToken: null };
   }
 
   const targetCount = Math.max(1, options.targetCount ?? DEFAULT_SEARCH_TARGET_COUNT);
   const seenIds = new Set<string>(options.excludeIds ?? []);
   const fallbackCursor = decodeFallbackCursor(options.continuationToken);
+
+  const artistsPromise: Promise<ArtistSearchResult[]> | null = !options.continuationToken
+    ? Promise.resolve()
+        .then(() => resolveArtists(trimmed, DEFAULT_ARTIST_SEARCH_LIMIT))
+        .catch(() => [])
+    : null;
 
   if (!fallbackCursor) {
     try {
@@ -594,7 +914,15 @@ export async function searchTracksPage(
         seenIds
       );
       if (innerTubeRes.tracks.length > 0 || options.continuationToken) {
-        return innerTubeRes;
+        if (!artistsPromise) {
+          return innerTubeRes;
+        }
+        const primaryArtists = await artistsPromise;
+        const artists =
+          innerTubeRes.tracks.length > 0
+            ? await enrichArtistsFromTracks(trimmed, innerTubeRes.tracks, primaryArtists, resolveArtists)
+            : primaryArtists;
+        return { ...innerTubeRes, artists };
       }
     } catch (err) {
       console.warn(
@@ -607,7 +935,16 @@ export async function searchTracksPage(
     }
   }
 
-  return fetchFallbackBatch(trimmed, targetCount, seenIds, fallbackCursor);
+  const fallbackRes = await fetchFallbackBatch(trimmed, targetCount, seenIds, fallbackCursor);
+  if (!artistsPromise) {
+    return fallbackRes;
+  }
+  const primaryArtists = await artistsPromise;
+  const artists =
+    fallbackRes.tracks.length > 0
+      ? await enrichArtistsFromTracks(trimmed, fallbackRes.tracks, primaryArtists, resolveArtists)
+      : primaryArtists;
+  return { ...fallbackRes, artists };
 }
 
 /**
@@ -1566,6 +1903,87 @@ export interface ArtistProfile {
 
 const artistProfileCache = new Map<string, { profile: ArtistProfile; timestamp: number }>();
 
+function parseArtistBrowseTopTracks(data: any, fallbackArtist: string): TrackSummary[] {
+  const tabs = data?.contents?.singleColumnBrowseResultsRenderer?.tabs;
+  const sections = Array.isArray(tabs)
+    ? tabs[0]?.tabRenderer?.content?.sectionListRenderer?.contents
+    : undefined;
+  if (!Array.isArray(sections)) return [];
+
+  const tracks: TrackSummary[] = [];
+  const seenIds = new Set<string>();
+
+  for (const section of sections) {
+    const items = section?.musicShelfRenderer?.contents;
+    if (!Array.isArray(items)) continue;
+
+    for (const entry of items) {
+      const renderer = entry?.musicResponsiveListItemRenderer;
+      if (!renderer) continue;
+
+      const videoId =
+        renderer?.playlistItemData?.videoId ||
+        renderer?.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer
+          ?.playNavigationEndpoint?.watchEndpoint?.videoId ||
+        renderer?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]
+          ?.navigationEndpoint?.watchEndpoint?.videoId;
+      if (!videoId || typeof videoId !== 'string' || seenIds.has(videoId)) continue;
+
+      const title =
+        renderer?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text?.trim();
+      if (!title) continue;
+
+      const artistRuns =
+        renderer?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
+      const artistText = Array.isArray(artistRuns)
+        ? artistRuns
+            .map((r: any) => (typeof r?.text === 'string' ? r.text.trim() : ''))
+            .find((t: string) => t && t !== '•' && t !== '·' && t !== '&')
+        : undefined;
+
+      let durationText =
+        renderer?.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text?.runs?.[0]?.text?.trim();
+      if (!durationText && Array.isArray(renderer?.flexColumns)) {
+        for (const col of renderer.flexColumns) {
+          const runs = col?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
+          if (!Array.isArray(runs)) continue;
+          const match = runs.find(
+            (r: any) => typeof r?.text === 'string' && /^\d+:\d{2}(?::\d{2})?$/.test(r.text.trim())
+          );
+          if (match) {
+            durationText = match.text.trim();
+            break;
+          }
+        }
+      }
+
+      const formattedDuration = durationText || '3:30';
+      const duration = parseDurationToSeconds(formattedDuration);
+      const thumbs = renderer?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails;
+      const thumbnailUrl =
+        Array.isArray(thumbs) && thumbs.length > 0 && thumbs[thumbs.length - 1]?.url
+          ? thumbs[thumbs.length - 1].url
+          : `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+
+      const candidate: TrackSummary = {
+        id: videoId,
+        title,
+        artist: artistText || fallbackArtist,
+        duration,
+        formattedDuration,
+        thumbnailUrl,
+      };
+
+      if (isValidMusicTrack(candidate)) {
+        seenIds.add(videoId);
+        tracks.push(candidate);
+      }
+    }
+  }
+
+  return tracks;
+}
+
 /**
  * Obtém o perfil completo do artista com avatar real, biografia, Top Tracks e discografia.
  */
@@ -1581,6 +1999,7 @@ export async function getArtistProfile(
   }
 
   let topTracks: TrackSummary[] = [];
+  let browseTracks: TrackSummary[] = [];
   let avatarUrl = '';
   let bannerUrl: string | undefined;
   let bio: string | undefined;
@@ -1627,18 +2046,23 @@ export async function getArtistProfile(
         }
         bio = header?.description?.runs?.[0]?.text;
         subscriberCountText = header?.subscriptionButton?.subscribeButtonRenderer?.subscriberCountText?.runs?.[0]?.text;
+        browseTracks = parseArtistBrowseTopTracks(bData, cleanName);
       }
     } catch {
       // Continua para o fallback de busca contextual
     }
   }
 
-  // 2. Busca as faixas mais populares do artista (Top Tracks)
-  try {
-    const rawTracks = await searchTracks(cleanName);
-    topTracks = rawTracks.filter(isValidMusicTrack);
-  } catch {
-    topTracks = [];
+  // 2. Prioriza as faixas reais da prateleira Top músicas do /browse antes do fallback searchTracks
+  if (browseTracks.length > 0) {
+    topTracks = browseTracks;
+  } else {
+    try {
+      const rawTracks = await searchTracks(cleanName);
+      topTracks = rawTracks.filter(isValidMusicTrack);
+    } catch {
+      topTracks = [];
+    }
   }
 
   if (!avatarUrl && topTracks.length > 0) {
