@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import { getAppSetting, setAppSetting } from './database';
 
@@ -9,6 +9,7 @@ const appJson = require('../app.json') as {
 
 export const GITHUB_REPO = 'appsonary/sonary_app';
 export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+export const UPDATER_DOWNLOAD_EVENT = 'SonaryUpdaterDownloadChanged';
 const UPDATER_LAST_CHECK_KEY = 'updater_last_check_at';
 const UPDATER_SKIPPED_VERSION_KEY = 'updater_skipped_version';
 const MIN_VALID_APK_BYTES = 1024 * 1024; // 1 MB
@@ -29,6 +30,42 @@ export interface RemoteReleaseInfo {
   releaseUrl: string;
 }
 
+export type UpdateDownloadStatus = 'idle' | 'downloading' | 'ready' | 'error';
+
+export interface UpdateDownloadState {
+  status: UpdateDownloadStatus;
+  versionName: string | null;
+  versionCode: number | null;
+  apkName: string | null;
+  apkUrl: string | null;
+  sha256: string | null;
+  sizeBytes: number | null;
+  releaseNotes: string | null;
+  releaseUrl: string | null;
+  localUri: string | null;
+  progress: number;
+  error: string | null;
+  sha256Verified: boolean;
+  updatedAt: number;
+}
+
+export const IDLE_UPDATE_DOWNLOAD_STATE: UpdateDownloadState = {
+  status: 'idle',
+  versionName: null,
+  versionCode: null,
+  apkName: null,
+  apkUrl: null,
+  sha256: null,
+  sizeBytes: null,
+  releaseNotes: null,
+  releaseUrl: null,
+  localUri: null,
+  progress: 0,
+  error: null,
+  sha256Verified: false,
+  updatedAt: 0,
+};
+
 export type UpdateCheckResult =
   | { status: 'throttled'; installed: InstalledAppVersion }
   | { status: 'up_to_date'; installed: InstalledAppVersion; release?: RemoteReleaseInfo }
@@ -41,6 +78,19 @@ interface NativeUpdaterSpec {
   openInstallPermissionSettings?: () => Promise<void>;
   verifySha256?: (fileUri: string, expectedSha256: string) => Promise<boolean>;
   installApk?: (fileUri: string) => Promise<void>;
+  startBackgroundDownload?: (params: {
+    apkUrl: string;
+    apkName: string;
+    versionName: string;
+    versionCode: number | null;
+    sha256: string | null;
+    sizeBytes: number | null;
+    releaseNotes: string;
+    releaseUrl: string;
+  }) => Promise<void>;
+  cancelBackgroundDownload?: () => Promise<void>;
+  getDownloadState?: () => Promise<Record<string, unknown> | null>;
+  clearDownloadState?: () => Promise<void>;
 }
 
 function getNativeUpdater(): NativeUpdaterSpec | null {
@@ -319,7 +369,160 @@ export async function skipAppUpdateVersion(versionName: string): Promise<void> {
   await setAppSetting(UPDATER_SKIPPED_VERSION_KEY, normalized);
 }
 
-export async function cleanupCachedUpdateApks(): Promise<void> {
+function normalizeDownloadState(raw: unknown): UpdateDownloadState {
+  if (!raw || typeof raw !== 'object') {
+    return { ...IDLE_UPDATE_DOWNLOAD_STATE };
+  }
+  const obj = raw as Record<string, unknown>;
+  const rawStatus = obj.status;
+  const status: UpdateDownloadStatus =
+    rawStatus === 'downloading' || rawStatus === 'ready' || rawStatus === 'error'
+      ? rawStatus
+      : 'idle';
+  const rawCode = Number(obj.versionCode);
+  const rawSize = Number(obj.sizeBytes);
+  const rawProgress = Number(obj.progress);
+  const rawUpdatedAt = Number(obj.updatedAt);
+
+  return {
+    status,
+    versionName: typeof obj.versionName === 'string' && obj.versionName ? obj.versionName : null,
+    versionCode: Number.isInteger(rawCode) && rawCode > 0 ? rawCode : null,
+    apkName: typeof obj.apkName === 'string' && obj.apkName ? obj.apkName : null,
+    apkUrl: typeof obj.apkUrl === 'string' && obj.apkUrl ? obj.apkUrl : null,
+    sha256: typeof obj.sha256 === 'string' && obj.sha256 ? obj.sha256 : null,
+    sizeBytes: Number.isFinite(rawSize) && rawSize > 0 ? rawSize : null,
+    releaseNotes: typeof obj.releaseNotes === 'string' ? obj.releaseNotes : null,
+    releaseUrl: typeof obj.releaseUrl === 'string' && obj.releaseUrl ? obj.releaseUrl : null,
+    localUri: typeof obj.localUri === 'string' && obj.localUri ? obj.localUri : null,
+    progress: Number.isFinite(rawProgress) ? Math.min(1, Math.max(0, rawProgress)) : 0,
+    error: typeof obj.error === 'string' && obj.error ? obj.error : null,
+    sha256Verified: Boolean(obj.sha256Verified),
+    updatedAt: Number.isFinite(rawUpdatedAt) && rawUpdatedAt > 0 ? rawUpdatedAt : 0,
+  };
+}
+
+export function releaseFromDownloadState(
+  state: UpdateDownloadState | null | undefined,
+  repo: string = GITHUB_REPO
+): RemoteReleaseInfo | null {
+  if (!state || !state.versionName || !state.apkUrl || !isTrustedGitHubUrl(state.apkUrl)) {
+    return null;
+  }
+  return {
+    versionName: state.versionName,
+    versionCode: state.versionCode,
+    apkName: state.apkName || `sonary-pro-v${state.versionName}.apk`,
+    apkUrl: state.apkUrl,
+    sha256: state.sha256,
+    sizeBytes: state.sizeBytes,
+    releaseNotes: state.releaseNotes || '',
+    releaseUrl:
+      state.releaseUrl && isTrustedGitHubUrl(state.releaseUrl)
+        ? state.releaseUrl
+        : `https://github.com/${repo}/releases/latest`,
+  };
+}
+
+export function supportsBackgroundUpdateDownload(): boolean {
+  const nativeMod = getNativeUpdater();
+  return Boolean(nativeMod && typeof nativeMod.startBackgroundDownload === 'function');
+}
+
+export async function getUpdateDownloadState(): Promise<UpdateDownloadState> {
+  const nativeMod = getNativeUpdater();
+  if (!nativeMod?.getDownloadState) {
+    return { ...IDLE_UPDATE_DOWNLOAD_STATE };
+  }
+  try {
+    const raw = await nativeMod.getDownloadState();
+    return normalizeDownloadState(raw);
+  } catch {
+    return { ...IDLE_UPDATE_DOWNLOAD_STATE };
+  }
+}
+
+export function subscribeUpdateDownload(
+  listener: (state: UpdateDownloadState) => void
+): () => void {
+  const nativeMod = getNativeUpdater();
+  if (!nativeMod || typeof NativeEventEmitter !== 'function') {
+    return () => {};
+  }
+  try {
+    const emitter = new NativeEventEmitter(nativeMod as any);
+    const sub = emitter.addListener(UPDATER_DOWNLOAD_EVENT, (payload: unknown) => {
+      listener(normalizeDownloadState(payload));
+    });
+    return () => {
+      sub?.remove?.();
+    };
+  } catch {
+    return () => {};
+  }
+}
+
+export async function startBackgroundUpdateDownload(release: RemoteReleaseInfo): Promise<void> {
+  if (!isTrustedGitHubUrl(release.apkUrl)) {
+    throw new Error('URL de download do APK não pertence ao GitHub oficial.');
+  }
+  const nativeMod = getNativeUpdater();
+  if (!nativeMod?.startBackgroundDownload) {
+    throw new Error('Download em segundo plano disponível apenas no build Android instalado.');
+  }
+  await nativeMod.startBackgroundDownload({
+    apkUrl: release.apkUrl,
+    apkName: release.apkName,
+    versionName: release.versionName,
+    versionCode: release.versionCode,
+    sha256: release.sha256,
+    sizeBytes: release.sizeBytes,
+    releaseNotes: release.releaseNotes,
+    releaseUrl: release.releaseUrl,
+  });
+}
+
+export async function cancelBackgroundUpdateDownload(): Promise<void> {
+  const nativeMod = getNativeUpdater();
+  if (nativeMod?.cancelBackgroundDownload) {
+    await nativeMod.cancelBackgroundDownload();
+  }
+}
+
+export async function clearUpdateDownloadState(): Promise<void> {
+  const nativeMod = getNativeUpdater();
+  if (nativeMod?.clearDownloadState) {
+    await nativeMod.clearDownloadState();
+  }
+}
+
+export async function cleanupCachedUpdateApks(
+  options: { preserveActive?: boolean } = {}
+): Promise<void> {
+  const preserveActive = options.preserveActive !== false;
+  let preservedFileName: string | null = null;
+
+  if (preserveActive) {
+    const activeState = await getUpdateDownloadState();
+    if (activeState.status === 'downloading') {
+      return;
+    }
+    if (activeState.status === 'ready' && activeState.versionName && activeState.localUri) {
+      const installed = await getInstalledAppVersion();
+      if (
+        isNewerRelease(installed, {
+          versionName: activeState.versionName,
+          versionCode: activeState.versionCode,
+        })
+      ) {
+        const parts = activeState.localUri.split('/');
+        preservedFileName = parts[parts.length - 1] || null;
+      } else {
+        await clearUpdateDownloadState().catch(() => {});
+      }
+    }
+  }
+
   const updatesDir = getUpdatesDirectory();
   if (!updatesDir) return;
   try {
@@ -327,6 +530,9 @@ export async function cleanupCachedUpdateApks(): Promise<void> {
     if (!dirInfo.exists) return;
     const files = await FileSystem.readDirectoryAsync(updatesDir);
     for (const file of files) {
+      if (preservedFileName && file === preservedFileName) {
+        continue;
+      }
       if (file.endsWith('.apk') || file.endsWith('.part')) {
         await FileSystem.deleteAsync(`${updatesDir}${file}`, { idempotent: true });
       }
@@ -372,7 +578,7 @@ export async function downloadUpdateApk(
     await FileSystem.makeDirectoryAsync(updatesDir, { intermediates: true });
   }
 
-  await cleanupCachedUpdateApks();
+  await cleanupCachedUpdateApks({ preserveActive: false });
 
   const safeName = release.apkName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'sonary-update.apk';
   const partUri = `${updatesDir}${safeName}.part`;

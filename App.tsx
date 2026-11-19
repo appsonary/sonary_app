@@ -6,6 +6,7 @@ import {
   Easing,
   FlatList,
   Image,
+  Linking,
   PermissionsAndroid,
   Platform,
   SafeAreaView,
@@ -171,10 +172,17 @@ import { UpdateModal } from './components/UpdateModal';
 import {
   checkForAppUpdate,
   cleanupCachedUpdateApks,
+  clearUpdateDownloadState,
   getInstalledAppVersion,
+  getUpdateDownloadState,
+  IDLE_UPDATE_DOWNLOAD_STATE,
   InstalledAppVersion,
+  isNewerRelease,
+  releaseFromDownloadState,
   RemoteReleaseInfo,
   skipAppUpdateVersion,
+  subscribeUpdateDownload,
+  UpdateDownloadState,
 } from './services/updater';
 
 type PlayableTrack = TrackSummary | DownloadedTrack | PlaylistTrackItem;
@@ -223,8 +231,10 @@ export default function App() {
     [drawerProgress, width]
   );
   const [availableUpdate, setAvailableUpdate] = useState<RemoteReleaseInfo | null>(null);
+  const [updateDownloadState, setUpdateDownloadState] = useState<UpdateDownloadState | null>(null);
   const [installedAppVersion, setInstalledAppVersion] = useState<InstalledAppVersion | null>(null);
   const [isUpdateModalVisible, setIsUpdateModalVisible] = useState(false);
+  const [autoInstallUpdateOnOpen, setAutoInstallUpdateOnOpen] = useState(false);
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
   const [updateCheckError, setUpdateCheckError] = useState<string | null>(null);
   const [downloadedIds, setDownloadedIds] = useState<Set<string>>(new Set());
@@ -958,11 +968,97 @@ export default function App() {
     }
 
     let isMounted = true;
-    void getInstalledAppVersion()
-      .then((info) => {
-        if (isMounted) setInstalledAppVersion(info);
+    let installedSnapshot: InstalledAppVersion | null = null;
+    const applyUpdateDownloadState = (
+      state: UpdateDownloadState,
+      installedOverride?: InstalledAppVersion | null
+    ) => {
+      if (!isMounted) return;
+      const installed = installedOverride ?? installedSnapshot;
+      if (state.status === 'downloading' || state.status === 'ready') {
+        const reconstructed = releaseFromDownloadState(state);
+        if (reconstructed && installed && !isNewerRelease(installed, reconstructed)) {
+          setUpdateDownloadState(IDLE_UPDATE_DOWNLOAD_STATE);
+          setAvailableUpdate((prev) =>
+            prev && isNewerRelease(installed, prev) ? prev : null
+          );
+          void clearUpdateDownloadState().catch(() => {});
+          return;
+        }
+        setUpdateDownloadState(state);
+        if (reconstructed) {
+          setAvailableUpdate((prev) => prev ?? reconstructed);
+        }
+        return;
+      }
+
+      setUpdateDownloadState(state);
+      if (state.status === 'idle' && installed) {
+        setAvailableUpdate((prev) =>
+          prev && !isNewerRelease(installed, prev) ? null : prev
+        );
+      }
+    };
+
+    void Promise.all([
+      getInstalledAppVersion().catch(() => null),
+      getUpdateDownloadState().catch(() => IDLE_UPDATE_DOWNLOAD_STATE),
+    ])
+      .then(([info, state]) => {
+        if (!isMounted) return;
+        if (info) {
+          installedSnapshot = info;
+          setInstalledAppVersion(info);
+        }
+        applyUpdateDownloadState(state, info);
       })
       .catch(() => {});
+
+    const unsubscribeUpdateDownload = subscribeUpdateDownload((state) => {
+      applyUpdateDownloadState(state);
+    });
+
+    const handleUpdateDeepLink = (url: string | null | undefined) => {
+      if (!isMounted || !url || !url.startsWith('com.sonarypro.app://update')) return;
+      void Promise.all([
+        installedSnapshot ? Promise.resolve(installedSnapshot) : getInstalledAppVersion().catch(() => null),
+        getUpdateDownloadState().catch(() => IDLE_UPDATE_DOWNLOAD_STATE),
+      ])
+        .then(([info, state]) => {
+          if (!isMounted) return;
+          if (info) {
+            installedSnapshot = info;
+            setInstalledAppVersion(info);
+          }
+          applyUpdateDownloadState(state, info);
+          setAutoInstallUpdateOnOpen(true);
+          setIsUpdateModalVisible(true);
+        })
+        .catch(() => {
+          if (isMounted) {
+            setAutoInstallUpdateOnOpen(true);
+            setIsUpdateModalVisible(true);
+          }
+        });
+    };
+
+    try {
+      Linking.getInitialURL?.()
+        .then((url) => handleUpdateDeepLink(url))
+        .catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    let updateLinkSub: { remove?: () => void } | null = null;
+    try {
+      updateLinkSub =
+        Linking.addEventListener?.('url', (event) => {
+          handleUpdateDeepLink(event?.url);
+        }) ?? null;
+    } catch {
+      updateLinkSub = null;
+    }
 
     const updateTimer = setTimeout(() => {
       if (!isMounted) return;
@@ -985,6 +1081,8 @@ export default function App() {
       isMounted = false;
       clearTimeout(permTimer);
       clearTimeout(updateTimer);
+      unsubscribeUpdateDownload();
+      updateLinkSub?.remove?.();
       appStateSub?.remove?.();
     };
   }, []);
@@ -3113,6 +3211,7 @@ export default function App() {
           onClose={() => setIsDrawerVisible(false)}
           installedVersion={installedAppVersion}
           availableUpdate={availableUpdate}
+          updateDownloadState={updateDownloadState}
           downloadQueueCount={downloadQueueBadgeCount}
           isDevMode={isDevMode}
           onOpenDownloadQueue={() => setIsDownloadQueueVisible(true)}
@@ -3150,14 +3249,18 @@ export default function App() {
           installedVersion={installedAppVersion}
           isChecking={isCheckingUpdates}
           checkError={updateCheckError}
+          autoInstallOnOpen={autoInstallUpdateOnOpen}
           onCheckNow={() => void handleCheckUpdates(true)}
           onClose={() => {
             setIsUpdateModalVisible(false);
+            setAutoInstallUpdateOnOpen(false);
             setUpdateCheckError(null);
           }}
           onSkipVersion={(versionName) => {
             void skipAppUpdateVersion(versionName);
+            void clearUpdateDownloadState().catch(() => {});
             setAvailableUpdate(null);
+            setUpdateDownloadState(null);
             showToast(`Atualização v${versionName} silenciada`, 'success');
           }}
         />

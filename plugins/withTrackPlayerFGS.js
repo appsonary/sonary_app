@@ -4,11 +4,13 @@ const { withAndroidManifest, withDangerousMod, AndroidConfig } = require('@expo/
 
 const FORWARDER_ACTIVITY_CLASS = 'expo.modules.notifications.service.NotificationForwarderActivity';
 const DOWNLOADS_RUNNING_PROP = 'sonary.downloads.running';
+const UPDATER_RUNNING_PROP = 'sonary.updater.running';
 
 /**
  * Evita que o fechamento da task temporária NotificationForwarderActivity (expo-notifications)
  * acione StopPlaybackAndRemoveNotification -> exitProcess(0) no MusicService do RNTP,
- * e impede que exitProcess(0) mate o processo enquanto houver downloads em segundo plano ativos.
+ * e impede que exitProcess(0) mate o processo enquanto houver downloads de músicas ou
+ * atualizações do app em segundo plano ativos.
  */
 function patchTrackPlayerMusicService(projectRoot) {
   const musicServicePath = path.join(
@@ -40,11 +42,19 @@ function patchTrackPlayerMusicService(projectRoot) {
     }
   }
 
-  if (!nextContent.includes(DOWNLOADS_RUNNING_PROP)) {
-    if (/(\r?\n[ \t]*)exitProcess\(0\)/.test(nextContent)) {
+  if (!nextContent.includes(UPDATER_RUNNING_PROP)) {
+    const legacyGuardRegex = new RegExp(
+      `if\\s*\\(System\\.getProperty\\("${DOWNLOADS_RUNNING_PROP}"\\)\\s*!=\\s*"true"\\)`
+    );
+    if (legacyGuardRegex.test(nextContent)) {
+      nextContent = nextContent.replace(
+        legacyGuardRegex,
+        `if (System.getProperty("${DOWNLOADS_RUNNING_PROP}") != "true" && System.getProperty("${UPDATER_RUNNING_PROP}") != "true")`
+      );
+    } else if (/(\r?\n[ \t]*)exitProcess\(0\)/.test(nextContent)) {
       nextContent = nextContent.replace(
         /(\r?\n)([ \t]*)exitProcess\(0\)/,
-        `$1$2if (System.getProperty("${DOWNLOADS_RUNNING_PROP}") != "true") {\n$2    exitProcess(0)\n$2}`
+        `$1$2if (System.getProperty("${DOWNLOADS_RUNNING_PROP}") != "true" && System.getProperty("${UPDATER_RUNNING_PROP}") != "true") {\n$2    exitProcess(0)\n$2}`
       );
     }
   }

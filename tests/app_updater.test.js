@@ -3,7 +3,10 @@ const test = require('node:test');
 const assert = require('node:assert');
 const React = require('react');
 const renderer = require('react-test-renderer');
-const { NativeModules } = require('react-native');
+const { AppState, Linking, NativeEventEmitter, NativeModules } = require('react-native');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const FileSystem = require('expo-file-system');
 const {
   actAsync,
@@ -21,23 +24,39 @@ const {
   downloadUpdateApk,
   installUpdateApk,
   cleanupCachedUpdateApks,
+  supportsBackgroundUpdateDownload,
+  startBackgroundUpdateDownload,
+  cancelBackgroundUpdateDownload,
+  getUpdateDownloadState,
+  subscribeUpdateDownload,
+  releaseFromDownloadState,
+  UPDATER_DOWNLOAD_EVENT,
 } = require('../services/updater');
 const { UpdateModal } = require('../components/UpdateModal');
+const { SideDrawerMenu } = require('../components/SideDrawerMenu');
 const { patchBuildGradleSigning } = require('../plugins/withReleaseSigning');
 const {
+  patchBuildGradleString,
   patchMainApplicationString,
   patchAndroidManifestString,
 } = require('../plugins/withAppUpdater');
+const { patchTrackPlayerMusicService } = require('../plugins/withTrackPlayerFGS');
 const { computeNextVersion, parseReleaseArgs } = require('../scripts/release');
 
 test.beforeEach(async () => {
   resetAllMocks();
   delete NativeModules.SonaryAppUpdater;
+  NativeEventEmitter.__reset();
+  Linking.__reset();
+  AppState.currentState = 'active';
   await initDatabase();
 });
 
 test.afterEach(() => {
   delete NativeModules.SonaryAppUpdater;
+  NativeEventEmitter.__reset();
+  Linking.__reset();
+  AppState.currentState = 'active';
 });
 
 test('Updater: compareSemver, isNewerRelease e isTrustedGitHubUrl', () => {
@@ -588,4 +607,565 @@ test('Release script: computeNextVersion e parseReleaseArgs validam bumps e flag
     dryRun: true,
     noPush: true,
   });
+});
+
+
+test('Updater Background: start/cancel/state/events e proteção do cleanupCachedUpdateApks', async () => {
+  assert.strictEqual(supportsBackgroundUpdateDownload(), false);
+
+  let startedPayload = null;
+  let cancelCalls = 0;
+  let clearCalls = 0;
+  let nativeState = { status: 'idle', progress: 0 };
+
+  NativeModules.SonaryAppUpdater = {
+    getInstalledVersion: async () => ({ versionName: '1.0.4', versionCode: 6 }),
+    startBackgroundDownload: async (params) => {
+      startedPayload = params;
+      nativeState = {
+        status: 'downloading',
+        versionName: params.versionName,
+        versionCode: params.versionCode,
+        apkName: params.apkName,
+        apkUrl: params.apkUrl,
+        sha256: params.sha256,
+        sizeBytes: params.sizeBytes,
+        releaseNotes: params.releaseNotes,
+        releaseUrl: params.releaseUrl,
+        progress: 0.25,
+        updatedAt: Date.now(),
+      };
+    },
+    cancelBackgroundDownload: async () => {
+      cancelCalls += 1;
+      nativeState = { status: 'idle', progress: 0 };
+    },
+    getDownloadState: async () => nativeState,
+    clearDownloadState: async () => {
+      clearCalls += 1;
+      nativeState = { status: 'idle', progress: 0 };
+    },
+  };
+
+  assert.strictEqual(supportsBackgroundUpdateDownload(), true);
+
+  const release = {
+    versionName: '1.1.0',
+    versionCode: 7,
+    apkName: 'sonary-pro-v1.1.0.apk',
+    apkUrl: 'https://github.com/appsonary/sonary_app/releases/download/v1.1.0/sonary-pro-v1.1.0.apk',
+    sha256: 'd'.repeat(64),
+    sizeBytes: 48 * 1024 * 1024,
+    releaseNotes: 'Download em background',
+    releaseUrl: 'https://github.com/appsonary/sonary_app/releases/tag/v1.1.0',
+  };
+
+  const received = [];
+  const unsub = subscribeUpdateDownload((s) => received.push(s));
+
+  await startBackgroundUpdateDownload(release);
+  assert.strictEqual(startedPayload.versionName, '1.1.0');
+
+  const current = await getUpdateDownloadState();
+  assert.strictEqual(current.status, 'downloading');
+  assert.strictEqual(current.progress, 0.25);
+
+  const reconstructed = releaseFromDownloadState(current);
+  assert.strictEqual(reconstructed.versionName, '1.1.0');
+  assert.strictEqual(reconstructed.apkUrl, release.apkUrl);
+
+  // Arquivo .part deve ser preservado durante download ativo
+  const updatesDir = `${FileSystem.cacheDirectory || FileSystem.documentDirectory}updates/`;
+  await FileSystem.makeDirectoryAsync(updatesDir, { intermediates: true });
+  const partUri = `${updatesDir}sonary-pro-v1.1.0.apk.part`;
+  FileSystem.files.set(partUri, { size: 500000 });
+  await cleanupCachedUpdateApks();
+  assert.strictEqual(FileSystem.files.has(partUri), true);
+
+  // Quando pronto (ready) para versão mais nova, preserva o APK pronto e limpa obsoletos
+  const readyUri = `${updatesDir}sonary-pro-v1.1.0.apk`;
+  const staleUri = `${updatesDir}sonary-pro-v1.0.3.apk`;
+  FileSystem.files.set(readyUri, { size: 2_500_000 });
+  FileSystem.files.set(staleUri, { size: 2_500_000 });
+  nativeState = { ...nativeState, status: 'ready', localUri: readyUri, progress: 1 };
+  await cleanupCachedUpdateApks();
+  assert.strictEqual(FileSystem.files.has(readyUri), true);
+  assert.strictEqual(FileSystem.files.has(staleUri), false);
+
+  // Quando a versão instalada já alcançou a baixada, limpa estado e arquivo
+  NativeModules.SonaryAppUpdater.getInstalledVersion = async () => ({
+    versionName: '1.1.0',
+    versionCode: 7,
+  });
+  await cleanupCachedUpdateApks();
+  assert.strictEqual(clearCalls, 1);
+  assert.strictEqual(FileSystem.files.has(readyUri), false);
+
+  // Evento nativo chega aos subscribers
+  NativeEventEmitter.__emit(UPDATER_DOWNLOAD_EVENT, {
+    status: 'downloading',
+    versionName: '1.1.0',
+    progress: 0.62,
+  });
+  assert.strictEqual(received.length, 1);
+  assert.strictEqual(received[0].progress, 0.62);
+
+  await cancelBackgroundUpdateDownload();
+  assert.strictEqual(cancelCalls, 1);
+  unsub();
+});
+
+test('Updater Background UI: UpdateModal hidrata progresso, permite minimizar sem cancelar e instala ao concluir', async () => {
+  let startCalls = 0;
+  let cancelCalls = 0;
+  let installedUri = null;
+  let closedCount = 0;
+  let nativeState = { status: 'idle', progress: 0 };
+
+  NativeModules.SonaryAppUpdater = {
+    canRequestPackageInstalls: async () => true,
+    installApk: async (uri) => {
+      installedUri = uri;
+    },
+    startBackgroundDownload: async (params) => {
+      startCalls += 1;
+      nativeState = {
+        status: 'downloading',
+        versionName: params.versionName,
+        apkName: params.apkName,
+        apkUrl: params.apkUrl,
+        progress: 0.1,
+      };
+    },
+    cancelBackgroundDownload: async () => {
+      cancelCalls += 1;
+      nativeState = { status: 'idle', progress: 0 };
+    },
+    getDownloadState: async () => nativeState,
+  };
+
+  const release = {
+    versionName: '1.2.0',
+    versionCode: 8,
+    apkName: 'sonary-pro-v1.2.0.apk',
+    apkUrl: 'https://github.com/appsonary/sonary_app/releases/download/v1.2.0/sonary-pro-v1.2.0.apk',
+    sha256: null,
+    sizeBytes: 30 * 1024 * 1024,
+    releaseNotes: 'Suporte a download em 2º plano.',
+    releaseUrl: 'https://github.com/appsonary/sonary_app/releases/tag/v1.2.0',
+  };
+
+  let tree;
+  await actAsync(async () => {
+    tree = renderer.create(
+      React.createElement(UpdateModal, {
+        visible: true,
+        installedVersion: { versionName: '1.0.4', versionCode: 6 },
+        release,
+        onClose: () => {
+          closedCount += 1;
+        },
+      })
+    );
+  });
+
+  const updateBtn = tree.root.find(
+    (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Atualizar agora'
+  );
+  await actAsync(async () => {
+    await updateBtn.props.onPress();
+  });
+  assert.strictEqual(startCalls, 1);
+
+  // Recebe progresso em tempo real sem botão extra de "baixar em segundo plano"
+  await actAsync(async () => {
+    NativeEventEmitter.__emit(UPDATER_DOWNLOAD_EVENT, {
+      status: 'downloading',
+      versionName: '1.2.0',
+      progress: 0.45,
+    });
+  });
+  const downloadingText = getAllText(tree.root);
+  assert.ok(downloadingText.includes('45%'));
+  assert.ok(!downloadingText.includes('Baixar em segundo plano'));
+
+  // Tocar no backdrop durante download em background fecha o modal SEM cancelar
+  const backdrop = tree.root.find(
+    (n) => n.type === 'TouchableOpacity' && n.props.activeOpacity === 1
+  );
+  await actAsync(async () => {
+    backdrop.props.onPress();
+  });
+  assert.strictEqual(closedCount, 1);
+  assert.strictEqual(cancelCalls, 0);
+
+  // Evento ready com app em foreground aciona installApk
+  await actAsync(async () => {
+    NativeEventEmitter.__emit(UPDATER_DOWNLOAD_EVENT, {
+      status: 'ready',
+      versionName: '1.2.0',
+      localUri: 'file:///cache/updates/sonary-pro-v1.2.0.apk',
+      progress: 1,
+    });
+  });
+  assert.strictEqual(installedUri, 'file:///cache/updates/sonary-pro-v1.2.0.apk');
+});
+
+test('Updater Background UI: SideDrawerMenu exibe progresso e estado pronto no rodapé', async () => {
+  const baseProps = {
+    visible: true,
+    onClose: () => {},
+    installedVersion: { versionName: '1.0.4', versionCode: 6 },
+    availableUpdate: {
+      versionName: '1.2.0',
+      versionCode: 8,
+      apkName: 'sonary-pro-v1.2.0.apk',
+      apkUrl: 'https://github.com/appsonary/sonary_app/releases/download/v1.2.0/sonary-pro-v1.2.0.apk',
+      sha256: null,
+      sizeBytes: null,
+      releaseNotes: '',
+      releaseUrl: 'https://github.com/appsonary/sonary_app/releases/latest',
+    },
+    onOpenDownloadQueue: () => {},
+    onOpenRecentHistory: () => {},
+    onOpenStats: () => {},
+    onOpenUpdates: () => {},
+    onOpenSettings: () => {},
+    onOpenSupport: () => {},
+  };
+
+  let tree;
+  await actAsync(async () => {
+    tree = renderer.create(
+      React.createElement(SideDrawerMenu, {
+        ...baseProps,
+        updateDownloadState: {
+          status: 'downloading',
+          versionName: '1.2.0',
+          progress: 0.68,
+        },
+      })
+    );
+  });
+  const downloadingText = getAllText(tree.root);
+  assert.ok(downloadingText.includes('Baixando v1.2.0... 68%'));
+  assert.ok(downloadingText.includes('68%'));
+
+  await actAsync(async () => {
+    tree.update(
+      React.createElement(SideDrawerMenu, {
+        ...baseProps,
+        updateDownloadState: {
+          status: 'ready',
+          versionName: '1.2.0',
+          progress: 1,
+        },
+      })
+    );
+  });
+  const readyText = getAllText(tree.root);
+  assert.ok(readyText.includes('v1.2.0 pronta para instalar'));
+  assert.ok(readyText.includes('Instalar'));
+});
+
+test('Updater CNG Plugins: manifest/gradle WorkManager e MusicService.kt protegem sonary.updater.running', () => {
+  const sampleManifest = `<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application android:name=".MainApplication">
+  </application>
+</manifest>`;
+  const patchedManifest = patchAndroidManifestString(sampleManifest);
+  assert.ok(patchedManifest.includes('android.permission.FOREGROUND_SERVICE_DATA_SYNC'));
+  assert.ok(patchedManifest.includes('androidx.work.impl.foreground.SystemForegroundService'));
+  assert.ok(patchedManifest.includes('com.sonarypro.app.updater.SonaryUpdaterCancelReceiver'));
+  assert.strictEqual(patchAndroidManifestString(patchedManifest), patchedManifest);
+
+  const sampleGradle = `dependencies {\n    implementation("com.facebook.react:react-android")\n}`;
+  const patchedGradle = patchBuildGradleString(sampleGradle);
+  assert.ok(patchedGradle.includes('androidx.work:work-runtime-ktx:2.9.0'));
+  assert.strictEqual(patchBuildGradleString(patchedGradle), patchedGradle);
+
+  // Verifica migração do MusicService.kt já patcheado com guarda legada -> dupla guarda
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sonary-fgs-'));
+  try {
+    const musicServiceDir = path.join(
+      tmpRoot,
+      'node_modules',
+      'react-native-track-player',
+      'android',
+      'src',
+      'main',
+      'java',
+      'com',
+      'doublesymmetry',
+      'trackplayer',
+      'service'
+    );
+    fs.mkdirSync(musicServiceDir, { recursive: true });
+    const musicServiceFile = path.join(musicServiceDir, 'MusicService.kt');
+    fs.writeFileSync(
+      musicServiceFile,
+      `class MusicService {
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        if (System.getProperty("sonary.downloads.running") != "true") {
+            exitProcess(0)
+        }
+    }
+}`,
+      'utf8'
+    );
+
+    assert.strictEqual(patchTrackPlayerMusicService(tmpRoot), true);
+    const updated = fs.readFileSync(musicServiceFile, 'utf8');
+    assert.ok(updated.includes('System.getProperty("sonary.downloads.running") != "true"'));
+    assert.ok(updated.includes('System.getProperty("sonary.updater.running") != "true"'));
+    assert.strictEqual(patchTrackPlayerMusicService(tmpRoot), false);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('Updater Background UI: UpdateModal hidrata estado downloading/ready ao reabrir e auto-instala via autoInstallOnOpen', async () => {
+  let installedUri = null;
+  let nativeState = {
+    status: 'downloading',
+    versionName: '1.2.0',
+    versionCode: 8,
+    apkName: 'sonary-pro-v1.2.0.apk',
+    apkUrl: 'https://github.com/appsonary/sonary_app/releases/download/v1.2.0/sonary-pro-v1.2.0.apk',
+    progress: 0.72,
+  };
+
+  NativeModules.SonaryAppUpdater = {
+    startBackgroundDownload: async () => {},
+    getDownloadState: async () => nativeState,
+    canRequestPackageInstalls: async () => true,
+    installApk: async (uri) => {
+      installedUri = uri;
+    },
+  };
+
+  const release = {
+    versionName: '1.2.0',
+    versionCode: 8,
+    apkName: 'sonary-pro-v1.2.0.apk',
+    apkUrl: 'https://github.com/appsonary/sonary_app/releases/download/v1.2.0/sonary-pro-v1.2.0.apk',
+    sha256: null,
+    sizeBytes: 30 * 1024 * 1024,
+    releaseNotes: 'Notas v1.2.0',
+    releaseUrl: 'https://github.com/appsonary/sonary_app/releases/tag/v1.2.0',
+  };
+
+  // 1. Reabre modal com download já em andamento -> hidrata 72%
+  let tree;
+  await actAsync(async () => {
+    tree = renderer.create(
+      React.createElement(UpdateModal, {
+        visible: true,
+        installedVersion: { versionName: '1.0.5', versionCode: 7 },
+        release,
+        onClose: () => {},
+      })
+    );
+  });
+  assert.ok(getAllText(tree.root).includes('72%'));
+  assert.strictEqual(installedUri, null);
+
+  // 2. Reabre modal com APK já pronto sem autoInstallOnOpen -> mostra CTA "Instalar atualização" sem instalar sozinho
+  nativeState = {
+    ...nativeState,
+    status: 'ready',
+    progress: 1,
+    localUri: 'file:///cache/updates/sonary-pro-v1.2.0.apk',
+  };
+  await actAsync(async () => {
+    tree.update(
+      React.createElement(UpdateModal, {
+        visible: false,
+        installedVersion: { versionName: '1.0.5', versionCode: 7 },
+        release,
+        onClose: () => {},
+      })
+    );
+  });
+  await actAsync(async () => {
+    tree.update(
+      React.createElement(UpdateModal, {
+        visible: true,
+        installedVersion: { versionName: '1.0.5', versionCode: 7 },
+        release,
+        onClose: () => {},
+      })
+    );
+  });
+  assert.ok(getAllText(tree.root).includes('Instalar atualização'));
+  assert.strictEqual(installedUri, null);
+
+  // 3. Reabre com autoInstallOnOpen=true (deep link da notificação) -> dispara installApk automaticamente
+  await actAsync(async () => {
+    tree.update(
+      React.createElement(UpdateModal, {
+        visible: true,
+        installedVersion: { versionName: '1.0.5', versionCode: 7 },
+        release,
+        autoInstallOnOpen: true,
+        onClose: () => {},
+      })
+    );
+  });
+  assert.strictEqual(installedUri, 'file:///cache/updates/sonary-pro-v1.2.0.apk');
+});
+
+test('Updater App: deep link com.sonarypro.app://update abre UpdateModal pronto e dispara installApk; versão já instalada ou pulada limpa estado', async () => {
+  const App = require('../App').default;
+  let installedUri = null;
+  let clearCalls = 0;
+  let nativeState = {
+    status: 'ready',
+    versionName: '1.2.0',
+    versionCode: 8,
+    apkName: 'sonary-pro-v1.2.0.apk',
+    apkUrl: 'https://github.com/appsonary/sonary_app/releases/download/v1.2.0/sonary-pro-v1.2.0.apk',
+    localUri: 'file:///cache/updates/sonary-pro-v1.2.0.apk',
+    progress: 1,
+  };
+
+  NativeModules.SonaryAppUpdater = {
+    getInstalledVersion: async () => ({ versionName: '1.0.5', versionCode: 7 }),
+    startBackgroundDownload: async () => {},
+    getDownloadState: async () => nativeState,
+    clearDownloadState: async () => {
+      clearCalls += 1;
+      nativeState = { status: 'idle', progress: 0 };
+    },
+    canRequestPackageInstalls: async () => true,
+    installApk: async (uri) => {
+      installedUri = uri;
+    },
+  };
+
+  // 1. Deep link via evento URL com APK pronto -> reconstrói release, abre modal e aciona installApk
+  let appTree;
+  try {
+    await actAsync(async () => {
+      appTree = renderer.create(React.createElement(App));
+    });
+    await actAsync(async () => {
+      Linking.__emitUrl('com.sonarypro.app://update');
+    });
+    assert.strictEqual(installedUri, 'file:///cache/updates/sonary-pro-v1.2.0.apk');
+  } finally {
+    if (appTree) {
+      await actAsync(async () => {
+        appTree.unmount();
+      });
+    }
+  }
+
+  // 2. Versão já instalada (>= ready) não deve exibir badge obsoleto e deve limpar estado persistido
+  installedUri = null;
+  clearCalls = 0;
+  nativeState = {
+    status: 'ready',
+    versionName: '1.2.0',
+    versionCode: 8,
+    apkName: 'sonary-pro-v1.2.0.apk',
+    apkUrl: 'https://github.com/appsonary/sonary_app/releases/download/v1.2.0/sonary-pro-v1.2.0.apk',
+    localUri: 'file:///cache/updates/sonary-pro-v1.2.0.apk',
+    progress: 1,
+  };
+  NativeModules.SonaryAppUpdater.getInstalledVersion = async () => ({
+    versionName: '1.2.0',
+    versionCode: 8,
+  });
+
+  let updatedTree;
+  try {
+    await actAsync(async () => {
+      updatedTree = renderer.create(React.createElement(App));
+    });
+    assert.strictEqual(clearCalls, 1);
+
+    const menuBtn = updatedTree.root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Abrir menu'
+    );
+    await actAsync(async () => {
+      menuBtn.props.onPress();
+    });
+    const drawerText = getAllText(updatedTree.root);
+    assert.ok(drawerText.includes('Atualizado'));
+    assert.ok(!drawerText.includes('pronta para instalar'));
+  } finally {
+    if (updatedTree) {
+      await actAsync(async () => {
+        updatedTree.unmount();
+      });
+    }
+  }
+});
+
+test('Updater UI Dev: clicar em "Atualizar agora" na tela simulada executa download de 5s + instalação com sucesso', async (t) => {
+  const prevDev = global.__DEV__;
+  const envKey = 'EXPO_PUBLIC_DEV_MENU';
+  const prevEnv = process.env[envKey];
+
+  try {
+    global.__DEV__ = true;
+    delete process.env[envKey];
+    t.mock.timers.enable({ apis: ['setInterval'] });
+
+    let devTree;
+    await actAsync(async () => {
+      devTree = renderer.create(
+        React.createElement(UpdateModal, {
+          visible: true,
+          installedVersion: { versionName: '1.0.5', versionCode: 7 },
+          release: null,
+          isChecking: false,
+          onClose: () => {},
+        })
+      );
+    });
+
+    const simBtn = devTree.root.find(
+      (n) =>
+        n.type === 'TouchableOpacity' &&
+        n.props.accessibilityLabel === 'Simular atualização disponível'
+    );
+    await actAsync(async () => {
+      simBtn.props.onPress();
+    });
+
+    // Não exibe botão extra duplicado de simulação na tela de atualização
+    assert.ok(!getAllText(devTree.root).includes('Simular download e instalação'));
+
+    const updateBtn = devTree.root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Atualizar agora'
+    );
+    await actAsync(async () => {
+      await updateBtn.props.onPress();
+    });
+    assert.ok(getAllText(devTree.root).includes('0%'));
+
+    await actAsync(async () => {
+      t.mock.timers.tick(2500);
+    });
+    assert.ok(getAllText(devTree.root).includes('50%'));
+
+    await actAsync(async () => {
+      t.mock.timers.tick(2500);
+    });
+    const finalText = getAllText(devTree.root);
+    assert.ok(finalText.includes('Atualização v1.0.6 instalada com sucesso (simulação dev).'));
+    assert.ok(finalText.includes('Fechar'));
+
+    await actAsync(async () => {
+      devTree.unmount();
+    });
+  } finally {
+    if (prevDev === undefined) delete global.__DEV__;
+    else global.__DEV__ = prevDev;
+    if (prevEnv === undefined) delete process.env[envKey];
+    else process.env[envKey] = prevEnv;
+  }
 });

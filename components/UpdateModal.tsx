@@ -24,12 +24,19 @@ import {
   Zap,
 } from 'lucide-react-native';
 import {
+  cancelBackgroundUpdateDownload,
   canRequestPackageInstalls,
   downloadUpdateApk,
+  getUpdateDownloadState,
   InstalledAppVersion,
   installUpdateApk,
+  normalizeVersionName,
   openInstallPermissionSettings,
   RemoteReleaseInfo,
+  startBackgroundUpdateDownload,
+  subscribeUpdateDownload,
+  supportsBackgroundUpdateDownload,
+  UpdateDownloadState,
 } from '../services/updater';
 import { useBackModalLock } from '../services/backNavigation';
 import { isDevMenuEnabled } from './DevMenuModal';
@@ -41,12 +48,22 @@ export interface UpdateModalProps {
   installedVersion: InstalledAppVersion | null;
   isChecking?: boolean;
   checkError?: string | null;
+  autoInstallOnOpen?: boolean;
   onCheckNow?: () => void;
   onClose: () => void;
   onSkipVersion?: (versionName: string) => void;
 }
 
-type UpdateStage = 'idle' | 'downloading' | 'permission_required' | 'error';
+type UpdateStage =
+  | 'idle'
+  | 'downloading'
+  | 'ready'
+  | 'permission_required'
+  | 'error'
+  | 'simulated_installed';
+
+const SIMULATED_DOWNLOAD_DURATION_MS = 5000;
+const SIMULATED_DOWNLOAD_TICK_MS = 250;
 
 const DEFAULT_RELEASE_NOTES =
   'Melhorias de desempenho, estabilidade e correções de áudio.';
@@ -126,6 +143,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
   installedVersion,
   isChecking = false,
   checkError = null,
+  autoInstallOnOpen = false,
   onCheckNow,
   onClose,
   onSkipVersion,
@@ -139,8 +157,20 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
   const [simulatedRelease, setSimulatedRelease] = useState<RemoteReleaseInfo | null>(null);
   const resumableRef = useRef<FileSystem.DownloadResumable | null>(null);
   const cancelledRef = useRef(false);
+  const simTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isSimulatingDownloadRef = useRef(false);
   const effectiveRelease = release ?? (isDev ? simulatedRelease : null);
   const isSimulated = Boolean(!release && isDev && simulatedRelease);
+
+  const clearSimulationTimer = useCallback(() => {
+    if (simTimerRef.current) {
+      clearInterval(simTimerRef.current);
+      simTimerRef.current = null;
+    }
+    isSimulatingDownloadRef.current = false;
+  }, []);
+
+  useEffect(() => clearSimulationTimer, [clearSimulationTimer]);
 
   const {
     translateY,
@@ -154,18 +184,6 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     initialOffset: 380,
     dismissOffset: 440,
   });
-
-  useEffect(() => {
-    if (visible) {
-      cancelledRef.current = false;
-      setStage('idle');
-      setProgress(0);
-      setErrorMsg(null);
-      setDownloadedUri(null);
-      setSimulatedRelease(null);
-      resumableRef.current = null;
-    }
-  }, [visible, release?.versionName]);
 
   const tryInstallUri = useCallback(async (uri: string) => {
     try {
@@ -181,6 +199,87 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
       setStage('error');
     }
   }, [dismissSheet]);
+
+  const applyNativeDownloadState = useCallback(
+    (state: UpdateDownloadState, autoInstallIfForeground: boolean) => {
+      const targetVersion = effectiveRelease?.versionName
+        ? normalizeVersionName(effectiveRelease.versionName)
+        : null;
+      const stateVersion = state.versionName ? normalizeVersionName(state.versionName) : null;
+      if (targetVersion && stateVersion && targetVersion !== stateVersion) {
+        return;
+      }
+
+      if (state.status === 'downloading') {
+        setStage('downloading');
+        setProgress(Math.round(state.progress * 100));
+        setErrorMsg(null);
+      } else if (state.status === 'ready' && state.localUri) {
+        setDownloadedUri(state.localUri);
+        setProgress(100);
+        setErrorMsg(null);
+        setStage('ready');
+        if (autoInstallIfForeground && AppState.currentState === 'active') {
+          void tryInstallUri(state.localUri);
+        }
+      } else if (state.status === 'error') {
+        setErrorMsg(state.error || 'Falha ao baixar atualização.');
+        setStage('error');
+      } else if (state.status === 'idle') {
+        setStage((prev) => (prev === 'downloading' ? 'idle' : prev));
+        setProgress(0);
+      }
+    },
+    [effectiveRelease?.versionName, tryInstallUri]
+  );
+
+  const applyNativeDownloadStateRef = useRef(applyNativeDownloadState);
+  applyNativeDownloadStateRef.current = applyNativeDownloadState;
+
+  useEffect(() => {
+    if (!visible) {
+      clearSimulationTimer();
+      return;
+    }
+    cancelledRef.current = false;
+    clearSimulationTimer();
+    setSimulatedRelease(null);
+    resumableRef.current = null;
+
+    if (!supportsBackgroundUpdateDownload()) {
+      setStage('idle');
+      setProgress(0);
+      setErrorMsg(null);
+      setDownloadedUri(null);
+      return;
+    }
+
+    let active = true;
+    void getUpdateDownloadState().then((state) => {
+      if (!active) return;
+      const targetVersion = release?.versionName ? normalizeVersionName(release.versionName) : null;
+      const stateVersion = state.versionName ? normalizeVersionName(state.versionName) : null;
+      if (state.status === 'idle' || (targetVersion && stateVersion && targetVersion !== stateVersion)) {
+        setStage('idle');
+        setProgress(0);
+        setErrorMsg(null);
+        setDownloadedUri(null);
+        return;
+      }
+      applyNativeDownloadStateRef.current(state, autoInstallOnOpen);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [visible, release?.versionName, autoInstallOnOpen]);
+
+  useEffect(() => {
+    if (!visible || !supportsBackgroundUpdateDownload()) return;
+    return subscribeUpdateDownload((state) => {
+      applyNativeDownloadState(state, true);
+    });
+  }, [visible, applyNativeDownloadState]);
 
   useEffect(() => {
     if (!visible || stage !== 'permission_required' || !downloadedUri) return;
@@ -203,8 +302,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
   const handleStartUpdate = async () => {
     if (!effectiveRelease || stage === 'downloading') return;
     if (isSimulated) {
-      setErrorMsg('Simulação de desenvolvimento: nenhum APK real será baixado.');
-      setStage('error');
+      handleSimulateDownloadAndInstall();
       return;
     }
     if (downloadedUri) {
@@ -216,6 +314,16 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     setStage('downloading');
     setProgress(0);
     setErrorMsg(null);
+
+    if (supportsBackgroundUpdateDownload()) {
+      try {
+        await startBackgroundUpdateDownload(effectiveRelease);
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : 'Falha ao iniciar download em segundo plano.');
+        setStage('error');
+      }
+      return;
+    }
 
     try {
       const { localUri } = await downloadUpdateApk(
@@ -243,11 +351,46 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     }
   };
 
+  const handleSimulateDownloadAndInstall = () => {
+    if (!isDev || !effectiveRelease || stage === 'downloading') return;
+    clearSimulationTimer();
+    cancelledRef.current = false;
+    isSimulatingDownloadRef.current = true;
+    setStage('downloading');
+    setProgress(0);
+    setErrorMsg(null);
+
+    const totalSteps = Math.max(1, Math.round(SIMULATED_DOWNLOAD_DURATION_MS / SIMULATED_DOWNLOAD_TICK_MS));
+    let step = 0;
+    simTimerRef.current = setInterval(() => {
+      step += 1;
+      const nextPct = Math.min(100, Math.round((step / totalSteps) * 100));
+      setProgress(nextPct);
+      if (step >= totalSteps) {
+        clearSimulationTimer();
+        setStage('simulated_installed');
+      }
+    }, SIMULATED_DOWNLOAD_TICK_MS);
+    if (typeof (simTimerRef.current as any)?.unref === 'function') {
+      (simTimerRef.current as any).unref();
+    }
+  };
+
   const handleCancelDownload = () => {
     cancelledRef.current = true;
-    const r = resumableRef.current;
-    if (r && typeof r.cancelAsync === 'function') {
-      void r.cancelAsync().catch(() => {});
+    if (isSimulatingDownloadRef.current) {
+      clearSimulationTimer();
+      setStage('idle');
+      setProgress(0);
+      return;
+    }
+    if (supportsBackgroundUpdateDownload()) {
+      void cancelBackgroundUpdateDownload().catch(() => {});
+    } else {
+      const r = resumableRef.current;
+      if (r && typeof r.cancelAsync === 'function') {
+        void r.cancelAsync().catch(() => {});
+      }
     }
     setStage('idle');
     setProgress(0);
@@ -285,7 +428,9 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
           style={styles.backdrop}
           activeOpacity={1}
           onPress={() => {
-            if (stage !== 'downloading') dismissSheet();
+            if (stage !== 'downloading' || supportsBackgroundUpdateDownload()) {
+              dismissSheet();
+            }
           }}
         >
           <Animated.View
@@ -428,6 +573,15 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                   </View>
                 )}
 
+                {stage === 'simulated_installed' && (
+                  <View style={styles.simulatedSuccessBox}>
+                    <Check color="#4ADE80" size={18} strokeWidth={2.5} />
+                    <Text style={styles.simulatedSuccessText}>
+                      {`Atualização v${effectiveRelease.versionName} instalada com sucesso (simulação dev).`}
+                    </Text>
+                  </View>
+                )}
+
                 <View style={styles.actions}>
                   {stage === 'downloading' ? (
                     <TouchableOpacity
@@ -438,6 +592,16 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                       accessibilityLabel="Cancelar download da atualização"
                     >
                       <Text style={styles.secondaryButtonText}>Cancelar download</Text>
+                    </TouchableOpacity>
+                  ) : stage === 'simulated_installed' ? (
+                    <TouchableOpacity
+                      style={styles.primaryButton}
+                      onPress={() => dismissSheet()}
+                      activeOpacity={0.85}
+                      accessibilityRole="button"
+                      accessibilityLabel="Fechar após instalação simulada"
+                    >
+                      <Text style={styles.primaryButtonText}>Fechar</Text>
                     </TouchableOpacity>
                   ) : stage === 'permission_required' ? (
                     <>
@@ -473,11 +637,13 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                       >
                         <Download color="#030303" size={18} />
                         <Text style={styles.primaryButtonText}>
-                          {stage === 'error'
-                            ? 'Tentar novamente'
-                            : sizeLabel
-                              ? `Atualizar agora (${sizeLabel})`
-                              : 'Atualizar agora'}
+                          {stage === 'ready'
+                            ? 'Instalar atualização'
+                            : stage === 'error'
+                              ? 'Tentar novamente'
+                              : sizeLabel
+                                ? `Atualizar agora (${sizeLabel})`
+                                : 'Atualizar agora'}
                         </Text>
                       </TouchableOpacity>
 
@@ -926,6 +1092,23 @@ const styles = StyleSheet.create({
   },
   errorText: {
     color: '#FF8A80',
+    fontSize: 12.5,
+    lineHeight: 18,
+  },
+  simulatedSuccessBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(34, 197, 94, 0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(74, 222, 128, 0.35)',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 16,
+  },
+  simulatedSuccessText: {
+    flex: 1,
+    color: '#BBF7D0',
     fontSize: 12.5,
     lineHeight: 18,
   },

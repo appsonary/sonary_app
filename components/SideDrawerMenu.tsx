@@ -28,7 +28,11 @@ import {
   Settings,
 } from 'lucide-react-native';
 import { BACK_PRIORITY, useBackHandler } from '../services/backNavigation';
-import type { InstalledAppVersion, RemoteReleaseInfo } from '../services/updater';
+import type {
+  InstalledAppVersion,
+  RemoteReleaseInfo,
+  UpdateDownloadState,
+} from '../services/updater';
 import { getEaseOutCubic, theme } from '../theme';
 import { isDevMenuEnabled } from './DevMenuModal';
 
@@ -57,6 +61,7 @@ export interface SideDrawerMenuProps {
   onTransitionStateChange?: (active: boolean) => void;
   installedVersion?: InstalledAppVersion | null;
   availableUpdate?: RemoteReleaseInfo | null;
+  updateDownloadState?: UpdateDownloadState | null;
   downloadQueueCount?: number;
   isDevMode?: boolean;
   onOpenDownloadQueue: () => void;
@@ -75,6 +80,7 @@ export const SideDrawerMenu: React.FC<SideDrawerMenuProps> = ({
   onTransitionStateChange,
   installedVersion,
   availableUpdate,
+  updateDownloadState,
   downloadQueueCount = 0,
   isDevMode = false,
   onOpenDownloadQueue,
@@ -268,7 +274,12 @@ export const SideDrawerMenu: React.FC<SideDrawerMenuProps> = ({
   }
 
   const versionName = installedVersion?.versionName || '1.0.4';
-  const hasUpdate = Boolean(availableUpdate);
+  const isDownloadingUpdate = updateDownloadState?.status === 'downloading';
+  const isUpdateReady = updateDownloadState?.status === 'ready';
+  const updateProgressPct = Math.round((updateDownloadState?.progress || 0) * 100);
+  const updateTargetVersion =
+    availableUpdate?.versionName || updateDownloadState?.versionName || null;
+  const hasUpdate = Boolean(availableUpdate || isDownloadingUpdate || isUpdateReady);
   const showDevItem =
     Boolean(isDevMode) &&
     isDevMenuEnabled() &&
@@ -474,33 +485,43 @@ export const SideDrawerMenu: React.FC<SideDrawerMenuProps> = ({
                 <View
                   style={[
                     styles.statusDot,
-                    hasUpdate && styles.statusDotUpdate,
+                    hasUpdate && !isUpdateReady && styles.statusDotUpdate,
                   ]}
                 />
                 <Text
                   style={[
                     styles.versionStatusText,
-                    hasUpdate && styles.versionStatusTextUpdate,
+                    hasUpdate && !isUpdateReady && styles.versionStatusTextUpdate,
                   ]}
                   numberOfLines={1}
                 >
-                  {hasUpdate && availableUpdate
-                    ? `Nova versão v${availableUpdate.versionName} no GitHub`
-                    : 'Atualizado'}
+                  {isDownloadingUpdate
+                    ? `Baixando${updateTargetVersion ? ` v${updateTargetVersion}` : ''}... ${updateProgressPct}%`
+                    : isUpdateReady
+                      ? `${updateTargetVersion ? `v${updateTargetVersion} pronta` : 'Atualização pronta'} para instalar`
+                      : hasUpdate && availableUpdate
+                        ? `Nova versão v${availableUpdate.versionName} no GitHub`
+                        : 'Atualizado'}
                 </Text>
               </View>
             </View>
 
-            {hasUpdate && availableUpdate ? (
+            {hasUpdate ? (
               <TouchableOpacity
                 style={styles.updatePillButton}
                 onPress={() => dismissDrawer(onOpenUpdates)}
                 activeOpacity={0.8}
                 hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                 accessibilityRole="button"
-                accessibilityLabel="Atualizar"
+                accessibilityLabel={isUpdateReady ? 'Instalar atualização' : 'Atualizar'}
               >
-                <Text style={styles.updateRightActionText}>Atualizar</Text>
+                <Text style={styles.updateRightActionText}>
+                  {isDownloadingUpdate
+                    ? `${updateProgressPct}%`
+                    : isUpdateReady
+                      ? 'Instalar'
+                      : 'Atualizar'}
+                </Text>
                 <ArrowRight color="#FFFFFF" size={14} strokeWidth={2} />
               </TouchableOpacity>
             ) : (
