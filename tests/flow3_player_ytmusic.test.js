@@ -1220,6 +1220,10 @@ test('YT Music Morph: Continuous interpolations across p = 0, 0.35, 0.50, 0.65, 
 
   // p = 0: expanded controls visible, compact mini bar hidden, artwork at origin
   await setProgress(0);
+  const miniBarStyle = flatten(morphMiniBar.props.style);
+  assert.strictEqual(miniBarStyle.left, 0, 'Collapsed morph mini bar must reach left edge');
+  assert.strictEqual(miniBarStyle.right, 0, 'Collapsed morph mini bar must reach right edge');
+  assert.strictEqual(miniBarStyle.borderRadius, 8, 'Collapsed morph mini bar must preserve rounded corners');
   assert.strictEqual(getVal(flatten(headerToolbar.props.style).opacity), 1);
   assert.strictEqual(getVal(flatten(morphMiniBar.props.style).opacity), 0);
   assert.strictEqual(getVal(flatten(morphArtwork.props.style).opacity), 0);
@@ -1278,6 +1282,10 @@ test('YT Music Morph: Continuous interpolations across p = 0, 0.35, 0.50, 0.65, 
   assert.strictEqual(getVal(flatten(morphMiniBar.props.style).opacity), 1);
   const targetScale = 40 / Math.min(Math.round(375 * 0.76), 300);
   assert.ok(Math.abs(getTx(morphArtwork.props.style, 'scale') - targetScale) < 0.001);
+  assert.ok(
+    Math.abs(getTx(morphArtwork.props.style, 'translateX') - (28 - 375 / 2)) < 0.01,
+    'Morphed artwork must align horizontally with paddingLeft=8 (targetCenterX=28)'
+  );
   assert.strictEqual(getTx(clipWrapper.props.style, 'translateY'), -navBarHeight);
   assert.strictEqual(getTx(contentWrapper.props.style, 'translateY'), collapseDistance + navBarHeight);
 

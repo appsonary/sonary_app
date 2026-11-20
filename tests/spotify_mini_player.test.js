@@ -83,8 +83,8 @@ test('Spotify Mini Player: Renders floating card with dynamic background, bottom
   const card = touchables[0];
   const flattenedStyle = Object.assign({}, ...[].concat(card.props.style).filter(Boolean));
   assert.strictEqual(flattenedStyle.backgroundColor, '#132438', 'Background color should dynamically match album palette');
-  assert.strictEqual(flattenedStyle.borderRadius, 8, 'Mini player must have floating card rounded corners');
-  assert.strictEqual(flattenedStyle.marginHorizontal, 8, 'Mini player must have horizontal margin (floating card)');
+  assert.strictEqual(flattenedStyle.borderRadius, 8, 'Mini player must preserve rounded corners');
+  assert.strictEqual(flattenedStyle.marginHorizontal, 0, 'Mini player must reach both horizontal edges of the screen');
 
   // Verify device connect button is omitted (no unlinked device pairing)
   const deviceBtn = findButtonByIcon(root, 'Laptop2');

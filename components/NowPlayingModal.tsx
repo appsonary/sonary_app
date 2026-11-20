@@ -1737,7 +1737,7 @@ export default function NowPlayingModal({
     const maxModalY = Math.max(D + 1, SCREEN_HEIGHT);
     const startCenterX = SCREEN_WIDTH / 2;
     const startCenterY = morphArtworkTop + ARTWORK_BOX_SIZE / 2;
-    const targetCenterX = 36;
+    const targetCenterX = 28;
     const targetCenterY = 28;
     const targetScale = 40 / ARTWORK_BOX_SIZE;
 
@@ -3810,8 +3810,8 @@ const styles = StyleSheet.create({
   compactMiniBar: {
     position: 'absolute',
     top: 0,
-    left: 8,
-    right: 8,
+    left: 0,
+    right: 0,
     height: 56,
     borderRadius: 8,
     overflow: 'hidden',

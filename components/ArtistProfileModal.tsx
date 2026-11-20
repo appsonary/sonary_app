@@ -1232,7 +1232,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 40,
     borderRadius: 9999,
-    backgroundColor: '#8F0E22',
+    backgroundColor: theme.colors.brandPrimary,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',

@@ -422,7 +422,7 @@ export const PersistentMiniPlayer: React.FC<PersistentMiniPlayerProps> = ({
 const styles = StyleSheet.create({
   miniPlayer: {
     height: 56,
-    marginHorizontal: 8,
+    marginHorizontal: 0,
     marginBottom: 6,
     borderRadius: 8,
     overflow: 'hidden',
