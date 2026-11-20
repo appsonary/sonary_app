@@ -107,6 +107,7 @@ export interface SearchBarSectionProps {
   onFocusChange?: (focused: boolean) => void;
   onRemoveRecentQuery?: (item: string) => void;
   onClearHistory?: () => void;
+  isActiveScreen?: boolean;
 }
 
 export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
@@ -120,6 +121,7 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
   onFocusChange,
   onRemoveRecentQuery,
   onClearHistory,
+  isActiveScreen = true,
 }) => {
   const [isFocused, setIsFocused] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
@@ -131,6 +133,13 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
     setIsFocused(nextFocused);
     onFocusChangeRef.current?.(nextFocused);
   };
+
+  useEffect(() => {
+    if (!isActiveScreen && isFocused) {
+      updateFocus(false);
+      searchInputRef.current?.blur?.();
+    }
+  }, [isActiveScreen, isFocused]);
 
   useEffect(() => {
     const showSub = Keyboard?.addListener?.('keyboardDidShow', (event: any) => {
@@ -150,7 +159,7 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
   }, []);
 
   useBackHandler(
-    isFocused,
+    isActiveScreen && isFocused,
     () => {
       updateFocus(false);
       searchInputRef.current?.blur?.();
@@ -161,7 +170,7 @@ export const SearchBarSection: React.FC<SearchBarSectionProps> = ({
   );
 
   useBackHandler(
-    Boolean(hasResults && !isFocused && onClearSearch),
+    Boolean(isActiveScreen && hasResults && !isFocused && onClearSearch),
     () => {
       onClearSearch?.();
       return true;

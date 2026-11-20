@@ -380,8 +380,12 @@ test('LRA-005 & LRA-006: NowPlayingModal renders real relatedTracks, triggers ra
 
   const modalTextAfterOpen = getAllText(root);
   assert.ok(
-    modalTextAfterOpen.includes('Perfil do Artista') && modalTextAfterOpen.includes('Discografia'),
-    'ArtistProfileModal must open displaying Perfil do Artista and Discografia'
+    root.findAllByProps({ testID: 'artist-profile-modal' }).length > 0 &&
+      modalTextAfterOpen.includes('Populares') &&
+      modalTextAfterOpen.includes('Tocar') &&
+      modalTextAfterOpen.includes('Aleatório') &&
+      modalTextAfterOpen.includes('Rádio'),
+    'ArtistProfileModal must open displaying Populares and action pills (Tocar, Aleatório, Rádio)'
   );
   assert.strictEqual(
     modalTextAfterOpen.includes('YouTube Music'),

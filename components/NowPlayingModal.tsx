@@ -132,6 +132,11 @@ export interface NowPlayingModalProps {
   onAddRelatedToQueue?: (track: TrackSummary) => void;
   onStartTrackRadio?: () => void;
   onStartArtistRadio?: (artistName: string, channelId?: string) => void;
+  onOpenArtistProfile?: (params: {
+    artistName: string;
+    channelId?: string;
+    initialProfile?: ArtistProfile | null;
+  }) => void;
   isLoadingRadio?: boolean;
   toastMessage?: string | null;
   toastVariant?: 'success' | 'error' | 'info';
@@ -867,6 +872,7 @@ export default function NowPlayingModal({
   onAddRelatedToQueue,
   onStartTrackRadio,
   onStartArtistRadio,
+  onOpenArtistProfile,
   isLoadingRadio = false,
   toastMessage = null,
   toastVariant = 'success',
@@ -2701,7 +2707,18 @@ export default function NowPlayingModal({
                                 <ChevronRight color="#AAAAAA" size={22} style={styles.titleChevron} />
                               </View>
                               <TouchableOpacity
-                                onPress={() => setIsArtistModalVisible(true)}
+                                onPress={() => {
+                                  if (onOpenArtistProfile) {
+                                    onClose();
+                                    onOpenArtistProfile({
+                                      artistName: effectiveArtistName,
+                                      channelId: artistProfile?.channelId,
+                                      initialProfile: artistProfile,
+                                    });
+                                  } else {
+                                    setIsArtistModalVisible(true);
+                                  }
+                                }}
                                 activeOpacity={0.75}
                                 accessibilityRole="button"
                                 accessibilityLabel={`Ver perfil de ${track.artist || 'Artista'}`}
@@ -2924,7 +2941,18 @@ export default function NowPlayingModal({
 
                         <TouchableOpacity
                           style={styles.spotifyArtistHero}
-                          onPress={() => setIsArtistModalVisible(true)}
+                          onPress={() => {
+                            if (onOpenArtistProfile) {
+                              onClose();
+                              onOpenArtistProfile({
+                                artistName: effectiveArtistName,
+                                channelId: artistProfile?.channelId,
+                                initialProfile: artistProfile,
+                              });
+                            } else {
+                              setIsArtistModalVisible(true);
+                            }
+                          }}
                           activeOpacity={0.8}
                           accessibilityRole="button"
                           accessibilityLabel="Abrir perfil do artista"
@@ -2947,7 +2975,14 @@ export default function NowPlayingModal({
                               {artistProfile?.name || effectiveArtistName}
                             </Text>
                             <Text style={styles.spotifyArtistSub} numberOfLines={1}>
-                              {`${artistProfile?.subscriberCountText || 'Artista Verificado'} • Explorar discografia e canais recomendados`}
+                              {`${
+                                (artistProfile?.monthlyListenersText &&
+                                  artistProfile.monthlyListenersText.toLowerCase() !== 'artista'
+                                  ? artistProfile.monthlyListenersText
+                                  : undefined) ||
+                                artistProfile?.subscriberCountText ||
+                                'Artista Verificado'
+                              } • Explorar discografia e canais recomendados`}
                             </Text>
                           </View>
                           <ChevronRight color="#AAAAAA" size={20} />
@@ -4702,11 +4737,11 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   sheetContainer: {
-    backgroundColor: '#212121',
+    backgroundColor: '#181818',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     borderTopWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     marginBottom: -72,
     paddingBottom: (Platform.OS === 'ios' ? 36 : 24) + 72,
     maxWidth: 540,
@@ -4772,7 +4807,7 @@ const styles = StyleSheet.create({
   },
   quickTile: {
     flex: 1,
-    backgroundColor: '#2e2e2e',
+    backgroundColor: '#2A2A2A',
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: 'center',

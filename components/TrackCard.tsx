@@ -830,11 +830,11 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   sheetContainer: {
-    backgroundColor: '#212121',
+    backgroundColor: '#181818',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     borderTopWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     marginBottom: -72,
     paddingBottom: (Platform.OS === 'ios' ? 36 : 24) + 72,
     maxWidth: 540,
@@ -900,7 +900,7 @@ const styles = StyleSheet.create({
   },
   quickTile: {
     flex: 1,
-    backgroundColor: '#2e2e2e',
+    backgroundColor: '#2A2A2A',
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: 'center',

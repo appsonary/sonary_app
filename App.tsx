@@ -82,6 +82,7 @@ import {
   Zap,
 } from 'lucide-react-native';
 import {
+  ArtistProfile,
   ArtistSearchResult,
   TrackSummary,
   searchTracksPage,
@@ -189,6 +190,13 @@ import {
 } from './services/updater';
 
 type PlayableTrack = TrackSummary | DownloadedTrack | PlaylistTrackItem;
+type SelectedArtistTarget = {
+  name: string;
+  channelId?: string;
+  avatarUrl?: string;
+  subtitle?: string;
+  initialProfile?: ArtistProfile | null;
+};
 type NavHistoryEntry = { tab: MainTab; playlistId: string | null };
 const EXIT_PROMPT_MS = 2000;
 const EXIT_PROMPT_MESSAGE = 'Pressione voltar novamente para sair';
@@ -210,7 +218,10 @@ export default function App() {
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [searchResults, setSearchResults] = useState<TrackSummary[]>([]);
   const [searchArtistsResults, setSearchArtistsResults] = useState<ArtistSearchResult[]>([]);
-  const [selectedSearchArtist, setSelectedSearchArtist] = useState<ArtistSearchResult | null>(null);
+  const [selectedArtist, setSelectedArtist] = useState<SelectedArtistTarget | null>(null);
+  const selectedArtistRef = useRef<SelectedArtistTarget | null>(null);
+  selectedArtistRef.current = selectedArtist;
+  const artistHistoryRef = useRef<SelectedArtistTarget[]>([]);
   const [searchContinuationToken, setSearchContinuationToken] = useState<string | null>(null);
   const [lastSearchedQuery, setLastSearchedQuery] = useState<string>('');
   const [isLoadingMoreSearch, setIsLoadingMoreSearch] = useState(false);
@@ -1237,6 +1248,9 @@ export default function App() {
     closeNowPlayingImmediate();
     isPlaylistDetailVisibleRef.current = false;
     setIsPlaylistDetailVisible(false);
+    artistHistoryRef.current = [];
+    selectedArtistRef.current = null;
+    setSelectedArtist(null);
     setIsAddToPlaylistVisible(false);
     setIsQuickCreateVisible(false);
     setPendingTab(null);
@@ -1283,11 +1297,14 @@ export default function App() {
   const handleTabChange = useCallback(
     (nextTab: MainTab, options?: { skipHistory?: boolean }) => {
       const visibleTab = pendingTab ?? activeTab;
-      if (nextTab === visibleTab && !isPlaylistDetailVisible) {
+      const hadSubscreenOpen = isPlaylistDetailVisible || Boolean(selectedArtistRef.current);
+      if (nextTab === visibleTab && !hadSubscreenOpen) {
         return;
       }
 
-      if (!options?.skipHistory) {
+      const shouldPushHistory =
+        !options?.skipHistory && (nextTab !== visibleTab || isPlaylistDetailVisible);
+      if (shouldPushHistory) {
         pushNavHistory({
           tab: visibleTab,
           playlistId: isPlaylistDetailVisible ? selectedPlaylistId : null,
@@ -1296,11 +1313,14 @@ export default function App() {
         lastBackExitPressRef.current = 0;
       }
 
-      const wasInPlaylistDetail = isPlaylistDetailVisible;
+      const wasInPlaylistDetail = hadSubscreenOpen;
       shellTransitionRef.current?.stop();
       isOpeningPlaylistRef.current = false;
       isPlaylistDetailVisibleRef.current = false;
       setIsPlaylistDetailVisible(false);
+      artistHistoryRef.current = [];
+      selectedArtistRef.current = null;
+      setSelectedArtist(null);
 
       if (nextTab !== 'search') {
         setIsSearchFocused(false);
@@ -1376,9 +1396,12 @@ export default function App() {
 
   const openPlaylistDetail = useCallback(
     (playlistId: string) => {
-      if (isPlaylistDetailVisible && selectedPlaylistId === playlistId) {
+      if (isPlaylistDetailVisible && selectedPlaylistId === playlistId && !selectedArtistRef.current) {
         return;
       }
+      artistHistoryRef.current = [];
+      selectedArtistRef.current = null;
+      setSelectedArtist(null);
       const visibleTab = pendingTab ?? activeTab;
       pushNavHistory({
         tab: visibleTab,
@@ -1462,6 +1485,46 @@ export default function App() {
     );
   }, [activeTab, tabContentOpacity, shellOpacity, fadeOpacity]);
 
+  const openArtistProfile = useCallback(
+    (
+      target: SelectedArtistTarget,
+      options?: { pushCurrentArtist?: boolean }
+    ) => {
+      if (!target?.name) return;
+      lastBackExitPressRef.current = 0;
+      tabTransitionRef.current?.stop();
+      shellTransitionRef.current?.stop();
+      setPendingTab(null);
+      setIsSearchFocused(false);
+
+      if (options?.pushCurrentArtist && selectedArtistRef.current) {
+        artistHistoryRef.current.push(selectedArtistRef.current);
+        if (artistHistoryRef.current.length > 12) {
+          artistHistoryRef.current.shift();
+        }
+      } else {
+        artistHistoryRef.current = [];
+      }
+
+      selectedArtistRef.current = target;
+      setSelectedArtist(target);
+    },
+    []
+  );
+
+  const closeArtistProfile = useCallback(() => {
+    lastBackExitPressRef.current = 0;
+    if (artistHistoryRef.current.length > 0) {
+      const prev = artistHistoryRef.current.pop()!;
+      selectedArtistRef.current = prev;
+      setSelectedArtist(prev);
+      return;
+    }
+
+    selectedArtistRef.current = null;
+    setSelectedArtist(null);
+  }, []);
+
   useEffect(() => {
     if (isNowPlayingVisible && !activeTrack) {
       closeNowPlayingImmediate();
@@ -1521,6 +1584,7 @@ export default function App() {
 
   useBackHandler(
     !isPlaylistDetailVisible &&
+    !selectedArtist &&
     !hasBlockingModalOpen &&
     activeTab === 'playlists' &&
     isQuickCreateVisible,
@@ -1534,6 +1598,7 @@ export default function App() {
 
   useBackHandler(
     !isPlaylistDetailVisible &&
+    !selectedArtist &&
     !hasBlockingModalOpen &&
     activeTab === 'downloads' &&
     downloadsSearchQuery.trim().length > 0,
@@ -1545,7 +1610,7 @@ export default function App() {
   );
 
   useBackHandler(
-    !isPlaylistDetailVisible && !hasBlockingModalOpen,
+    !isPlaylistDetailVisible && !selectedArtist && !hasBlockingModalOpen,
     () => {
       if (isOpeningPlaylistRef.current) {
         isOpeningPlaylistRef.current = false;
@@ -1783,18 +1848,24 @@ export default function App() {
   };
 
   const handlePlayPlaylist = async (
-    tracks: PlaylistTrackItem[],
-    startIndex: number = 0
+    tracks: PlayableTrack[],
+    startIndex: number = 0,
+    options?: { shuffle?: boolean }
   ) => {
     if (!tracks || tracks.length === 0) return;
-    const safeIndex = startIndex >= 0 && startIndex < tracks.length ? startIndex : 0;
+    const orderedTracks = options?.shuffle ? shuffleArray(tracks) : tracks;
+    const safeIndex =
+      !options?.shuffle && startIndex >= 0 && startIndex < orderedTracks.length
+        ? startIndex
+        : 0;
     activePlaylistRef.current = {
       type: 'playlist',
-      tracks,
+      tracks: orderedTracks,
     };
-    const targetTrack = tracks[safeIndex];
+    const targetTrack = orderedTracks[safeIndex];
     await handleSelectTrack(targetTrack, safeIndex, {
       resetQueueForPlaylist: true,
+      initialShuffle: Boolean(options?.shuffle),
     });
   };
 
@@ -1923,7 +1994,11 @@ export default function App() {
   const handleSelectTrack = async (
     track: PlayableTrack,
     index?: number,
-    options?: { resetQueueForPlaylist?: boolean; preservePlaylistContext?: boolean }
+    options?: {
+      resetQueueForPlaylist?: boolean;
+      preservePlaylistContext?: boolean;
+      initialShuffle?: boolean;
+    }
   ) => {
     const selectionEpoch = ++queueGenerationRef.current;
     const isPlaylistReset = Boolean(options?.resetQueueForPlaylist);
@@ -2055,7 +2130,7 @@ export default function App() {
       if (queueGenerationRef.current !== selectionEpoch) return;
 
       setRestoredSession(null);
-      setIsShuffleActive(false);
+      setIsShuffleActive(Boolean(options?.initialShuffle));
       originalQueueRef.current = [];
 
       if (preservedUpcomingCount > 0) {
@@ -2677,6 +2752,7 @@ export default function App() {
                         isSearching={isSearching}
                         recentQueries={recentSearchQueries}
                         hasResults={searchResults.length > 0 || searchArtistsResults.length > 0}
+                        isActiveScreen={!selectedArtist && !isPlaylistDetailVisible}
                         onFocusChange={setIsSearchFocused}
                         onRemoveRecentQuery={async (item) => {
                           try {
@@ -2713,7 +2789,14 @@ export default function App() {
                               <View style={styles.searchResultsHeaderContainer}>
                                 <ArtistResultsSection
                                   artists={searchArtistsResults}
-                                  onSelectArtist={(artist) => setSelectedSearchArtist(artist)}
+                                  onSelectArtist={(artist) =>
+                                    openArtistProfile({
+                                      name: artist.name,
+                                      channelId: artist.id,
+                                      avatarUrl: artist.thumbnailUrl,
+                                      subtitle: artist.subtitle,
+                                    })
+                                  }
                                 />
                                 {searchResults.length > 0 && (
                                   <>
@@ -2996,6 +3079,46 @@ export default function App() {
 
               </Animated.View>
             )}
+
+            {selectedArtist && (
+              <View style={styles.artistProfileOverlay}>
+                <ArtistProfileModal
+                  visible={Boolean(selectedArtist)}
+                  presentation="inline"
+                  onClose={closeArtistProfile}
+                  artistName={selectedArtist.name}
+                  channelId={selectedArtist.channelId}
+                  initialProfile={selectedArtist.initialProfile}
+                  initialAvatarUrl={selectedArtist.avatarUrl}
+                  initialSubtitle={selectedArtist.subtitle}
+                  currentActiveTrackId={activeTrack?.id}
+                  isPlaying={isPlaying}
+                  isLoadingRadio={isLoadingRadio}
+                  downloadedTrackIds={downloadedIds}
+                  onPlayTrack={(track, idx) => handleSelectTrack(track, idx ?? 0)}
+                  onPlayAll={(tracks, startIdx = 0, opts) =>
+                    handlePlayPlaylist(tracks, startIdx, opts)
+                  }
+                  onPlayNext={handlePlayNext}
+                  onAddToQueue={handleAddToQueue}
+                  onAddToPlaylist={handleOpenAddToPlaylist}
+                  onDownloadTrack={handleDownload}
+                  onStartArtistRadio={handleStartArtistRadio}
+                  onSelectRelatedArtist={(related) =>
+                    openArtistProfile(
+                      {
+                        name: related.name,
+                        channelId: related.id,
+                        avatarUrl: related.thumbnailUrl,
+                        subtitle: related.subtitle,
+                      },
+                      { pushCurrentArtist: true }
+                    )
+                  }
+                  onShowToast={showToast}
+                />
+              </View>
+            )}
           </View>
         </View>
 
@@ -3203,6 +3326,14 @@ export default function App() {
             onStartArtistRadio={(name, cid) =>
               handleStartArtistRadio(name, cid, activeTrack?.title)
             }
+            onOpenArtistProfile={(params) => {
+              closeNowPlayingImmediate();
+              openArtistProfile({
+                name: params.artistName,
+                channelId: params.channelId,
+                initialProfile: params.initialProfile,
+              });
+            }}
             isLoadingRadio={isLoadingRadio}
             onPlayRelatedTrack={(relTrack) => {
               handleSelectTrack(relTrack);
@@ -3281,21 +3412,6 @@ export default function App() {
           }}
         />
 
-        {/* Modal de Perfil do Artista aberto a partir da busca */}
-        {selectedSearchArtist && (
-          <ArtistProfileModal
-            visible={Boolean(selectedSearchArtist)}
-            onClose={() => setSelectedSearchArtist(null)}
-            artistName={selectedSearchArtist.name}
-            channelId={selectedSearchArtist.id}
-            onPlayTrack={(track) => handleSelectTrack(track, 0)}
-            onAddToQueue={(track) => handleAddToQueue(track)}
-            onStartArtistRadio={handleStartArtistRadio}
-            toastMessage={toastMessage}
-            onDismissToast={() => setToastMessage(null)}
-          />
-        )}
-
         {/* Modal de Adicionar à Playlist */}
         {isAddToPlaylistVisible && (
           <AddToPlaylistModal
@@ -3355,6 +3471,12 @@ const styles = StyleSheet.create({
   },
   mainContent: {
     flex: 1,
+    position: 'relative',
+  },
+  artistProfileOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 15,
+    backgroundColor: '#030303',
   },
   bottomDock: {
     position: 'absolute',

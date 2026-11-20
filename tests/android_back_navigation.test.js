@@ -1034,3 +1034,164 @@ test('BackNavigation: SearchBarSection blurs TextInput ref on keyboardDidHide', 
     tree.unmount();
   });
 });
+
+test('BackNavigation: Tapping active Buscar tab from inline ArtistProfileModal does not push ghost history, and focused SearchBarSection does not steal Back from ArtistProfile', async () => {
+  const originalSearchTracks = api.searchTracks;
+  const originalSearchArtists = api.searchArtists;
+  const originalGetArtistProfile = api.getArtistProfile;
+  const originalGetAudioStream = api.getAudioStream;
+  const originalGetRelatedTracks = api.getRelatedTracks;
+  const originalGetTrackLyrics = api.getTrackLyrics;
+
+  try {
+    api.searchTracks = async () => [
+      {
+        id: 'bk_t1',
+        title: 'Lugar ao Sol',
+        artist: 'Charlie Brown Jr.',
+        duration: 210,
+        formattedDuration: '3:30',
+        thumbnailUrl: 'https://example.com/sol.jpg',
+      },
+    ];
+    api.searchArtists = async () => [
+      {
+        id: 'UC_bk_cbjr',
+        name: 'Charlie Brown Jr.',
+        subtitle: 'Artista • 10 mi ouvintes',
+        thumbnailUrl: 'https://example.com/cbjr.jpg',
+      },
+    ];
+    api.getRelatedTracks = async () => [];
+    api.getTrackLyrics = async () => null;
+    api.getAudioStream = async (videoId) => ({
+      videoId,
+      title: 'Lugar ao Sol',
+      artist: 'Charlie Brown Jr.',
+      duration: 210,
+      thumbnailUrl: 'https://example.com/sol.jpg',
+      streamUrl: 'https://stream.example.com/sol.m4a',
+      mimeType: 'audio/mp4',
+      format: 'm4a',
+      bitrate: 128000,
+    });
+    api.getArtistProfile = async () => ({
+      name: 'Charlie Brown Jr.',
+      channelId: 'UC_bk_cbjr',
+      avatarUrl: 'https://example.com/cbjr.jpg',
+      bannerUrl: 'https://example.com/cbjr.jpg',
+      subtitle: 'Artista • 10 mi ouvintes',
+      topTracks: [
+        {
+          id: 'bk_t1',
+          title: 'Lugar ao Sol',
+          artist: 'Charlie Brown Jr.',
+          duration: 210,
+          formattedDuration: '3:30',
+          thumbnailUrl: 'https://example.com/sol.jpg',
+        },
+      ],
+      albums: [],
+      singles: [],
+    });
+
+    let tree;
+    await actAsync(async () => {
+      tree = renderer.create(React.createElement(App));
+    });
+    const root = tree.root;
+
+    // 1. Search and open Artist Profile inline
+    const input = findInputByPlaceholder(root, 'Buscar faixas');
+    await actAsync(async () => {
+      input.props.onChangeText('Charlie');
+    });
+    await actAsync(async () => {
+      findSearchActionButton(root).props.onPress();
+    });
+    const artistCard = root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Abrir perfil do artista Charlie Brown Jr.'
+    );
+    await actAsync(async () => {
+      artistCard.props.onPress();
+    });
+    assert.ok(root.findByProps({ testID: 'artist-profile-modal' }));
+
+    // 2. Tap active "Buscar" tab -> closes Artist Profile WITHOUT pushing ghost search->search history
+    await actAsync(async () => {
+      findButtonByText(root, 'Buscar').props.onPress();
+    });
+    assert.strictEqual(
+      root.findAll((n) => n.type === 'View' && n.props.testID === 'artist-profile-modal').length,
+      0
+    );
+
+    // 3. First Back clears search results -> next Back immediately shows exit prompt (no ghost history hop!)
+    await actAsync(async () => {
+      assert.strictEqual(BackHandler.__emitHardwareBackPress(), true);
+    });
+    await actAsync(async () => {
+      assert.strictEqual(BackHandler.__emitHardwareBackPress(), true);
+    });
+    assert.ok(
+      getAllText(root).includes('Pressione voltar novamente para sair'),
+      'Must immediately reach exit prompt at Search root without consuming a ghost history entry'
+    );
+
+    // 4. Play a track, focus SearchBarSection, then open NowPlaying -> ArtistProfile -> Back must close Artist on 1st press
+    await actAsync(async () => {
+      findInputByPlaceholder(root, 'Buscar faixas').props.onChangeText('Lugar ao Sol');
+    });
+    await actAsync(async () => {
+      findSearchActionButton(root).props.onPress();
+    });
+    const playTrackBtn = root.findAll(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Tocar Lugar ao Sol de Charlie Brown Jr.'
+    )[0];
+    assert.ok(playTrackBtn, 'Search result track button must exist');
+    await actAsync(async () => {
+      playTrackBtn.props.onPress();
+    });
+    // Focus search input so SearchBarSection local isFocused becomes true
+    await actAsync(async () => {
+      findInputByPlaceholder(root, 'Buscar faixas').props.onFocus();
+    });
+    const miniExpand = root.find(
+      (n) =>
+        n.type === 'TouchableOpacity' &&
+        typeof n.props.accessibilityLabel === 'string' &&
+        n.props.accessibilityLabel.includes('Expandir player')
+    );
+    await actAsync(async () => {
+      miniExpand.props.onPress();
+    });
+    const openFromPlayer = root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Abrir perfil do artista'
+    );
+    await actAsync(async () => {
+      openFromPlayer.props.onPress();
+    });
+    assert.ok(root.findByProps({ testID: 'artist-profile-modal' }));
+
+    // 1st Back MUST close ArtistProfileModal directly (not stolen by hidden focused SearchBarSection)
+    await actAsync(async () => {
+      assert.strictEqual(BackHandler.__emitHardwareBackPress(), true);
+    });
+    assert.strictEqual(
+      root.findAll((n) => n.type === 'View' && n.props.testID === 'artist-profile-modal').length,
+      0,
+      '1st Android Back press must close inline ArtistProfileModal even if SearchBarSection was focused beforehand'
+    );
+
+    await actAsync(async () => {
+      tree.unmount();
+    });
+  } finally {
+    api.searchTracks = originalSearchTracks;
+    api.searchArtists = originalSearchArtists;
+    api.getArtistProfile = originalGetArtistProfile;
+    api.getAudioStream = originalGetAudioStream;
+    api.getRelatedTracks = originalGetRelatedTracks;
+    api.getTrackLyrics = originalGetTrackLyrics;
+  }
+});

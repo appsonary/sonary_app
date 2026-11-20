@@ -4,9 +4,10 @@ import { theme } from '../theme';
 
 export interface PlayingEqualizerProps {
   isPlaying?: boolean;
+  variant?: 'overlay' | 'inline';
 }
 
-const BAR_HEIGHT = 16;
+const BAR_HEIGHT = 14;
 
 interface BarConfig {
   pausedValue: number;
@@ -47,7 +48,11 @@ const BAR_CONFIGS: BarConfig[] = [
  * Overlay de equalizador com 3 barras vermelhas sobre a capa da faixa ativa.
  * Usa scaleY + translateY com useNativeDriver: true para animar na UI thread sem layout thrashing.
  */
-export const PlayingEqualizer: React.FC<PlayingEqualizerProps> = ({ isPlaying = false }) => {
+export const PlayingEqualizer: React.FC<PlayingEqualizerProps> = ({
+  isPlaying = false,
+  variant = 'overlay',
+}) => {
+  const isInline = variant === 'inline';
   const barValues = useRef(BAR_CONFIGS.map((cfg) => new Animated.Value(cfg.pausedValue))).current;
 
   useEffect(() => {
@@ -77,7 +82,7 @@ export const PlayingEqualizer: React.FC<PlayingEqualizerProps> = ({ isPlaying = 
 
   return (
     <View
-      style={styles.overlay}
+      style={isInline ? styles.inlineContainer : styles.overlay}
       testID="playing-equalizer"
       accessibilityLabel={isPlaying ? 'Tocando agora' : 'Reprodução pausada'}
     >
@@ -113,17 +118,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  inlineContainer: {
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   barsContainer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: 2.5,
+    gap: 3,
     height: BAR_HEIGHT,
   },
   bar: {
-    width: 3,
+    width: 2,
     height: BAR_HEIGHT,
     backgroundColor: theme.colors.brandPrimary,
-    borderRadius: 1.5,
+    borderRadius: 1,
   },
 });
 

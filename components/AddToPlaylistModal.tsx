@@ -454,11 +454,11 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   sheetContainer: {
-    backgroundColor: '#212121',
+    backgroundColor: '#181818',
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+    borderTopColor: 'rgba(255, 255, 255, 0.08)',
     maxHeight: '80%',
     paddingBottom: Platform.OS === 'ios' ? 20 : 16,
   },

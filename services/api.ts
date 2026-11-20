@@ -54,6 +54,7 @@ export interface TrackSummary {
   id: string; // YouTube videoId (ex: "kJQP7kiw5Fk")
   title: string;
   artist: string;
+  album?: string;
   duration: number; // em segundos
   formattedDuration: string; // "MM:SS" ou "HH:MM:SS"
   thumbnailUrl: string;
@@ -1453,9 +1454,9 @@ export function extractTrackMetadata(
 /**
  * Filtra YouTube Shorts, vídeos virais curtos (< 45s) e conteúdos não-musicais.
  */
-export function isValidMusicTrack(track: TrackSummary): boolean {
+function isValidMusicTrackCore(track: TrackSummary, allowShort: boolean): boolean {
   if (!track || !track.id) return false;
-  if (track.duration > 0 && track.duration < 45) return false;
+  if (!allowShort && track.duration > 0 && track.duration < 45) return false;
   if (track.duration > 7200) return false;
 
   const title = (track.title || '').trim();
@@ -1470,6 +1471,10 @@ export function isValidMusicTrack(track: TrackSummary): boolean {
   }
 
   return true;
+}
+
+export function isValidMusicTrack(track: TrackSummary): boolean {
+  return isValidMusicTrackCore(track, false);
 }
 
 function parsePlaylistPanelItems(contents: any[], excludeId?: string): {
@@ -1884,8 +1889,21 @@ export interface ArtistAlbumSummary {
   browseId: string;
   title: string;
   year?: string;
+  subtitle?: string;
   thumbnailUrl: string;
   type: 'album' | 'single' | 'ep';
+}
+
+export interface AlbumDetail {
+  browseId: string;
+  title: string;
+  artist: string;
+  year?: string;
+  type: 'album' | 'single' | 'ep';
+  thumbnailUrl: string;
+  trackCount: number;
+  totalDuration: number;
+  tracks: TrackSummary[];
 }
 
 export interface ArtistProfile {
@@ -1893,176 +1911,690 @@ export interface ArtistProfile {
   channelId?: string;
   avatarUrl: string;
   bannerUrl?: string;
+  subtitle?: string;
   bio?: string;
   subscriberCountText?: string;
   monthlyListenersText?: string;
+  songsBrowseId?: string;
+  songsBrowseParams?: string;
   topTracks: TrackSummary[];
   albums: ArtistAlbumSummary[];
   singles: ArtistAlbumSummary[];
+  relatedArtists?: ArtistSearchResult[];
 }
 
 const artistProfileCache = new Map<string, { profile: ArtistProfile; timestamp: number }>();
+const artistTopTracksCache = new Map<string, { tracks: TrackSummary[]; timestamp: number }>();
+const albumDetailCache = new Map<string, { album: AlbumDetail; timestamp: number }>();
 
-function parseArtistBrowseTopTracks(data: any, fallbackArtist: string): TrackSummary[] {
-  const tabs = data?.contents?.singleColumnBrowseResultsRenderer?.tabs;
-  const sections = Array.isArray(tabs)
-    ? tabs[0]?.tabRenderer?.content?.sectionListRenderer?.contents
-    : undefined;
-  if (!Array.isArray(sections)) return [];
+export function clearArtistAndAlbumCaches(): void {
+  artistProfileCache.clear();
+  artistTopTracksCache.clear();
+  albumDetailCache.clear();
+}
 
-  const tracks: TrackSummary[] = [];
-  const seenIds = new Set<string>();
+const YTM_WEB_REMIX_CONTEXT = {
+  client: {
+    clientName: 'WEB_REMIX',
+    clientVersion: '1.20240101.01.00',
+    hl: 'pt',
+    gl: 'BR',
+  },
+};
 
-  for (const section of sections) {
-    const items = section?.musicShelfRenderer?.contents;
-    if (!Array.isArray(items)) continue;
+async function postYtmBrowse(
+  browseId: string,
+  params?: string,
+  timeoutMs: number = 7000
+): Promise<any | null> {
+  const payload: Record<string, unknown> = {
+    context: YTM_WEB_REMIX_CONTEXT,
+    browseId,
+  };
+  if (params) {
+    payload.params = params;
+  }
 
-    for (const entry of items) {
-      const renderer = entry?.musicResponsiveListItemRenderer;
-      if (!renderer) continue;
+  const response = await fetchWithTimeout(
+    'https://music.youtube.com/youtubei/v1/browse?prettyPrint=false',
+    timeoutMs,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': INNERTUBE_USER_AGENT,
+      },
+      body: JSON.stringify(payload),
+    }
+  );
 
-      const videoId =
-        renderer?.playlistItemData?.videoId ||
-        renderer?.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer
-          ?.playNavigationEndpoint?.watchEndpoint?.videoId ||
-        renderer?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]
-          ?.navigationEndpoint?.watchEndpoint?.videoId;
-      if (!videoId || typeof videoId !== 'string' || seenIds.has(videoId)) continue;
+  if (!response.ok) return null;
+  return response.json();
+}
 
-      const title =
-        renderer?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text?.trim();
-      if (!title) continue;
+function pickBestThumbnail(
+  thumbnails: unknown,
+  maxWidth: number = 1920
+): string {
+  if (!Array.isArray(thumbnails) || thumbnails.length === 0) return '';
+  const valid = thumbnails.filter(
+    (t): t is { url: string; width?: number; height?: number } =>
+      Boolean(t && typeof t === 'object' && typeof (t as any).url === 'string' && (t as any).url)
+  );
+  if (valid.length === 0) return '';
 
-      const artistRuns =
-        renderer?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
-      const artistText = Array.isArray(artistRuns)
-        ? artistRuns
-            .map((r: any) => (typeof r?.text === 'string' ? r.text.trim() : ''))
-            .find((t: string) => t && t !== '•' && t !== '·' && t !== '&')
-        : undefined;
+  const withWidth = valid.filter((t) => typeof t.width === 'number' && t.width > 0);
+  if (withWidth.length === 0) {
+    return valid[valid.length - 1].url;
+  }
 
-      let durationText =
-        renderer?.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text?.runs?.[0]?.text?.trim();
-      if (!durationText && Array.isArray(renderer?.flexColumns)) {
-        for (const col of renderer.flexColumns) {
-          const runs = col?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
-          if (!Array.isArray(runs)) continue;
-          const match = runs.find(
-            (r: any) => typeof r?.text === 'string' && /^\d+:\d{2}(?::\d{2})?$/.test(r.text.trim())
-          );
-          if (match) {
-            durationText = match.text.trim();
-            break;
-          }
-        }
+  const underLimit = withWidth.filter((t) => (t.width as number) <= maxWidth);
+  const pool = underLimit.length > 0 ? underLimit : withWidth;
+  pool.sort((a, b) => (a.width as number) - (b.width as number));
+  return pool[pool.length - 1].url;
+}
+
+function joinRunsText(runs: unknown): string {
+  if (!Array.isArray(runs)) return '';
+  return runs
+    .map((r: any) => (typeof r?.text === 'string' ? r.text : ''))
+    .join('')
+    .trim();
+}
+
+function getBrowsePageType(endpoint: any): string | undefined {
+  return endpoint?.browseEndpoint?.browseEndpointContextSupportedConfigs
+    ?.browseEndpointContextMusicConfig?.pageType;
+}
+
+function parseMusicListTrackItem(
+  renderer: any,
+  fallbackArtist: string,
+  options?: { fallbackThumbnail?: string; fallbackAlbum?: string; allowShortTracks?: boolean }
+): TrackSummary | null {
+  if (!renderer) return null;
+
+  const videoId =
+    renderer?.playlistItemData?.videoId ||
+    renderer?.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer
+      ?.playNavigationEndpoint?.watchEndpoint?.videoId ||
+    renderer?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]
+      ?.navigationEndpoint?.watchEndpoint?.videoId;
+  if (!videoId || typeof videoId !== 'string') return null;
+
+  const title =
+    renderer?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text?.trim();
+  if (!title) return null;
+
+  let artistText: string | undefined;
+  let albumText: string | undefined = options?.fallbackAlbum;
+  const flexCols = Array.isArray(renderer?.flexColumns) ? renderer.flexColumns : [];
+
+  for (let i = 1; i < flexCols.length; i++) {
+    const runs = flexCols[i]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
+    if (!Array.isArray(runs)) continue;
+
+    for (const run of runs) {
+      const text = typeof run?.text === 'string' ? run.text.trim() : '';
+      if (!text || text === '•' || text === '·' || text === '&' || text === ',') continue;
+      const browseId = run?.navigationEndpoint?.browseEndpoint?.browseId;
+      const pageType = getBrowsePageType(run?.navigationEndpoint);
+
+      if (
+        !albumText &&
+        (pageType === 'MUSIC_PAGE_TYPE_ALBUM' ||
+          (typeof browseId === 'string' && browseId.startsWith('MPREb_')))
+      ) {
+        albumText = text;
+        continue;
       }
 
-      const formattedDuration = durationText || '3:30';
-      const duration = parseDurationToSeconds(formattedDuration);
-      const thumbs = renderer?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails;
-      const thumbnailUrl =
-        Array.isArray(thumbs) && thumbs.length > 0 && thumbs[thumbs.length - 1]?.url
-          ? thumbs[thumbs.length - 1].url
-          : `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-
-      const candidate: TrackSummary = {
-        id: videoId,
-        title,
-        artist: artistText || fallbackArtist,
-        duration,
-        formattedDuration,
-        thumbnailUrl,
-      };
-
-      if (isValidMusicTrack(candidate)) {
-        seenIds.add(videoId);
-        tracks.push(candidate);
+      if (
+        !artistText &&
+        (pageType === 'MUSIC_PAGE_TYPE_ARTIST' ||
+          (typeof browseId === 'string' && browseId.startsWith('UC')))
+      ) {
+        artistText = text;
       }
     }
   }
 
-  return tracks;
+  if (!artistText) {
+    const secondRuns = flexCols[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
+    if (Array.isArray(secondRuns)) {
+      artistText = secondRuns
+        .map((r: any) => (typeof r?.text === 'string' ? r.text.trim() : ''))
+        .find(
+          (t: string) =>
+            t &&
+            t !== '•' &&
+            t !== '·' &&
+            t !== '&' &&
+            !/^\d+:\d{2}(?::\d{2})?$/.test(t) &&
+            !/^tocou\s/i.test(t) &&
+            !/\b(?:plays?|visualizaç|ouvintes)\b/i.test(t)
+        );
+    }
+  }
+
+  let durationText =
+    renderer?.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text?.runs?.[0]?.text?.trim();
+  if (!durationText) {
+    for (const col of flexCols) {
+      const runs = col?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
+      if (!Array.isArray(runs)) continue;
+      const match = runs.find(
+        (r: any) => typeof r?.text === 'string' && /^\d+:\d{2}(?::\d{2})?$/.test(r.text.trim())
+      );
+      if (match) {
+        durationText = match.text.trim();
+        break;
+      }
+    }
+  }
+
+  const formattedDuration = durationText || '';
+  const duration = formattedDuration ? parseDurationToSeconds(formattedDuration) : 0;
+  const thumbs = renderer?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails;
+  const parsedThumb = pickBestThumbnail(thumbs, 544);
+  const thumbnailUrl =
+    parsedThumb ||
+    options?.fallbackThumbnail ||
+    `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+
+  const candidate: TrackSummary = {
+    id: videoId,
+    title,
+    artist: artistText || fallbackArtist,
+    ...(albumText ? { album: albumText } : {}),
+    duration,
+    formattedDuration,
+    thumbnailUrl,
+  };
+
+  return isValidMusicTrackCore(candidate, Boolean(options?.allowShortTracks))
+    ? candidate
+    : null;
+}
+
+function extractBrowseSections(data: any): any[] {
+  const singleTabs = data?.contents?.singleColumnBrowseResultsRenderer?.tabs;
+  const singleSections = Array.isArray(singleTabs)
+    ? singleTabs[0]?.tabRenderer?.content?.sectionListRenderer?.contents
+    : undefined;
+  if (Array.isArray(singleSections)) return singleSections;
+
+  const twoCol = data?.contents?.twoColumnBrowseResultsRenderer;
+  const secondary = twoCol?.secondaryContents?.sectionListRenderer?.contents;
+  const primary = twoCol?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents;
+  return [
+    ...(Array.isArray(secondary) ? secondary : []),
+    ...(Array.isArray(primary) ? primary : []),
+  ];
+}
+
+function parseArtistBrowsePayload(
+  data: any,
+  fallbackArtist: string
+): {
+  topTracks: TrackSummary[];
+  songsBrowseId?: string;
+  songsBrowseParams?: string;
+  albums: ArtistAlbumSummary[];
+  singles: ArtistAlbumSummary[];
+  relatedArtists: ArtistSearchResult[];
+} {
+  const sections = extractBrowseSections(data);
+  const topTracks: TrackSummary[] = [];
+  const seenTrackIds = new Set<string>();
+  const albums: ArtistAlbumSummary[] = [];
+  const singles: ArtistAlbumSummary[] = [];
+  const seenReleaseIds = new Set<string>();
+  const relatedArtists: ArtistSearchResult[] = [];
+  const seenArtistIds = new Set<string>();
+  let songsBrowseId: string | undefined;
+  let songsBrowseParams: string | undefined;
+
+  for (const section of sections) {
+    const shelf = section?.musicShelfRenderer;
+    if (shelf && Array.isArray(shelf.contents)) {
+      if (!songsBrowseId) {
+        const endpoint =
+          shelf?.bottomEndpoint?.browseEndpoint ||
+          shelf?.title?.runs?.[0]?.navigationEndpoint?.browseEndpoint;
+        if (typeof endpoint?.browseId === 'string' && endpoint.browseId) {
+          songsBrowseId = endpoint.browseId;
+          if (typeof endpoint.params === 'string' && endpoint.params) {
+            songsBrowseParams = endpoint.params;
+          }
+        }
+      }
+
+      for (const entry of shelf.contents) {
+        const track = parseMusicListTrackItem(
+          entry?.musicResponsiveListItemRenderer,
+          fallbackArtist
+        );
+        if (track && !seenTrackIds.has(track.id)) {
+          seenTrackIds.add(track.id);
+          topTracks.push(track);
+        }
+      }
+      continue;
+    }
+
+    const carousel = section?.musicCarouselShelfRenderer;
+    if (!carousel || !Array.isArray(carousel.contents)) continue;
+
+    const shelfTitle = joinRunsText(
+      carousel?.header?.musicCarouselShelfBasicHeaderRenderer?.title?.runs
+    );
+    const isAlbumsShelf = /(?:á|a)lbuns|\balbums\b/i.test(shelfTitle);
+    const isSinglesShelf = /\bsingles?\b|\beps?\b/i.test(shelfTitle);
+    const isRelatedArtistsShelf =
+      /f[ãa]s\s+tamb[ée]m|fans\s+might\s+also\s+like|artistas?\s+(?:similares|relacionados)|related\s+artists/i.test(
+        shelfTitle
+      );
+
+    if (!isAlbumsShelf && !isSinglesShelf && !isRelatedArtistsShelf) {
+      continue;
+    }
+
+    for (const entry of carousel.contents) {
+      const card = entry?.musicTwoRowItemRenderer;
+      if (!card) continue;
+
+      const browseId = card?.navigationEndpoint?.browseEndpoint?.browseId;
+      const pageType = getBrowsePageType(card?.navigationEndpoint);
+      const title = joinRunsText(card?.title?.runs);
+      if (!browseId || typeof browseId !== 'string' || !title) continue;
+
+      const subtitleText = joinRunsText(card?.subtitle?.runs);
+      const thumbs = card?.thumbnailRenderer?.musicThumbnailRenderer?.thumbnail?.thumbnails;
+      const thumbnailUrl = pickBestThumbnail(thumbs, 544);
+
+      if (isRelatedArtistsShelf) {
+        if (
+          (pageType === 'MUSIC_PAGE_TYPE_ARTIST' || browseId.startsWith('UC')) &&
+          !seenArtistIds.has(browseId)
+        ) {
+          seenArtistIds.add(browseId);
+          relatedArtists.push({
+            id: browseId,
+            name: title,
+            subtitle: subtitleText || undefined,
+            thumbnailUrl,
+          });
+        }
+        continue;
+      }
+
+      const isAlbumItem =
+        pageType === 'MUSIC_PAGE_TYPE_ALBUM' || browseId.startsWith('MPREb_');
+      if (!isAlbumItem || seenReleaseIds.has(browseId)) continue;
+      seenReleaseIds.add(browseId);
+
+      const yearMatch = subtitleText.match(/\b(19|20)\d{2}\b/);
+      const year = yearMatch ? yearMatch[0] : undefined;
+      const isEp = /\bep\b/i.test(subtitleText);
+      const isSingle = isSinglesShelf || /\bsingle\b/i.test(subtitleText);
+      const type: 'album' | 'single' | 'ep' = isEp ? 'ep' : isSingle ? 'single' : 'album';
+
+      const release: ArtistAlbumSummary = {
+        browseId,
+        title,
+        year,
+        subtitle: subtitleText || undefined,
+        thumbnailUrl,
+        type,
+      };
+
+      if (isSinglesShelf) {
+        singles.push(release);
+      } else {
+        albums.push(release);
+      }
+    }
+  }
+
+  return {
+    topTracks,
+    songsBrowseId,
+    songsBrowseParams,
+    albums,
+    singles,
+    relatedArtists,
+  };
 }
 
 /**
- * Obtém o perfil completo do artista com avatar real, biografia, Top Tracks e discografia.
+ * Carrega a lista completa de faixas populares de um artista ("Ver tudo") via /browse.
+ */
+export async function getArtistTopTracks(
+  browseId: string,
+  params?: string,
+  fallbackArtist: string = 'Artista',
+  timeoutMs: number = 4000
+): Promise<TrackSummary[]> {
+  if (!browseId) return [];
+  const cacheKey = `${browseId}::${params || ''}`;
+  const cached = artistTopTracksCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    return cached.tracks;
+  }
+
+  try {
+    const data = await postYtmBrowse(browseId, params, timeoutMs);
+    if (!data) return [];
+
+    const sections = extractBrowseSections(data);
+    const tracks: TrackSummary[] = [];
+    const seenIds = new Set<string>();
+
+    for (const section of sections) {
+      const items =
+        section?.musicPlaylistShelfRenderer?.contents ||
+        section?.musicShelfRenderer?.contents;
+      if (!Array.isArray(items)) continue;
+
+      for (const entry of items) {
+        const track = parseMusicListTrackItem(
+          entry?.musicResponsiveListItemRenderer,
+          fallbackArtist
+        );
+        if (track && !seenIds.has(track.id)) {
+          seenIds.add(track.id);
+          tracks.push(track);
+          if (tracks.length >= 50) break;
+        }
+      }
+      if (tracks.length >= 50) break;
+    }
+
+    const capped = tracks.slice(0, 50);
+    if (capped.length > 0) {
+      artistTopTracksCache.set(cacheKey, { tracks: capped, timestamp: Date.now() });
+    }
+    return capped;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Obtém o detalhe real de um álbum, single ou EP (`MPREb_...`) via /youtubei/v1/browse.
+ */
+export async function getAlbumDetail(
+  browseId: string,
+  fallbackMeta?: Partial<ArtistAlbumSummary> & { artist?: string }
+): Promise<AlbumDetail> {
+  const cleanBrowseId = (browseId || '').trim();
+  if (cleanBrowseId) {
+    const cached = albumDetailCache.get(cleanBrowseId);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+      return cached.album;
+    }
+  }
+
+  let title = fallbackMeta?.title || 'Álbum';
+  let artist = fallbackMeta?.artist || 'Artista';
+  let year = fallbackMeta?.year;
+  let type: 'album' | 'single' | 'ep' = fallbackMeta?.type || 'album';
+  let thumbnailUrl = fallbackMeta?.thumbnailUrl || '';
+  let tracks: TrackSummary[] = [];
+
+  if (cleanBrowseId) {
+    try {
+      const data = await postYtmBrowse(cleanBrowseId, undefined, 7000);
+      if (data) {
+        const twoCol = data?.contents?.twoColumnBrowseResultsRenderer;
+        const primarySections =
+          twoCol?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+        const respHeader = primarySections.find(
+          (s: any) => s?.musicResponsiveHeaderRenderer
+        )?.musicResponsiveHeaderRenderer;
+        const header =
+          respHeader ||
+          data?.header?.musicDetailHeaderRenderer ||
+          data?.header?.musicResponsiveHeaderRenderer;
+
+        if (header) {
+          const parsedTitle = joinRunsText(header?.title?.runs);
+          if (parsedTitle) title = parsedTitle;
+
+          const parsedArtist = joinRunsText(header?.straplineTextOne?.runs);
+          if (parsedArtist) artist = parsedArtist;
+
+          const subtitle = joinRunsText(header?.subtitle?.runs);
+          const yearMatch = subtitle.match(/\b(19|20)\d{2}\b/);
+          if (yearMatch) year = yearMatch[0];
+          if (/\bep\b/i.test(subtitle)) type = 'ep';
+          else if (/\bsingle\b/i.test(subtitle)) type = 'single';
+          else if (/(?:á|a)lbum|\balbum\b/i.test(subtitle)) type = 'album';
+
+          const headerThumb = pickBestThumbnail(
+            header?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails ||
+              header?.thumbnail?.croppedSquareThumbnailRenderer?.thumbnail?.thumbnails,
+            544
+          );
+          if (headerThumb) thumbnailUrl = headerThumb;
+        }
+
+        const sections = extractBrowseSections(data);
+        const seenIds = new Set<string>();
+        for (const section of sections) {
+          const items =
+            section?.musicShelfRenderer?.contents ||
+            section?.musicPlaylistShelfRenderer?.contents;
+          if (!Array.isArray(items)) continue;
+
+          for (const entry of items) {
+            const track = parseMusicListTrackItem(
+              entry?.musicResponsiveListItemRenderer,
+              artist,
+              { fallbackThumbnail: thumbnailUrl, fallbackAlbum: title, allowShortTracks: true }
+            );
+            if (track && !seenIds.has(track.id)) {
+              seenIds.add(track.id);
+              tracks.push(track);
+            }
+          }
+        }
+      }
+    } catch {
+      // Continua para fallback contextual se necessário
+    }
+  }
+
+  if (tracks.length === 0 && fallbackMeta?.title) {
+    try {
+      const searchFn =
+        typeof module?.exports?.searchTracks === 'function'
+          ? module.exports.searchTracks
+          : searchTracks;
+      const query = fallbackMeta.artist
+        ? `${fallbackMeta.artist} ${fallbackMeta.title}`
+        : fallbackMeta.title;
+      const found = await searchFn(query);
+      tracks = (found || []).filter(isValidMusicTrack).slice(0, 12);
+    } catch {
+      tracks = [];
+    }
+  }
+
+  if (!thumbnailUrl && tracks.length > 0) {
+    thumbnailUrl = tracks[0].thumbnailUrl;
+  }
+
+  const totalDuration = tracks.reduce((sum, t) => sum + (t.duration || 0), 0);
+  const album: AlbumDetail = {
+    browseId: cleanBrowseId,
+    title,
+    artist,
+    year,
+    type,
+    thumbnailUrl,
+    trackCount: tracks.length,
+    totalDuration,
+    tracks,
+  };
+
+  if (cleanBrowseId && tracks.length > 0) {
+    albumDetailCache.set(cleanBrowseId, { album, timestamp: Date.now() });
+  }
+  return album;
+}
+
+/**
+ * Obtém o perfil completo do artista com banner/avatar reais, biografia, Top Tracks,
+ * Álbuns, Singles & EPs e artistas semelhantes via /youtubei/v1/browse.
  */
 export async function getArtistProfile(
   artistName: string,
   channelId?: string
 ): Promise<ArtistProfile> {
   const cleanName = (artistName || 'Artista').split(/,|feat\.|ft\.|&/i)[0].trim() || 'Artista';
-  const cacheKey = `${cleanName.toLowerCase()}::${channelId || ''}`;
-  const cached = artistProfileCache.get(cacheKey);
+  const initialCacheKey = `${cleanName.toLowerCase()}::${channelId || ''}`;
+  const cached = artistProfileCache.get(initialCacheKey);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
     return cached.profile;
   }
 
+  let resolvedChannelId = channelId?.trim() || undefined;
+  let searchArtistMeta: ArtistSearchResult | undefined;
+  let hadNetworkFailure = false;
+
+  // 1. Se channelId não foi informado (ex.: vindo do NowPlayingModal), resolve via searchArtists
+  if (!resolvedChannelId && cleanName && cleanName.toLowerCase() !== 'artista') {
+    try {
+      const artistSearchFn =
+        typeof module?.exports?.searchArtists === 'function'
+          ? module.exports.searchArtists
+          : searchArtists;
+      const matches = await artistSearchFn(cleanName, 3);
+      if (Array.isArray(matches) && matches.length > 0) {
+        const targetNorm = normalizeArtistForMatch(cleanName);
+        searchArtistMeta =
+          matches.find((a) => normalizeArtistForMatch(a.name) === targetNorm) ||
+          matches.find((a) => artistMatchesInferred(a.name, cleanName)) ||
+          matches[0];
+        if (searchArtistMeta?.id) {
+          resolvedChannelId = searchArtistMeta.id;
+        }
+      }
+    } catch {
+      hadNetworkFailure = true;
+    }
+  }
+
+  if (resolvedChannelId && resolvedChannelId !== channelId) {
+    const resolvedCacheKey = `${cleanName.toLowerCase()}::${resolvedChannelId}`;
+    const resolvedCached = artistProfileCache.get(resolvedCacheKey);
+    if (resolvedCached && Date.now() - resolvedCached.timestamp < CACHE_TTL_MS) {
+      artistProfileCache.set(initialCacheKey, resolvedCached);
+      return resolvedCached.profile;
+    }
+  }
+
+  let resolvedName = cleanName;
   let topTracks: TrackSummary[] = [];
   let browseTracks: TrackSummary[] = [];
-  let avatarUrl = '';
+  let avatarUrl = searchArtistMeta?.thumbnailUrl || '';
   let bannerUrl: string | undefined;
   let bio: string | undefined;
   let subscriberCountText: string | undefined;
-  const albums: ArtistAlbumSummary[] = [];
-  const singles: ArtistAlbumSummary[] = [];
+  let monthlyListenersText: string | undefined;
+  let songsBrowseId: string | undefined;
+  let songsBrowseParams: string | undefined;
+  let albums: ArtistAlbumSummary[] = [];
+  let singles: ArtistAlbumSummary[] = [];
+  let relatedArtists: ArtistSearchResult[] = [];
 
-  // 1. Se tiver channelId, tenta buscar no endpoint /browse do YouTube Music
-  if (channelId) {
+  // 2. Busca o perfil real no endpoint /browse do YouTube Music
+  if (resolvedChannelId) {
     try {
-      const browseRes = await fetchWithTimeout(
-        'https://music.youtube.com/youtubei/v1/browse?prettyPrint=false',
-        7000,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'User-Agent': INNERTUBE_USER_AGENT,
-          },
-          body: JSON.stringify({
-            context: {
-              client: {
-                clientName: 'WEB_REMIX',
-                clientVersion: '1.20240101.01.00',
-                hl: 'pt',
-                gl: 'BR',
-              },
-            },
-            browseId: channelId,
-          }),
-        }
-      );
-
-      if (browseRes.ok) {
-        const bData = (await browseRes.json()) as any;
+      const bData = await postYtmBrowse(resolvedChannelId, undefined, 7000);
+      if (bData) {
         const header =
           bData?.header?.musicImmersiveHeaderRenderer ||
           bData?.header?.musicVisualHeaderRenderer ||
           bData?.header?.musicHeaderRenderer;
-        const headerThumbs = header?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails;
-        if (Array.isArray(headerThumbs) && headerThumbs.length > 0) {
-          avatarUrl = headerThumbs[headerThumbs.length - 1].url;
-          bannerUrl = headerThumbs[headerThumbs.length - 1].url;
+
+        const headerTitle = joinRunsText(header?.title?.runs);
+        if (headerTitle) {
+          resolvedName = headerTitle;
         }
-        bio = header?.description?.runs?.[0]?.text;
-        subscriberCountText = header?.subscriptionButton?.subscribeButtonRenderer?.subscriberCountText?.runs?.[0]?.text;
-        browseTracks = parseArtistBrowseTopTracks(bData, cleanName);
+
+        const headerThumbs = header?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails;
+        const bestBanner = pickBestThumbnail(headerThumbs, 1920);
+        if (bestBanner) {
+          bannerUrl = bestBanner;
+          avatarUrl = bestBanner;
+        }
+
+        const rawBio = joinRunsText(header?.description?.runs);
+        if (rawBio) {
+          bio = rawBio;
+        }
+
+        const subBtn = header?.subscriptionButton?.subscribeButtonRenderer;
+        subscriberCountText =
+          joinRunsText(subBtn?.longSubscriberCountText?.runs) ||
+          joinRunsText(subBtn?.subscriberCountText?.runs) ||
+          undefined;
+        monthlyListenersText =
+          joinRunsText(header?.monthlyListenerCount?.runs) || undefined;
+
+        const parsed = parseArtistBrowsePayload(bData, resolvedName);
+        browseTracks = parsed.topTracks;
+        songsBrowseId = parsed.songsBrowseId;
+        songsBrowseParams = parsed.songsBrowseParams;
+        albums = parsed.albums;
+        singles = parsed.singles;
+        relatedArtists = parsed.relatedArtists;
+      } else {
+        hadNetworkFailure = true;
       }
     } catch {
-      // Continua para o fallback de busca contextual
+      hadNetworkFailure = true;
     }
   }
 
-  // 2. Prioriza as faixas reais da prateleira Top músicas do /browse antes do fallback searchTracks
+  // 3. Se houver playlist completa de populares (songsBrowseId), enriquece faixas com durações reais e lista expandida
+  if (songsBrowseId && browseTracks.length > 0) {
+    const expandedTracks = await getArtistTopTracks(
+      songsBrowseId,
+      songsBrowseParams,
+      resolvedName,
+      4000
+    ).catch(() => [] as TrackSummary[]);
+    if (expandedTracks.length > 0) {
+      browseTracks = expandedTracks;
+    }
+  }
+
+  // 4. Prioriza as faixas reais da prateleira Top músicas do /browse antes do fallback searchTracks
   if (browseTracks.length > 0) {
     topTracks = browseTracks;
   } else {
     try {
-      const rawTracks = await searchTracks(cleanName);
-      topTracks = rawTracks.filter(isValidMusicTrack);
+      const searchFn =
+        typeof module?.exports?.searchTracks === 'function'
+          ? module.exports.searchTracks
+          : searchTracks;
+      const rawTracks = await searchFn(resolvedName);
+      topTracks = (rawTracks || []).filter(isValidMusicTrack);
     } catch {
+      hadNetworkFailure = true;
       topTracks = [];
     }
+  }
+
+  const hasProfileData = Boolean(
+    topTracks.length > 0 || albums.length > 0 || singles.length > 0 || bio
+  );
+  if (!hasProfileData && hadNetworkFailure) {
+    throw new Error('Não foi possível carregar os dados do artista.');
   }
 
   if (!avatarUrl && topTracks.length > 0) {
@@ -2072,50 +2604,41 @@ export async function getArtistProfile(
     bannerUrl = avatarUrl;
   }
 
-  // 3. Constrói discografia (Álbuns e Singles) a partir das faixas principais caso o browse não retorne prateleiras dedicadas
-  if (albums.length === 0 && topTracks.length > 0) {
-    const seenTitles = new Set<string>();
-    for (let i = 0; i < Math.min(topTracks.length, 6); i++) {
-      const t = topTracks[i];
-      if (seenTitles.has(t.title)) continue;
-      seenTitles.add(t.title);
-      if (i % 2 === 0) {
-        albums.push({
-          browseId: `MPREb_${t.id}`,
-          title: t.title,
-          year: 'Álbum',
-          thumbnailUrl: t.thumbnailUrl,
-          type: 'album',
-        });
-      } else {
-        singles.push({
-          browseId: `MPREb_${t.id}`,
-          title: t.title,
-          year: 'Single',
-          thumbnailUrl: t.thumbnailUrl,
-          type: 'single',
-        });
-      }
-    }
-  }
+  const statDetail =
+    monthlyListenersText ||
+    (searchArtistMeta?.subtitle &&
+    searchArtistMeta.subtitle.toLowerCase() !== 'artista'
+      ? searchArtistMeta.subtitle.replace(/^artista\s*[•·-]\s*/i, '').trim()
+      : undefined) ||
+    subscriberCountText;
+
+  const subtitle = statDetail ? `Artista • ${statDetail}` : 'Artista';
 
   const profile: ArtistProfile = {
-    name: cleanName,
-    channelId,
+    name: resolvedName,
+    channelId: resolvedChannelId,
     avatarUrl,
     bannerUrl,
-    bio:
-      bio ||
-      `Explore a discografia, principais lançamentos e mix contínuo de ${cleanName} no Sonary.`,
-    subscriberCountText: subscriberCountText || 'Artista Verificado',
-    monthlyListenersText:
-      topTracks.length > 0 ? `${topTracks.length} faixas em destaque` : 'Artista no Sonary',
-    topTracks: topTracks.slice(0, 10),
+    subtitle,
+    ...(bio ? { bio } : {}),
+    ...(subscriberCountText ? { subscriberCountText } : {}),
+    monthlyListenersText: monthlyListenersText || subscriberCountText || 'Artista',
+    ...(songsBrowseId ? { songsBrowseId } : {}),
+    ...(songsBrowseParams ? { songsBrowseParams } : {}),
+    topTracks: topTracks.slice(0, 50),
     albums,
     singles,
+    ...(relatedArtists.length > 0 ? { relatedArtists } : {}),
   };
 
-  artistProfileCache.set(cacheKey, { profile, timestamp: Date.now() });
+  // Nunca grava perfis vazios no cache para não travar o usuário sem dados após falha transitória
+  if (hasProfileData) {
+    const entry = { profile, timestamp: Date.now() };
+    artistProfileCache.set(initialCacheKey, entry);
+    if (resolvedChannelId) {
+      artistProfileCache.set(`${cleanName.toLowerCase()}::${resolvedChannelId}`, entry);
+    }
+  }
   return profile;
 }
 

@@ -1113,11 +1113,15 @@ test('Flow 2: Search displays Artistas above QuickPicks, opens ArtistProfileModa
       channelId: 'UC_cbjr',
     });
 
-    // Fechar o modal mantém a busca intacta
+    // Fechar o perfil inline mantém a busca intacta e preserva a barra de navegação
+    assert.ok(
+      findButtonByText(root, 'Buscar'),
+      'NavigationTabBar must remain visible while ArtistProfileModal is open inline'
+    );
     const backBtn = root.find(
       (n) =>
         n.type === 'TouchableOpacity' &&
-        n.props.accessibilityLabel === 'Voltar para o player'
+        n.props.accessibilityLabel === 'Voltar'
     );
     await actAsync(async () => {
       backBtn.props.onPress();
