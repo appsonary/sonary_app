@@ -3644,7 +3644,7 @@ export default function NowPlayingModal({
                           accessibilityRole="button"
                           accessibilityLabel="Aleatório"
                         >
-                          <Shuffle color={isShuffleActive ? '#1DB954' : '#FFFFFF'} size={20} />
+                          <Shuffle color={isShuffleActive ? theme.colors.brandPrimary : '#FFFFFF'} size={20} />
                           <Text
                             style={[
                               styles.queueBottomActionText,
@@ -3662,10 +3662,10 @@ export default function NowPlayingModal({
                           accessibilityLabel="Repetir"
                         >
                           {repeatMode === RepeatMode.Track ? (
-                            <Repeat1 color="#1DB954" size={20} />
+                            <Repeat1 color={theme.colors.brandPrimary} size={20} />
                           ) : (
                             <Repeat
-                              color={repeatMode !== RepeatMode.Off ? '#1DB954' : '#FFFFFF'}
+                              color={repeatMode !== RepeatMode.Off ? theme.colors.brandPrimary : '#FFFFFF'}
                               size={20}
                             />
                           )}
@@ -4474,7 +4474,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   queueBottomActionTextActive: {
-    color: '#1DB954',
+    color: theme.colors.brandPrimary,
   },
   queueActionsRow: {
     flexDirection: 'row',

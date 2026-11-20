@@ -13,14 +13,12 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import {
   ArrowDownToLine,
   ArrowLeft,
   ArrowRight,
   ArrowUpRight,
   BarChart2,
-  ChevronRight,
   Code2,
   Heart,
   History,
@@ -33,7 +31,7 @@ import type {
   RemoteReleaseInfo,
   UpdateDownloadState,
 } from '../services/updater';
-import { getEaseOutCubic, theme } from '../theme';
+import { getEaseOutCubic } from '../theme';
 import { isDevMenuEnabled } from './DevMenuModal';
 
 const HEADER_LOGO = require('../assets/brand-logo-header.png');
@@ -295,7 +293,7 @@ export const SideDrawerMenu: React.FC<SideDrawerMenuProps> = ({
     {
       id: 'downloads',
       label: 'Fila de downloads',
-      icon: <ArrowDownToLine color="#EAEAEF" size={20} strokeWidth={1.7} />,
+      icon: <ArrowDownToLine color="#D4D4D8" size={20} strokeWidth={1.6} />,
       onPress: () => dismissDrawer(onOpenDownloadQueue),
       rightAccessory:
         downloadQueueCount > 0 ? (
@@ -303,27 +301,27 @@ export const SideDrawerMenu: React.FC<SideDrawerMenuProps> = ({
             <Text style={styles.countPillText}>{downloadQueueCount}</Text>
           </View>
         ) : (
-          <View style={styles.emptyPill} testID="drawer-downloads-empty-pill">
-            <Text style={styles.emptyPillText}>Vazia</Text>
-          </View>
+          <Text style={styles.emptyStatusText} testID="drawer-downloads-empty-pill">
+            Vazia
+          </Text>
         ),
     },
     {
       id: 'recents',
       label: 'Histórico recente',
-      icon: <History color="#EAEAEF" size={20} strokeWidth={1.7} />,
+      icon: <History color="#D4D4D8" size={20} strokeWidth={1.6} />,
       onPress: () => dismissDrawer(onOpenRecentHistory),
     },
     {
       id: 'stats',
       label: 'Estatísticas',
-      icon: <BarChart2 color="#EAEAEF" size={20} strokeWidth={1.7} />,
+      icon: <BarChart2 color="#D4D4D8" size={20} strokeWidth={1.6} />,
       onPress: () => dismissDrawer(onOpenStats),
     },
     {
       id: 'settings',
       label: 'Configurações',
-      icon: <Settings color="#EAEAEF" size={20} strokeWidth={1.7} />,
+      icon: <Settings color="#D4D4D8" size={20} strokeWidth={1.6} />,
       onPress: () => dismissDrawer(onOpenSettings),
     },
   ];
@@ -354,17 +352,6 @@ export const SideDrawerMenu: React.FC<SideDrawerMenuProps> = ({
         testID="side-drawer-panel"
         {...panResponder.panHandlers}
       >
-        <LinearGradient
-          colors={[
-            'rgba(195, 18, 38, 0.50)',
-            'rgba(115, 10, 24, 0.22)',
-            'rgba(3, 3, 3, 0)',
-          ]}
-          locations={[0, 0.45, 1]}
-          style={styles.topAmbientGlow}
-          pointerEvents="none"
-        />
-
         <View style={styles.drawerInner}>
           <ScrollView
             style={styles.menuScroll}
@@ -372,17 +359,17 @@ export const SideDrawerMenu: React.FC<SideDrawerMenuProps> = ({
             showsVerticalScrollIndicator={false}
             bounces={false}
           >
-            {/* Cabeçalho: botão voltar circular à esquerda + logo original Sonary à direita */}
+            {/* Cabeçalho: seta voltar minimalista à esquerda + logo original Sonary à direita */}
             <View style={styles.header} testID="drawer-header">
               <TouchableOpacity
                 style={styles.backButton}
                 onPress={() => dismissDrawer()}
-                activeOpacity={0.75}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                activeOpacity={0.7}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 accessibilityRole="button"
                 accessibilityLabel="Voltar"
               >
-                <ArrowLeft color="#FFFFFF" size={18} strokeWidth={2} />
+                <ArrowLeft color="#E4E4E7" size={22} strokeWidth={1.8} />
               </TouchableOpacity>
               <View style={styles.headerBrandRight} testID="drawer-header-brand">
                 <Image
@@ -395,7 +382,7 @@ export const SideDrawerMenu: React.FC<SideDrawerMenuProps> = ({
               </View>
             </View>
 
-            {/* Card em destaque (primeira opção): Apoiar o Sonary */}
+            {/* Card neutro em destaque: Apoiar o Sonary */}
             <TouchableOpacity
               style={styles.supportCard}
               onPress={() => dismissDrawer(onOpenSupport)}
@@ -403,83 +390,72 @@ export const SideDrawerMenu: React.FC<SideDrawerMenuProps> = ({
               accessibilityRole="button"
               accessibilityLabel="Apoiar o Sonary"
             >
-              <LinearGradient
-                colors={[
-                  'rgba(155, 18, 36, 0.26)',
-                  'rgba(65, 10, 18, 0.14)',
-                  'rgba(12, 6, 8, 0.30)',
-                ]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.supportCardGradient}
-              >
-                <View style={styles.supportIconWrap}>
-                  <Heart color="#EF233C" size={22} strokeWidth={1.9} />
-                </View>
-                <View style={styles.supportTextCol}>
-                  <Text style={styles.supportTitle} numberOfLines={1}>
-                    Apoiar o Sonary
-                  </Text>
-                  <Text style={styles.supportSubtitle} numberOfLines={2}>
-                    Ajude a manter o projeto vivo
-                  </Text>
-                </View>
-                <ArrowUpRight color="#A1A1AA" size={18} strokeWidth={1.8} />
-              </LinearGradient>
+              <View style={styles.supportIconWrap}>
+                <Heart color="#E53935" size={22} strokeWidth={1.8} />
+              </View>
+              <View style={styles.supportTextCol}>
+                <Text style={styles.supportTitle} numberOfLines={1}>
+                  Apoiar o Sonary
+                </Text>
+                <Text style={styles.supportSubtitle} numberOfLines={2}>
+                  Ajude a manter o projeto vivo
+                </Text>
+              </View>
+              <ArrowUpRight color="#8E8E93" size={18} strokeWidth={1.7} />
             </TouchableOpacity>
 
-            {/* Card agrupado com as opções principais */}
-            <View style={styles.menuGroupCard} testID="drawer-menu-group">
-              {groupedItems.map((item, idx) => (
-                <React.Fragment key={item.id}>
-                  {idx > 0 ? <View style={styles.cardDivider} /> : null}
-                  <TouchableOpacity
-                    style={styles.menuItem}
-                    onPress={item.onPress}
-                    activeOpacity={0.7}
-                    accessibilityRole="button"
-                    accessibilityLabel={item.label}
-                  >
-                    <View style={styles.menuItemLeft}>
-                      {item.icon}
-                      <Text style={styles.menuItemLabel} numberOfLines={1}>
-                        {item.label}
-                      </Text>
-                    </View>
-                    <View style={styles.menuItemRight}>
-                      {item.rightAccessory}
-                      <ChevronRight color="#71717A" size={17} strokeWidth={1.8} />
-                    </View>
-                  </TouchableOpacity>
-                </React.Fragment>
+            {/* Lista limpa com as opções principais */}
+            <View style={styles.menuGroup} testID="drawer-menu-group">
+              {groupedItems.map((item) => (
+                <TouchableOpacity
+                  key={item.id}
+                  style={styles.menuItem}
+                  onPress={item.onPress}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel={item.label}
+                >
+                  <View style={styles.menuItemLeft}>
+                    {item.icon}
+                    <Text style={styles.menuItemLabel} numberOfLines={1}>
+                      {item.label}
+                    </Text>
+                  </View>
+                  {item.rightAccessory ? (
+                    <View style={styles.menuItemRight}>{item.rightAccessory}</View>
+                  ) : null}
+                </TouchableOpacity>
               ))}
             </View>
 
-            {/* Modo Desenvolvedor discreto fora do card principal (apenas em dev) */}
+            {/* Separador sutil + Modo Desenvolvedor discreto (apenas em dev) */}
             {showDevItem && onOpenDevMenu ? (
-              <TouchableOpacity
-                style={styles.devItem}
-                onPress={() => dismissDrawer(onOpenDevMenu)}
-                activeOpacity={0.7}
-                accessibilityRole="button"
-                accessibilityLabel="Modo Desenvolvedor"
-              >
-                <Code2 color="#71717A" size={19} strokeWidth={1.7} />
-                <Text style={styles.devItemLabel} numberOfLines={1}>
-                  Modo Desenvolvedor
-                </Text>
-              </TouchableOpacity>
+              <>
+                <View style={styles.sectionDivider} testID="drawer-dev-divider" />
+                <TouchableOpacity
+                  style={styles.devItem}
+                  onPress={() => dismissDrawer(onOpenDevMenu)}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel="Modo Desenvolvedor"
+                >
+                  <Code2 color="#71717A" size={20} strokeWidth={1.6} />
+                  <Text style={styles.devItemLabel} numberOfLines={1}>
+                    Modo Desenvolvedor
+                  </Text>
+                </TouchableOpacity>
+              </>
             ) : null}
           </ScrollView>
 
-          {/* Card de versão no rodapé */}
-          <View style={styles.footerCard} testID="drawer-footer-card">
+          {/* Rodapé minimalista com versão e status de atualização */}
+          <View style={styles.footer} testID="drawer-footer-card">
             <View style={styles.versionBlock}>
               <View style={styles.versionTitleRow}>
                 <Text style={styles.versionBrand}>Sonary Pro</Text>
-                <View style={styles.versionPill} testID="drawer-version-pill">
-                  <Text style={styles.versionPillText}>{`v${versionName}`}</Text>
-                </View>
+                <Text style={styles.versionText} testID="drawer-version-pill">
+                  {`v${versionName}`}
+                </Text>
               </View>
               <View style={styles.versionStatusRow}>
                 <View
@@ -533,7 +509,7 @@ export const SideDrawerMenu: React.FC<SideDrawerMenuProps> = ({
                 accessibilityRole="button"
                 accessibilityLabel="Atualizações do aplicativo"
               >
-                <RefreshCw color="#71717A" size={18} strokeWidth={1.7} />
+                <RefreshCw color="#8E8E93" size={19} strokeWidth={1.7} />
               </TouchableOpacity>
             )}
           </View>
@@ -574,21 +550,14 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     zIndex: 30,
-    backgroundColor: theme.colors.background,
+    backgroundColor: '#0B0B0C',
     borderLeftWidth: 1,
     borderLeftColor: 'rgba(255, 255, 255, 0.08)',
     overflow: 'hidden',
   },
-  topAmbientGlow: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 230,
-  },
   drawerInner: {
     flex: 1,
-    paddingTop: Platform.OS === 'android' ? ANDROID_STATUS_BAR_HEIGHT + 10 : 10,
+    paddingTop: Platform.OS === 'android' ? ANDROID_STATUS_BAR_HEIGHT + 12 : 12,
     paddingBottom: 24,
     paddingHorizontal: 20,
   },
@@ -599,7 +568,7 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
   },
   header: {
-    minHeight: 38,
+    minHeight: 40,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -608,11 +577,7 @@ const styles = StyleSheet.create({
   backButton: {
     width: 36,
     height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.09)',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'center',
   },
   headerBrandRight: {
@@ -620,61 +585,50 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   logoImage: {
-    height: 36,
-    width: Math.round(36 * (1222 / 420)),
+    height: 34,
+    width: Math.round(34 * (1222 / 420)),
     aspectRatio: 1222 / 420,
   },
   supportCard: {
-    borderRadius: 16,
+    backgroundColor: '#171719',
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: 'rgba(239, 35, 60, 0.35)',
-    overflow: 'hidden',
-    marginBottom: 16,
-  },
-  supportCardGradient: {
+    borderColor: 'rgba(255, 255, 255, 0.06)',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 15,
+    marginBottom: 20,
   },
   supportIconWrap: {
-    width: 32,
-    height: 32,
+    width: 28,
+    height: 28,
     alignItems: 'center',
     justifyContent: 'center',
   },
   supportTextCol: {
     flex: 1,
-    marginLeft: 12,
+    marginLeft: 14,
     marginRight: 8,
   },
   supportTitle: {
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: '600',
     color: '#FFFFFF',
     letterSpacing: -0.2,
   },
   supportSubtitle: {
     fontSize: 12.5,
     lineHeight: 17,
-    color: '#9A9AA0',
+    color: '#8E8E93',
     marginTop: 2,
   },
-  menuGroupCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.035)',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.10)',
-    overflow: 'hidden',
-  },
-  cardDivider: {
-    height: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-    marginHorizontal: 16,
+  menuGroup: {
+    paddingHorizontal: 4,
   },
   menuItem: {
-    height: 52,
-    paddingHorizontal: 16,
+    height: 50,
+    paddingHorizontal: 4,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -683,18 +637,18 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
+    gap: 16,
   },
   menuItemRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    marginLeft: 12,
   },
   menuItemLabel: {
-    fontSize: 15,
-    fontWeight: '500',
+    fontSize: 15.5,
+    fontWeight: '400',
     color: '#F4F4F5',
-    letterSpacing: -0.2,
+    letterSpacing: -0.15,
   },
   countPill: {
     minWidth: 24,
@@ -710,40 +664,35 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#FFFFFF',
   },
-  emptyPill: {
-    height: 22,
-    borderRadius: 11,
-    paddingHorizontal: 9,
-    backgroundColor: 'rgba(255, 255, 255, 0.07)',
-    alignItems: 'center',
-    justifyContent: 'center',
+  emptyStatusText: {
+    fontSize: 13,
+    fontWeight: '400',
+    color: '#71717A',
   },
-  emptyPillText: {
-    fontSize: 11.5,
-    fontWeight: '500',
-    color: '#8E8E93',
+  sectionDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    marginTop: 10,
+    marginBottom: 8,
   },
   devItem: {
-    marginTop: 12,
-    height: 46,
-    paddingHorizontal: 16,
+    height: 48,
+    paddingHorizontal: 8,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
+    gap: 16,
   },
   devItemLabel: {
-    fontSize: 14.5,
-    fontWeight: '500',
-    color: '#8E8E93',
+    fontSize: 15,
+    fontWeight: '400',
+    color: '#71717A',
     letterSpacing: -0.1,
   },
-  footerCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.035)',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.10)',
-    paddingHorizontal: 16,
-    paddingVertical: 13,
+  footer: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.08)',
+    paddingTop: 16,
+    paddingHorizontal: 4,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -755,26 +704,19 @@ const styles = StyleSheet.create({
   },
   versionTitleRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'baseline',
     gap: 8,
   },
   versionBrand: {
-    fontSize: 13,
+    fontSize: 13.5,
     fontWeight: '600',
-    color: '#E4E4E7',
+    color: '#F4F4F5',
     letterSpacing: -0.1,
   },
-  versionPill: {
-    backgroundColor: 'rgba(255, 255, 255, 0.09)',
-    borderRadius: 6,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-  },
-  versionPillText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#A1A1AA',
-    letterSpacing: 0.1,
+  versionText: {
+    fontSize: 13,
+    fontWeight: '400',
+    color: '#71717A',
   },
   versionStatusRow: {
     flexDirection: 'row',
@@ -791,9 +733,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#EF233C',
   },
   versionStatusText: {
-    fontSize: 12,
+    fontSize: 12.5,
     fontWeight: '400',
-    color: '#34C759',
+    color: '#8E8E93',
     flexShrink: 1,
   },
   versionStatusTextUpdate: {

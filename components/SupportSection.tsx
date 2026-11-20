@@ -25,14 +25,18 @@ import {
 } from '../services/pixMock';
 import { snoozeSupportNotificationsUntilNextMonth } from '../services/database';
 
+export const SHOW_PIX_SUPPORT = false;
+
 export interface SupportSectionProps {
   onShowToast?: (message: string) => void;
   onPixCopied?: () => void;
+  showPixSupport?: boolean;
 }
 
 export const SupportSection: React.FC<SupportSectionProps> = ({
   onShowToast,
   onPixCopied,
+  showPixSupport = SHOW_PIX_SUPPORT,
 }) => {
   const [selectedPreset, setSelectedPreset] = useState<PixPresetId>('5');
   const [customAmountText, setCustomAmountText] = useState('');
@@ -111,124 +115,154 @@ export const SupportSection: React.FC<SupportSectionProps> = ({
           <Text style={styles.eyebrow}>PROJETO INDEPENDENTE</Text>
           <Text style={styles.title}>Apoie o Sonary</Text>
           <Text style={styles.subtitle}>
-            100% gratuito e sem anúncios. Sua contribuição ajuda a manter o
-            desenvolvimento vivo.
+            {showPixSupport
+              ? '100% gratuito e sem anúncios. Sua contribuição ajuda a manter o desenvolvimento vivo.'
+              : '100% gratuito e sem anúncios. Feito de forma independente para quem ama música.'}
           </Text>
         </View>
 
-        {/* Chips de Valor Sugerido */}
-        <View style={styles.chipsSection}>
-          <View style={styles.chipsRow}>
-            {PIX_PRESET_OPTIONS.map((option) => {
-              const isSelected = selectedPreset === option.id;
-              return (
-                <TouchableOpacity
-                  key={option.id}
-                  style={[styles.chip, isSelected && styles.chipSelected]}
-                  onPress={() => {
-                    setSelectedPreset(option.id);
-                    setCopied(false);
-                  }}
-                  activeOpacity={0.75}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Valor ${option.label}`}
-                  accessibilityState={{ selected: isSelected }}
-                >
-                  <Text
-                    style={[
-                      styles.chipText,
-                      isSelected && styles.chipTextSelected,
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {option.label}
+        {showPixSupport ? (
+          <>
+            {/* Chips de Valor Sugerido */}
+            <View style={styles.chipsSection}>
+              <View style={styles.chipsRow}>
+                {PIX_PRESET_OPTIONS.map((option) => {
+                  const isSelected = selectedPreset === option.id;
+                  return (
+                    <TouchableOpacity
+                      key={option.id}
+                      style={[styles.chip, isSelected && styles.chipSelected]}
+                      onPress={() => {
+                        setSelectedPreset(option.id);
+                        setCopied(false);
+                      }}
+                      activeOpacity={0.75}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Valor ${option.label}`}
+                      accessibilityState={{ selected: isSelected }}
+                    >
+                      <Text
+                        style={[
+                          styles.chipText,
+                          isSelected && styles.chipTextSelected,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {option.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {selectedPreset === 'other' && (
+                <View style={styles.customAmountBox}>
+                  <TextInput
+                    style={styles.customAmountInput}
+                    value={customAmountText}
+                    onChangeText={(txt) => {
+                      setCustomAmountText(txt);
+                      setCopied(false);
+                    }}
+                    placeholder="Digite o valor em R$ (opcional)"
+                    placeholderTextColor={theme.colors.textMuted}
+                    keyboardType="decimal-pad"
+                    accessibilityLabel="Valor personalizado para apoio"
+                  />
+                  <Text style={styles.customAmountHint}>
+                    Se preferir deixar em branco, você define qualquer valor
+                    diretamente no app do seu banco.
                   </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          {selectedPreset === 'other' && (
-            <View style={styles.customAmountBox}>
-              <TextInput
-                style={styles.customAmountInput}
-                value={customAmountText}
-                onChangeText={(txt) => {
-                  setCustomAmountText(txt);
-                  setCopied(false);
-                }}
-                placeholder="Digite o valor em R$ (opcional)"
-                placeholderTextColor={theme.colors.textMuted}
-                keyboardType="decimal-pad"
-                accessibilityLabel="Valor personalizado para apoio"
-              />
-              <Text style={styles.customAmountHint}>
-                Se preferir deixar em branco, você define qualquer valor
-                diretamente no app do seu banco.
-              </Text>
+                </View>
+              )}
             </View>
-          )}
-        </View>
 
-        {/* Card Pix para contribuir */}
-        <View style={styles.pixCard}>
-          <View style={styles.pixCardHeader}>
-            <View style={styles.pixCardTitleRow}>
+            {/* Card Pix para contribuir */}
+            <View style={styles.pixCard}>
+              <View style={styles.pixCardHeader}>
+                <View style={styles.pixCardTitleRow}>
+                  <MaterialCommunityIcons
+                    name="hand-heart"
+                    color={theme.colors.brandPrimary}
+                    size={18}
+                  />
+                  <Text style={styles.pixCardTitle}>Pix para contribuir</Text>
+                </View>
+                <View style={styles.amountPill}>
+                  <Text style={styles.amountPillText}>{amountBadgeText}</Text>
+                </View>
+              </View>
+
+              {/* QR Code real escaneável em superfície branca */}
+              <View style={styles.qrFrame}>
+                <Svg
+                  width={188}
+                  height={188}
+                  viewBox={`0 0 ${qrSize} ${qrSize}`}
+                  testID="support-qr-code"
+                  accessibilityLabel={`QR Code Pix para ${amountBadgeText}`}
+                >
+                  <Path d={qrSvgPath} fill={theme.colors.textInverse} />
+                </Svg>
+              </View>
+
+              {/* Instrução discreta sem expor dados/chave na tela */}
+              <Text style={styles.qrInstruction}>
+                {isKeyOnlyCopy
+                  ? 'Escaneie o QR Code acima ou copie a chave Pix aleatória abaixo para transferir qualquer valor no app do seu banco.'
+                  : 'Escaneie o QR Code acima ou toque abaixo para copiar o Pix Copia e Cola no app do seu banco.'}
+              </Text>
+
+              {/* Botão CTA Principal */}
+              <TouchableOpacity
+                style={[styles.ctaButton, copied && styles.ctaButtonCopied]}
+                onPress={() => copyAndSnooze(copyPayload, copyToastMessage, true)}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel={copied ? ctaCopiedLabel : ctaDefaultLabel}
+              >
+                {copied ? (
+                  <Check color="#FFFFFF" size={18} strokeWidth={2.5} />
+                ) : (
+                  <Copy color="#FFFFFF" size={18} strokeWidth={2.2} />
+                )}
+                <Text style={styles.ctaButtonText}>
+                  {copied ? ctaCopiedLabel : ctaDefaultLabel}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        ) : (
+          <View style={styles.communityCard} testID="support-community-card">
+            <View style={styles.communityIconBadge}>
               <MaterialCommunityIcons
                 name="hand-heart"
                 color={theme.colors.brandPrimary}
-                size={18}
+                size={28}
               />
-              <Text style={styles.pixCardTitle}>Pix para contribuir</Text>
             </View>
-            <View style={styles.amountPill}>
-              <Text style={styles.amountPillText}>{amountBadgeText}</Text>
-            </View>
-          </View>
-
-          {/* QR Code real escaneável em superfície branca */}
-          <View style={styles.qrFrame}>
-            <Svg
-              width={188}
-              height={188}
-              viewBox={`0 0 ${qrSize} ${qrSize}`}
-              testID="support-qr-code"
-              accessibilityLabel={`QR Code Pix para ${amountBadgeText}`}
-            >
-              <Path d={qrSvgPath} fill={theme.colors.textInverse} />
-            </Svg>
-          </View>
-
-          {/* Instrução discreta sem expor dados/chave na tela */}
-          <Text style={styles.qrInstruction}>
-            {isKeyOnlyCopy
-              ? 'Escaneie o QR Code acima ou copie a chave Pix aleatória abaixo para transferir qualquer valor no app do seu banco.'
-              : 'Escaneie o QR Code acima ou toque abaixo para copiar o Pix Copia e Cola no app do seu banco.'}
-          </Text>
-
-          {/* Botão CTA Principal */}
-          <TouchableOpacity
-            style={[styles.ctaButton, copied && styles.ctaButtonCopied]}
-            onPress={() => copyAndSnooze(copyPayload, copyToastMessage, true)}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-            accessibilityLabel={copied ? ctaCopiedLabel : ctaDefaultLabel}
-          >
-            {copied ? (
-              <Check color="#FFFFFF" size={18} strokeWidth={2.5} />
-            ) : (
-              <Copy color="#FFFFFF" size={18} strokeWidth={2.2} />
-            )}
-            <Text style={styles.ctaButtonText}>
-              {copied ? ctaCopiedLabel : ctaDefaultLabel}
+            <Text style={styles.communityTitle}>Espalhe o Sonary por aí</Text>
+            <Text style={styles.communityMessage}>
+              Neste primeiro momento, a melhor forma de apoiar o projeto é
+              divulgando o Sonary para mais pessoas.
             </Text>
-          </TouchableOpacity>
-        </View>
+            <Text style={styles.communitySubtext}>
+              Indique para amigos e familiares — cada nova pessoa ouvindo ajuda
+              a manter o projeto vivo, gratuito e sem anúncios.
+            </Text>
+            <View style={styles.communityPill}>
+              <Text style={styles.communityPillText}>
+                Obrigado por fazer parte disso ❤️
+              </Text>
+            </View>
+          </View>
+        )}
 
         {/* Rodapé de Transparência */}
         <Text style={styles.transparencyFooter}>
-          Contribuição voluntária • Sem cobrança recorrente • Acesso livre para
-          todos
+          {showPixSupport
+            ? 'Contribuição voluntária • Sem cobrança recorrente • Acesso livre para todos'
+            : '100% gratuito • Sem anúncios • Acesso livre para todos'}
         </Text>
       </ScrollView>
     </View>
@@ -386,6 +420,61 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: theme.typography.fontWeight.bold,
     color: theme.colors.textPrimary,
+  },
+  communityCard: {
+    backgroundColor: '#161616',
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: 16,
+    paddingHorizontal: 22,
+    paddingVertical: 28,
+    alignItems: 'center',
+    gap: 12,
+  },
+  communityIconBadge: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: 'rgba(255, 0, 0, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 0, 0.28)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  communityTitle: {
+    fontSize: 18,
+    fontWeight: theme.typography.fontWeight.bold,
+    color: theme.colors.textPrimary,
+    textAlign: 'center',
+    letterSpacing: -0.2,
+  },
+  communityMessage: {
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: theme.typography.fontWeight.medium,
+    color: '#E4E4E7',
+    textAlign: 'center',
+  },
+  communitySubtext: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
+  },
+  communityPill: {
+    marginTop: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: theme.radii.circular,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  communityPillText: {
+    fontSize: 12.5,
+    fontWeight: theme.typography.fontWeight.semiBold,
+    color: '#D4D4D8',
   },
   transparencyFooter: {
     fontSize: theme.typography.fontSize.caption,

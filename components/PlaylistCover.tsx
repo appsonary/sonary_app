@@ -22,7 +22,7 @@ export interface PlaylistCoverProps {
   testID?: string;
 }
 
-function hasYouTubeLetterbox(uri?: string | null): boolean {
+export function hasYouTubeLetterbox(uri?: string | null): boolean {
   return Boolean(uri && /(?:hqdefault|sddefault)\.jpg/i.test(uri));
 }
 

@@ -146,13 +146,23 @@ test('SideDrawerMenu: hidden when closed, renders editorial layout, badges, and 
     );
 
     const panelStyle = Object.assign({}, ...[].concat(panel.props.style).filter(Boolean));
-    assert.strictEqual(panelStyle.backgroundColor, '#030303');
+    assert.strictEqual(panelStyle.backgroundColor, '#0B0B0C');
 
-    const gradients = root.findAllByType('LinearGradient');
-    assert.deepStrictEqual(
-      gradients[0].props.colors,
-      ['rgba(195, 18, 38, 0.50)', 'rgba(115, 10, 24, 0.22)', 'rgba(3, 3, 3, 0)']
+    // Minimalist surface: no LinearGradient glows, no right chevrons, bare back button, flat footer
+    assert.strictEqual(root.findAllByType('LinearGradient').length, 0);
+    assert.strictEqual(
+      panel.findAll((n) => n.type === 'LucideIcon' && n.props.name === 'ChevronRight').length,
+      0,
+      'Menu items must not render trailing chevrons'
     );
+    assert.strictEqual(backBtn.props.style.borderWidth, undefined, 'Back button must be bare without border');
+    assert.ok(
+      root.find((n) => n.type === 'View' && n.props && n.props.testID === 'drawer-dev-divider'),
+      'Hairline divider must separate main items from Modo Desenvolvedor'
+    );
+    const footer = root.find((n) => n.props && n.props.testID === 'drawer-footer-card');
+    assert.strictEqual(footer.props.style.backgroundColor, undefined, 'Footer must be flat without card background');
+    assert.strictEqual(footer.props.style.borderTopWidth, 1, 'Footer must have subtle top hairline divider');
 
     // Tap Support action -> closes smoothly then executes callback
     const supportBtn = root.find(

@@ -155,6 +155,7 @@ test('SupportSection UI: rendering Apoiar without copying does not snooze; click
   await actAsync(async () => {
     tree = renderer.create(
       React.createElement(SupportSection, {
+        showPixSupport: true,
         onShowToast: (msg) => {
           toast = msg;
         },

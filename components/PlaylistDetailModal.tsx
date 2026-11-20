@@ -58,7 +58,7 @@ import { SearchPillInput } from './SearchBarSection';
 import { AmbientGlowBackground } from './AmbientGlowBackground';
 import { AtmosphericGradient } from './AtmosphericGradient';
 import { FavoritesRubyBadge } from './LibrarySection';
-import { PlaylistCover } from './PlaylistCover';
+import { hasYouTubeLetterbox, PlaylistCover } from './PlaylistCover';
 import { PlaylistOptionsSheet } from './PlaylistOptionsSheet';
 import { EditPlaylistModal, EditPlaylistSavePayload } from './EditPlaylistModal';
 import { CoverCropModal } from './CoverCropModal';
@@ -182,7 +182,14 @@ const PlaylistTrackRow = React.memo<PlaylistTrackRowProps>(
 
         {/* Capa da Música (Token track-card: 4px) */}
         <View style={styles.trackThumbnailContainer}>
-          <Image source={{ uri: item.thumbnailUrl }} style={styles.trackThumbnail} />
+          <Image
+            source={{ uri: item.thumbnailUrl }}
+            style={[
+              styles.trackThumbnail,
+              hasYouTubeLetterbox(item.thumbnailUrl) && styles.trackThumbnailLetterboxCrop,
+            ]}
+            resizeMode="cover"
+          />
           {isActive && <PlayingEqualizer isPlaying={isPlaying} />}
         </View>
 
@@ -1375,6 +1382,9 @@ const styles = StyleSheet.create({
     height: 44,
     borderRadius: 4,
     backgroundColor: '#1E1E1E',
+  },
+  trackThumbnailLetterboxCrop: {
+    transform: [{ scale: 1.35 }],
   },
   trackInfo: {
     flex: 1,

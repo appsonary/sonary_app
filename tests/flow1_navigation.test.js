@@ -209,44 +209,73 @@ test('Flow 1: Support tab renders Pix mock flow, updates amount chips, copies ke
   const supportText = getAllText(root);
   assert.ok(supportText.includes('PROJETO INDEPENDENTE'), 'Should show eyebrow');
   assert.ok(supportText.includes('Apoie o Sonary'), 'Should show main title');
-  assert.ok(supportText.includes('Pix para contribuir'), 'Should show Pix card title');
-  assert.strictEqual(
-    supportText.includes('00000000-0000-4000-8000-000000000000'),
-    false,
-    'Raw Pix key must not be exposed visually on screen'
+  assert.ok(
+    supportText.includes('divulgando o Sonary para mais pessoas'),
+    'Should display friendly sharing message while Pix/QR is hidden'
   );
   assert.strictEqual(
-    supportText.includes('Sonary App'),
-    false,
-    'Recipient identifier must not be exposed visually on screen'
+    root.findAll((n) => n.props?.testID === 'support-qr-code').length,
+    0,
+    'QR code must be hidden by default'
   );
   assert.ok(
-    supportText.includes('Escaneie o QR Code acima'),
-    'Should display clean scan/copy instruction'
-  );
-  assert.ok(
-    supportText.includes('Contribuição voluntária • Sem cobrança recorrente • Acesso livre para todos'),
-    'Should show transparency footer'
+    root.findByProps({ testID: 'support-community-card' }),
+    'Friendly community card must render when Pix/QR is hidden'
   );
   assert.ok(
     supportText.includes('Música em Execução'),
     'PersistentMiniPlayer must remain visible and playing on Apoiar tab'
   );
 
-  const qrSvg = root.findByProps({ testID: 'support-qr-code' });
+  // Preserved Pix/QR flow remains intact when explicitly enabled via showPixSupport
+  let pixToast = null;
+  let pixTree;
+  await actAsync(async () => {
+    pixTree = renderer.create(
+      React.createElement(SupportSection, {
+        showPixSupport: true,
+        onShowToast: (msg) => {
+          pixToast = msg;
+        },
+      })
+    );
+  });
+  const pixRoot = pixTree.root;
+  const pixText = getAllText(pixRoot);
+  assert.ok(pixText.includes('Pix para contribuir'), 'Should show Pix card title');
+  assert.strictEqual(
+    pixText.includes('00000000-0000-4000-8000-000000000000'),
+    false,
+    'Raw Pix key must not be exposed visually on screen'
+  );
+  assert.strictEqual(
+    pixText.includes('Sonary App'),
+    false,
+    'Recipient identifier must not be exposed visually on screen'
+  );
+  assert.ok(
+    pixText.includes('Escaneie o QR Code acima'),
+    'Should display clean scan/copy instruction'
+  );
+  assert.ok(
+    pixText.includes('Contribuição voluntária • Sem cobrança recorrente • Acesso livre para todos'),
+    'Should show transparency footer'
+  );
+
+  const qrSvg = pixRoot.findByProps({ testID: 'support-qr-code' });
   const initialQrPath = qrSvg.find((n) => n.props?.tag === 'Path').props.d;
   assert.ok(initialQrPath && initialQrPath.length > 20, 'QR SVG path must render real QR modules');
 
   // Default R$ 5 chip is selected (matching fixed bank charge)
-  const chip10 = findButtonByText(root, 'R$ 10');
-  const chip25 = findButtonByText(root, 'R$ 25');
-  const chip5 = findButtonByText(root, 'R$ 5');
-  const chipOther = findButtonByText(root, 'Outro');
+  const chip10 = findButtonByText(pixRoot, 'R$ 10');
+  const chip25 = findButtonByText(pixRoot, 'R$ 25');
+  const chip5 = findButtonByText(pixRoot, 'R$ 5');
+  const chipOther = findButtonByText(pixRoot, 'Outro');
   assert.ok(chip5 && chip10 && chip25 && chipOther, 'All 4 amount chips must be rendered');
   assert.strictEqual(chip5.props.accessibilityState?.selected, true, 'R$ 5 must be selected by default');
 
   // Tap CTA "Copiar código Pix" with default R$ 5 -> must copy exact bank payload verbatim
-  const copyBtn = findButtonByText(root, 'Copiar código Pix');
+  const copyBtn = findButtonByText(pixRoot, 'Copiar código Pix');
   assert.ok(copyBtn, 'Primary CTA button "Copiar código Pix" must exist');
   await actAsync(async () => {
     await copyBtn.props.onPress();
@@ -262,9 +291,9 @@ test('Flow 1: Support tab renders Pix mock flow, updates amount chips, copies ke
   await actAsync(async () => {
     chip10.props.onPress();
   });
-  assert.strictEqual(findButtonByText(root, 'R$ 10').props.accessibilityState?.selected, true);
+  assert.strictEqual(findButtonByText(pixRoot, 'R$ 10').props.accessibilityState?.selected, true);
   await actAsync(async () => {
-    await findButtonByText(root, 'Copiar código Pix').props.onPress();
+    await findButtonByText(pixRoot, 'Copiar código Pix').props.onPress();
   });
   assert.strictEqual(
     await Clipboard.getString(),
@@ -276,14 +305,14 @@ test('Flow 1: Support tab renders Pix mock flow, updates amount chips, copies ke
   await actAsync(async () => {
     chip25.props.onPress();
   });
-  assert.strictEqual(findButtonByText(root, 'R$ 25').props.accessibilityState?.selected, true);
-  assert.strictEqual(findButtonByText(root, 'R$ 5').props.accessibilityState?.selected, false);
-  const updatedQrPath = root
+  assert.strictEqual(findButtonByText(pixRoot, 'R$ 25').props.accessibilityState?.selected, true);
+  assert.strictEqual(findButtonByText(pixRoot, 'R$ 5').props.accessibilityState?.selected, false);
+  const updatedQrPath = pixRoot
     .findByProps({ testID: 'support-qr-code' })
     .find((n) => n.props?.tag === 'Path').props.d;
   assert.notStrictEqual(updatedQrPath, initialQrPath, 'QR code matrix must update when amount changes');
   await actAsync(async () => {
-    await findButtonByText(root, 'Copiar código Pix').props.onPress();
+    await findButtonByText(pixRoot, 'Copiar código Pix').props.onPress();
   });
   assert.strictEqual(
     await Clipboard.getString(),
@@ -293,9 +322,9 @@ test('Flow 1: Support tab renders Pix mock flow, updates amount chips, copies ke
 
   // Select Outro without amount -> must copy only the mock Pix key
   await actAsync(async () => {
-    findButtonByText(root, 'Outro').props.onPress();
+    findButtonByText(pixRoot, 'Outro').props.onPress();
   });
-  const copyKeyBtn = findButtonByText(root, 'Copiar chave Pix');
+  const copyKeyBtn = findButtonByText(pixRoot, 'Copiar chave Pix');
   assert.ok(copyKeyBtn, 'CTA must read "Copiar chave Pix" when Outro has no custom value');
   await actAsync(async () => {
     await copyKeyBtn.props.onPress();
@@ -307,7 +336,7 @@ test('Flow 1: Support tab renders Pix mock flow, updates amount chips, copies ke
   );
 
   // Type optional custom value under Outro -> copies EMV BR Code with amount
-  const customInput = root.find(
+  const customInput = pixRoot.find(
     (n) => n.type === 'TextInput' && n.props?.accessibilityLabel === 'Valor personalizado para apoio'
   );
   assert.ok(customInput, 'Custom amount input should appear when "Outro" is selected');
@@ -317,16 +346,19 @@ test('Flow 1: Support tab renders Pix mock flow, updates amount chips, copies ke
 
   // Tap CTA "Copiar código Pix" for custom amount
   await actAsync(async () => {
-    await findButtonByText(root, 'Copiar código Pix').props.onPress();
+    await findButtonByText(pixRoot, 'Copiar código Pix').props.onPress();
   });
 
   const copiedText = await Clipboard.getString();
   assert.ok(copiedText.includes('00000000-0000-4000-8000-000000000000'), 'Clipboard must receive mock Pix key');
   assert.ok(copiedText.includes('42.50'), 'Clipboard payload must reflect custom selected amount');
 
-  const afterCopyText = getAllText(root);
+  const afterCopyText = getAllText(pixRoot);
   assert.ok(afterCopyText.includes('Código copiado!'), 'CTA button must show immediate copied confirmation');
-  assert.ok(afterCopyText.includes('Código Pix copiado!'), 'App ToastBanner must display copy confirmation');
+  assert.strictEqual(pixToast, 'Código Pix copiado!', 'Toast callback must receive copy confirmation');
+  await actAsync(async () => {
+    pixTree.unmount();
+  });
 });
 
 test('Flow 1: YouTubeMusicSidebar supports "support" tab parity', async () => {
