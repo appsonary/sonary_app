@@ -51,7 +51,6 @@ export interface UpdateModalProps {
   autoInstallOnOpen?: boolean;
   onCheckNow?: () => void;
   onClose: () => void;
-  onSkipVersion?: (versionName: string) => void;
 }
 
 type UpdateStage =
@@ -146,7 +145,6 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
   autoInstallOnOpen = false,
   onCheckNow,
   onClose,
-  onSkipVersion,
 }) => {
   useBackModalLock(visible);
   const isDev = isDevMenuEnabled();
@@ -656,27 +654,6 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                       >
                         <Text style={styles.secondaryButtonText}>Lembrar mais tarde</Text>
                       </TouchableOpacity>
-
-                      {onSkipVersion && (
-                        <View style={styles.skipRow}>
-                          <TouchableOpacity
-                            style={styles.skipButton}
-                            onPress={() => {
-                              if (isSimulated) {
-                                setSimulatedRelease(null);
-                              } else {
-                                onSkipVersion(effectiveRelease.versionName);
-                              }
-                              dismissSheet();
-                            }}
-                            activeOpacity={0.7}
-                            accessibilityRole="button"
-                            accessibilityLabel="Ignorar esta versão"
-                          >
-                            <Text style={styles.skipButtonText}>Pular esta versão</Text>
-                          </TouchableOpacity>
-                        </View>
-                      )}
                     </>
                   )}
                 </View>
@@ -1142,20 +1119,6 @@ const styles = StyleSheet.create({
     color: '#F4F4F6',
     fontSize: 15,
     fontWeight: '600',
-  },
-  skipRow: {
-    alignItems: 'center',
-    paddingTop: 4,
-  },
-  skipButton: {
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-  },
-  skipButtonText: {
-    color: '#9A9AA4',
-    fontSize: 14,
-    fontWeight: '500',
-    textDecorationLine: 'underline',
   },
   devSimulateRow: {
     alignItems: 'center',

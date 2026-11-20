@@ -20,7 +20,9 @@ const {
   isNewerRelease,
   isTrustedGitHubUrl,
   checkForAppUpdate,
-  skipAppUpdateVersion,
+  getCachedAvailableUpdate,
+  saveCachedAvailableUpdate,
+  clearCachedAvailableUpdate,
   downloadUpdateApk,
   installUpdateApk,
   cleanupCachedUpdateApks,
@@ -105,11 +107,12 @@ test('Updater: compareSemver, isNewerRelease e isTrustedGitHubUrl', () => {
   );
 });
 
-test('Updater: checkForAppUpdate lê latest.json, aplica throttle de 24h e respeita versão ignorada', async () => {
+test('Updater: checkForAppUpdate lê latest.json, aplica throttle de 24h e persiste release disponível no SQLite', async () => {
   NativeModules.SonaryAppUpdater = {
     getInstalledVersion: async () => ({ versionName: '1.0.1', versionCode: 3 }),
   };
   let calls = 0;
+  let remoteVersion = { versionName: '1.2.0', versionCode: 5 };
   const fetchMock = async (url) => {
     calls += 1;
     assert.ok(url.endsWith('/releases/latest/download/latest.json'));
@@ -117,10 +120,10 @@ test('Updater: checkForAppUpdate lê latest.json, aplica throttle de 24h e respe
       ok: true,
       status: 200,
       json: async () => ({
-        versionName: '1.2.0',
-        versionCode: 5,
-        apkName: 'sonary-pro-v1.2.0.apk',
-        apkUrl: 'https://github.com/appsonary/sonary_app/releases/download/v1.2.0/sonary-pro-v1.2.0.apk',
+        versionName: remoteVersion.versionName,
+        versionCode: remoteVersion.versionCode,
+        apkName: `sonary-pro-v${remoteVersion.versionName}.apk`,
+        apkUrl: `https://github.com/appsonary/sonary_app/releases/download/v${remoteVersion.versionName}/sonary-pro-v${remoteVersion.versionName}.apk`,
         sha256: 'a'.repeat(64),
         sizeBytes: 42000000,
         releaseNotes: 'Auto-updater nativo adicionado.',
@@ -134,26 +137,48 @@ test('Updater: checkForAppUpdate lê latest.json, aplica throttle de 24h e respe
   assert.strictEqual(first.release.versionName, '1.2.0');
   assert.strictEqual(calls, 1);
 
-  // Segunda chamada dentro de 24h sem force deve respeitar throttle
+  // Release descoberta deve ficar persistida no SQLite
+  const cachedAfterAuto = await getCachedAvailableUpdate();
+  assert.ok(cachedAfterAuto);
+  assert.strictEqual(cachedAfterAuto.versionName, '1.2.0');
+
+  // Segunda chamada dentro de 24h sem force deve respeitar throttle SEM apagar cache
   const throttled = await checkForAppUpdate({ fetchImpl: fetchMock, nowMs: t0 + 60_000 });
   assert.strictEqual(throttled.status, 'throttled');
   assert.strictEqual(calls, 1);
+  const cachedDuringThrottle = await getCachedAvailableUpdate();
+  assert.ok(cachedDuringThrottle);
+  assert.strictEqual(cachedDuringThrottle.versionName, '1.2.0');
 
-  // Usuário pula a versão 1.2.0
-  await skipAppUpdateVersion('1.2.0');
-  const afterSkip = await checkForAppUpdate({
-    fetchImpl: fetchMock,
-    nowMs: t0 + 25 * 60 * 60 * 1000,
-  });
-  assert.strictEqual(afterSkip.status, 'up_to_date');
-
-  // Checagem manual (force: true) continua exibindo a atualização
+  // Checagem manual (force: true) com versão ainda mais nova sobrescreve o cache
+  remoteVersion = { versionName: '1.3.0', versionCode: 6 };
   const forced = await checkForAppUpdate({
     force: true,
     fetchImpl: fetchMock,
-    nowMs: t0 + 25 * 60 * 60 * 1000,
+    nowMs: t0 + 120_000,
   });
   assert.strictEqual(forced.status, 'update_available');
+  assert.strictEqual((await getCachedAvailableUpdate())?.versionName, '1.3.0');
+
+  // Quando a versão instalada alcança a versão em cache, o cache é limpo automaticamente
+  NativeModules.SonaryAppUpdater.getInstalledVersion = async () => ({
+    versionName: '1.3.0',
+    versionCode: 6,
+  });
+  assert.strictEqual(await getCachedAvailableUpdate(), null);
+
+  // Salvar manualmente e receber up_to_date limpa o cache
+  NativeModules.SonaryAppUpdater.getInstalledVersion = async () => ({
+    versionName: '1.0.1',
+    versionCode: 3,
+  });
+  await saveCachedAvailableUpdate(forced.release);
+  assert.strictEqual((await getCachedAvailableUpdate())?.versionName, '1.3.0');
+  remoteVersion = { versionName: '1.0.1', versionCode: 3 };
+  const upToDate = await checkForAppUpdate({ force: true, fetchImpl: fetchMock, nowMs: t0 + 180_000 });
+  assert.strictEqual(upToDate.status, 'up_to_date');
+  assert.strictEqual(await getCachedAvailableUpdate(), null);
+  await clearCachedAvailableUpdate();
 });
 
 test('Updater: checkForAppUpdate faz fallback para API do GitHub quando latest.json não existe', async () => {
@@ -259,8 +284,7 @@ test('Updater: downloadUpdateApk valida URL, SHA-256 e delega instalação ao m�
   assert.strictEqual(FileSystem.files.has(dl.localUri), false);
 });
 
-test('Updater UI: UpdateModal exibe notas, fluxo de atualização e botão de pular versão', async () => {
-  let skippedVersion = null;
+test('Updater UI: UpdateModal exibe notas, fluxo de atualização e não exibe botão de pular versão', async () => {
   let closed = false;
   let installCalled = false;
 
@@ -291,9 +315,6 @@ test('Updater UI: UpdateModal exibe notas, fluxo de atualização e botão de pu
         onClose: () => {
           closed = true;
         },
-        onSkipVersion: (v) => {
-          skippedVersion = v;
-        },
       })
     );
   });
@@ -307,16 +328,20 @@ test('Updater UI: UpdateModal exibe notas, fluxo de atualização e botão de pu
   assert.ok(modalText.includes('Melhorias de estabilidade.'));
   assert.ok(modalText.includes('Atualizar agora (40.0 MB)'));
   assert.ok(modalText.includes('Lembrar mais tarde'));
-  assert.ok(modalText.includes('Pular esta versão'));
+  assert.ok(!modalText.includes('Pular esta versão'));
 
-  const skipBtn = tree.root.find(
+  const skipBtns = tree.root.findAll(
     (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Ignorar esta versão'
   );
-  assert.ok(skipBtn);
+  assert.strictEqual(skipBtns.length, 0);
+
+  const laterBtn = tree.root.find(
+    (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Atualizar depois'
+  );
+  assert.ok(laterBtn);
   await actAsync(async () => {
-    skipBtn.props.onPress();
+    laterBtn.props.onPress();
   });
-  assert.strictEqual(skippedVersion, '1.2.0');
   assert.strictEqual(closed, true);
 
   const updateBtn = tree.root.find(
@@ -528,7 +553,6 @@ test('Updater UI: botão de simular atualização aparece apenas em desenvolvime
           release: null,
           isChecking: false,
           onClose: () => {},
-          onSkipVersion: () => {},
         })
       );
     });
@@ -1028,7 +1052,7 @@ test('Updater Background UI: UpdateModal hidrata estado downloading/ready ao rea
   assert.strictEqual(installedUri, 'file:///cache/updates/sonary-pro-v1.2.0.apk');
 });
 
-test('Updater App: deep link com.sonarypro.app://update abre UpdateModal pronto e dispara installApk; versão já instalada ou pulada limpa estado', async () => {
+test('Updater App: deep link com.sonarypro.app://update abre UpdateModal pronto e dispara installApk; versão já instalada limpa estado', async () => {
   const App = require('../App').default;
   let installedUri = null;
   let clearCalls = 0;
@@ -1179,5 +1203,179 @@ test('Updater UI Dev: clicar em "Atualizar agora" na tela simulada executa downl
     else global.__DEV__ = prevDev;
     if (prevEnv === undefined) delete process.env[envKey];
     else process.env[envKey] = prevEnv;
+  }
+});
+
+test('Updater App: cold start abre UpdateModal automaticamente para atualização persistida ou pronta, e não interrompe durante download ativo', async () => {
+  const App = require('../App').default;
+  const cachedRelease = {
+    versionName: '1.2.0',
+    versionCode: 8,
+    apkName: 'sonary-pro-v1.2.0.apk',
+    apkUrl: 'https://github.com/appsonary/sonary_app/releases/download/v1.2.0/sonary-pro-v1.2.0.apk',
+    sha256: null,
+    sizeBytes: 36 * 1024 * 1024,
+    releaseNotes: 'Nova versão persistida.',
+    releaseUrl: 'https://github.com/appsonary/sonary_app/releases/tag/v1.2.0',
+  };
+
+  let installedUri = null;
+  let nativeState = { status: 'idle', progress: 0 };
+  NativeModules.SonaryAppUpdater = {
+    getInstalledVersion: async () => ({ versionName: '1.0.5', versionCode: 7 }),
+    startBackgroundDownload: async () => {},
+    getDownloadState: async () => nativeState,
+    clearDownloadState: async () => {
+      nativeState = { status: 'idle', progress: 0 };
+    },
+    canRequestPackageInstalls: async () => true,
+    installApk: async (uri) => {
+      installedUri = uri;
+    },
+  };
+
+  await saveCachedAvailableUpdate(cachedRelease);
+
+  // 1. Cold start com atualização pendente no SQLite -> abre UpdateModal automaticamente
+  let tree1;
+  try {
+    await actAsync(async () => {
+      tree1 = renderer.create(React.createElement(App));
+    });
+    const text1 = getAllText(tree1.root);
+    assert.ok(text1.includes('Atualização disponível'));
+    assert.ok(text1.includes('v1.2.0'));
+    assert.ok(!text1.includes('Pular esta versão'));
+    assert.strictEqual(installedUri, null);
+  } finally {
+    if (tree1) {
+      await actAsync(async () => {
+        tree1.unmount();
+      });
+    }
+  }
+
+  // 2. Cold start com download em andamento -> NÃO abre UpdateModal
+  nativeState = {
+    status: 'downloading',
+    versionName: '1.2.0',
+    versionCode: 8,
+    apkName: 'sonary-pro-v1.2.0.apk',
+    apkUrl: cachedRelease.apkUrl,
+    progress: 0.4,
+  };
+  let tree2;
+  try {
+    await actAsync(async () => {
+      tree2 = renderer.create(React.createElement(App));
+    });
+    const text2 = getAllText(tree2.root);
+    assert.ok(!text2.includes('Atualização disponível'));
+  } finally {
+    if (tree2) {
+      await actAsync(async () => {
+        tree2.unmount();
+      });
+    }
+  }
+
+  // 3. Cold start com APK pronto (ready) mais novo que o cache -> prioriza versão mais recente e abre UpdateModal sem auto-instalar
+  nativeState = {
+    status: 'ready',
+    versionName: '1.3.0',
+    versionCode: 9,
+    apkName: 'sonary-pro-v1.3.0.apk',
+    apkUrl: 'https://github.com/appsonary/sonary_app/releases/download/v1.3.0/sonary-pro-v1.3.0.apk',
+    localUri: 'file:///cache/updates/sonary-pro-v1.3.0.apk',
+    progress: 1,
+  };
+  let tree3;
+  try {
+    await actAsync(async () => {
+      tree3 = renderer.create(React.createElement(App));
+    });
+    const text3 = getAllText(tree3.root);
+    assert.ok(text3.includes('Atualização disponível'));
+    assert.ok(text3.includes('v1.3.0'));
+    assert.ok(text3.includes('Instalar atualização'));
+    assert.strictEqual(installedUri, null);
+  } finally {
+    if (tree3) {
+      await actAsync(async () => {
+        tree3.unmount();
+      });
+    }
+  }
+});
+
+test('Updater App: cold start abre UpdateModal automaticamente quando a checagem automática descobre nova release', async () => {
+  const App = require('../App').default;
+  const originalFetch = global.fetch;
+  const originalSetTimeout = global.setTimeout;
+  const scheduledUpdateChecks = [];
+
+  global.setTimeout = (fn, delay, ...args) => {
+    if (delay === 3500) {
+      scheduledUpdateChecks.push(() => fn(...args));
+      return { unref() {} };
+    }
+    return originalSetTimeout(fn, delay, ...args);
+  };
+
+  global.fetch = async (url) => {
+    assert.ok(url.endsWith('/releases/latest/download/latest.json'));
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        versionName: '1.4.0',
+        versionCode: 11,
+        apkName: 'sonary-pro-v1.4.0.apk',
+        apkUrl: 'https://github.com/appsonary/sonary_app/releases/download/v1.4.0/sonary-pro-v1.4.0.apk',
+        sha256: null,
+        sizeBytes: 38 * 1024 * 1024,
+        releaseNotes: 'Descoberta automaticamente no cold start.',
+        releaseUrl: 'https://github.com/appsonary/sonary_app/releases/tag/v1.4.0',
+      }),
+    };
+  };
+
+  NativeModules.SonaryAppUpdater = {
+    getInstalledVersion: async () => ({ versionName: '1.0.5', versionCode: 7 }),
+    getDownloadState: async () => ({ status: 'idle', progress: 0 }),
+  };
+
+  let appTree;
+  try {
+    await actAsync(async () => {
+      appTree = renderer.create(React.createElement(App));
+    });
+
+    // Sem cache inicial, modal ainda não deve estar aberto antes da checagem automática
+    assert.ok(!getAllText(appTree.root).includes('Atualização disponível'));
+    assert.strictEqual(scheduledUpdateChecks.length, 1);
+
+    // Dispara o timer de 3,5s da checagem automática
+    await actAsync(async () => {
+      scheduledUpdateChecks[0]();
+    });
+
+    const text = getAllText(appTree.root);
+    assert.ok(text.includes('Atualização disponível'));
+    assert.ok(text.includes('v1.4.0'));
+    assert.ok(text.includes('Descoberta automaticamente no cold start.'));
+    assert.ok(!text.includes('Pular esta versão'));
+
+    // Também deve ter persistido no SQLite para próximos cold starts
+    const cached = await getCachedAvailableUpdate();
+    assert.strictEqual(cached?.versionName, '1.4.0');
+  } finally {
+    global.setTimeout = originalSetTimeout;
+    global.fetch = originalFetch;
+    if (appTree) {
+      await actAsync(async () => {
+        appTree.unmount();
+      });
+    }
   }
 });

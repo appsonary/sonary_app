@@ -177,6 +177,7 @@ import {
   checkForAppUpdate,
   cleanupCachedUpdateApks,
   clearUpdateDownloadState,
+  getCachedAvailableUpdate,
   getInstalledAppVersion,
   getUpdateDownloadState,
   IDLE_UPDATE_DOWNLOAD_STATE,
@@ -184,7 +185,6 @@ import {
   isNewerRelease,
   releaseFromDownloadState,
   RemoteReleaseInfo,
-  skipAppUpdateVersion,
   subscribeUpdateDownload,
   UpdateDownloadState,
 } from './services/updater';
@@ -253,6 +253,8 @@ export default function App() {
   const [autoInstallUpdateOnOpen, setAutoInstallUpdateOnOpen] = useState(false);
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
   const [updateCheckError, setUpdateCheckError] = useState<string | null>(null);
+  const hasAutoPromptedUpdateRef = useRef(false);
+  const updateDownloadStatusRef = useRef<UpdateDownloadState['status']>('idle');
   const [downloadedIds, setDownloadedIds] = useState<Set<string>>(new Set());
   const [favoriteTrackIds, setFavoriteTrackIds] = useState<Set<string>>(new Set());
   const [isCurrentFavorite, setIsCurrentFavorite] = useState(false);
@@ -998,6 +1000,7 @@ export default function App() {
       if (state.status === 'downloading' || state.status === 'ready') {
         const reconstructed = releaseFromDownloadState(state);
         if (reconstructed && installed && !isNewerRelease(installed, reconstructed)) {
+          updateDownloadStatusRef.current = 'idle';
           setUpdateDownloadState(IDLE_UPDATE_DOWNLOAD_STATE);
           setAvailableUpdate((prev) =>
             prev && isNewerRelease(installed, prev) ? prev : null
@@ -1005,6 +1008,7 @@ export default function App() {
           void clearUpdateDownloadState().catch(() => {});
           return;
         }
+        updateDownloadStatusRef.current = state.status;
         setUpdateDownloadState(state);
         if (reconstructed) {
           setAvailableUpdate((prev) => prev ?? reconstructed);
@@ -1012,6 +1016,7 @@ export default function App() {
         return;
       }
 
+      updateDownloadStatusRef.current = state.status;
       setUpdateDownloadState(state);
       if (state.status === 'idle' && installed) {
         setAvailableUpdate((prev) =>
@@ -1024,13 +1029,48 @@ export default function App() {
       getInstalledAppVersion().catch(() => null),
       getUpdateDownloadState().catch(() => IDLE_UPDATE_DOWNLOAD_STATE),
     ])
-      .then(([info, state]) => {
+      .then(async ([info, state]) => {
         if (!isMounted) return;
         if (info) {
           installedSnapshot = info;
           setInstalledAppVersion(info);
         }
         applyUpdateDownloadState(state, info);
+
+        const cachedRelease = await getCachedAvailableUpdate(info).catch(() => null);
+        if (!isMounted) return;
+
+        const reconstructed =
+          state.status === 'downloading' || state.status === 'ready'
+            ? releaseFromDownloadState(state)
+            : null;
+        const validReconstructed =
+          reconstructed && (!info || isNewerRelease(info, reconstructed))
+            ? reconstructed
+            : null;
+        const startupRelease =
+          cachedRelease && validReconstructed
+            ? isNewerRelease(
+                {
+                  versionName: cachedRelease.versionName,
+                  versionCode: cachedRelease.versionCode ?? 0,
+                },
+                validReconstructed
+              )
+              ? validReconstructed
+              : cachedRelease
+            : cachedRelease ?? validReconstructed;
+
+        if (startupRelease) {
+          setAvailableUpdate(startupRelease);
+          if (
+            updateDownloadStatusRef.current !== 'downloading' &&
+            !hasAutoPromptedUpdateRef.current
+          ) {
+            hasAutoPromptedUpdateRef.current = true;
+            setIsUpdateModalVisible(true);
+          }
+        }
       })
       .catch(() => {});
 
@@ -1040,6 +1080,7 @@ export default function App() {
 
     const handleUpdateDeepLink = (url: string | null | undefined) => {
       if (!isMounted || !url || !url.startsWith('com.sonarypro.app://update')) return;
+      hasAutoPromptedUpdateRef.current = true;
       void Promise.all([
         installedSnapshot ? Promise.resolve(installedSnapshot) : getInstalledAppVersion().catch(() => null),
         getUpdateDownloadState().catch(() => IDLE_UPDATE_DOWNLOAD_STATE),
@@ -1089,6 +1130,15 @@ export default function App() {
           setInstalledAppVersion(res.installed);
           if (res.status === 'update_available') {
             setAvailableUpdate(res.release);
+            if (
+              !hasAutoPromptedUpdateRef.current &&
+              updateDownloadStatusRef.current !== 'downloading'
+            ) {
+              hasAutoPromptedUpdateRef.current = true;
+              setIsUpdateModalVisible(true);
+            }
+          } else if (res.status === 'up_to_date') {
+            setAvailableUpdate(null);
           }
         })
         .catch(() => {});
@@ -1551,6 +1601,7 @@ export default function App() {
         const res = await checkForAppUpdate({ force: true });
         setInstalledAppVersion(res.installed);
         if (res.status === 'update_available') {
+          hasAutoPromptedUpdateRef.current = true;
           setAvailableUpdate(res.release);
           setUpdateCheckError(null);
           setIsUpdateModalVisible(true);
@@ -3402,13 +3453,6 @@ export default function App() {
             setIsUpdateModalVisible(false);
             setAutoInstallUpdateOnOpen(false);
             setUpdateCheckError(null);
-          }}
-          onSkipVersion={(versionName) => {
-            void skipAppUpdateVersion(versionName);
-            void clearUpdateDownloadState().catch(() => {});
-            setAvailableUpdate(null);
-            setUpdateDownloadState(null);
-            showToast(`Atualização v${versionName} silenciada`, 'success');
           }}
         />
 

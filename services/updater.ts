@@ -11,7 +11,7 @@ export const GITHUB_REPO = 'appsonary/sonary_app';
 export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const UPDATER_DOWNLOAD_EVENT = 'SonaryUpdaterDownloadChanged';
 const UPDATER_LAST_CHECK_KEY = 'updater_last_check_at';
-const UPDATER_SKIPPED_VERSION_KEY = 'updater_skipped_version';
+const UPDATER_AVAILABLE_RELEASE_KEY = 'updater_available_release';
 const MIN_VALID_APK_BYTES = 1024 * 1024; // 1 MB
 
 export interface InstalledAppVersion {
@@ -339,20 +339,16 @@ export async function checkForAppUpdate(
     await setAppSetting(UPDATER_LAST_CHECK_KEY, String(nowMs)).catch(() => {});
 
     if (!release) {
+      await clearCachedAvailableUpdate().catch(() => {});
       return { status: 'up_to_date', installed };
     }
 
     if (!isNewerRelease(installed, release)) {
+      await clearCachedAvailableUpdate().catch(() => {});
       return { status: 'up_to_date', installed, release };
     }
 
-    if (!options.force) {
-      const skipped = await getAppSetting(UPDATER_SKIPPED_VERSION_KEY).catch(() => null);
-      if (skipped && normalizeVersionName(skipped) === normalizeVersionName(release.versionName)) {
-        return { status: 'up_to_date', installed, release };
-      }
-    }
-
+    await saveCachedAvailableUpdate(release).catch(() => {});
     return { status: 'update_available', installed, release };
   } catch (err) {
     return {
@@ -363,10 +359,47 @@ export async function checkForAppUpdate(
   }
 }
 
-export async function skipAppUpdateVersion(versionName: string): Promise<void> {
-  const normalized = normalizeVersionName(versionName);
-  if (!normalized) return;
-  await setAppSetting(UPDATER_SKIPPED_VERSION_KEY, normalized);
+export async function saveCachedAvailableUpdate(release: RemoteReleaseInfo): Promise<void> {
+  if (!release || !release.versionName || !isTrustedGitHubUrl(release.apkUrl)) return;
+  await setAppSetting(UPDATER_AVAILABLE_RELEASE_KEY, JSON.stringify(release));
+}
+
+export async function clearCachedAvailableUpdate(): Promise<void> {
+  await setAppSetting(UPDATER_AVAILABLE_RELEASE_KEY, '');
+}
+
+export async function getCachedAvailableUpdate(
+  installedOverride?: InstalledAppVersion | null
+): Promise<RemoteReleaseInfo | null> {
+  let raw: string | null = null;
+  try {
+    raw = await getAppSetting(UPDATER_AVAILABLE_RELEASE_KEY);
+  } catch {
+    return null;
+  }
+  if (!raw || !raw.trim()) return null;
+
+  let parsed: unknown = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    await clearCachedAvailableUpdate().catch(() => {});
+    return null;
+  }
+
+  const release = parseLatestManifest(parsed, GITHUB_REPO);
+  if (!release) {
+    await clearCachedAvailableUpdate().catch(() => {});
+    return null;
+  }
+
+  const installed = installedOverride ?? (await getInstalledAppVersion());
+  if (!isNewerRelease(installed, release)) {
+    await clearCachedAvailableUpdate().catch(() => {});
+    return null;
+  }
+
+  return release;
 }
 
 function normalizeDownloadState(raw: unknown): UpdateDownloadState {
