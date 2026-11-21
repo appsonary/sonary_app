@@ -1,6 +1,6 @@
 {
   "name": "sonary-pro",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "license": "GPL-3.0",
   "main": "index.ts",
   "scripts": {
