@@ -1299,7 +1299,7 @@ test('App Integration: NowPlayingModal minimizes and opens inline ArtistProfileM
       (n) =>
         n.type === 'TouchableOpacity' &&
         typeof n.props.accessibilityLabel === 'string' &&
-        n.props.accessibilityLabel.includes('Expandir player')
+        n.props.accessibilityLabel.includes('Toque para expandir player')
     );
     await actAsync(async () => {
       miniExpand.props.onPress();

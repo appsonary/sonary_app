@@ -476,7 +476,7 @@ export const SideDrawerMenu: React.FC<SideDrawerMenuProps> = ({
                     : isUpdateReady
                       ? `${updateTargetVersion ? `v${updateTargetVersion} pronta` : 'Atualização pronta'} para instalar`
                       : hasUpdate && availableUpdate
-                        ? `Nova versão v${availableUpdate.versionName} no GitHub`
+                        ? `Nova versão v${availableUpdate.versionName} disponível`
                         : 'Atualizado'}
                 </Text>
               </View>

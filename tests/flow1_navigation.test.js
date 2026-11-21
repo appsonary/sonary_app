@@ -223,6 +223,29 @@ test('Flow 1: Support tab renders Pix mock flow, updates amount chips, copies ke
     'Friendly community card must render when Pix/QR is hidden'
   );
   assert.ok(
+    supportText.includes('https://appsonary.com/'),
+    'Official Sonary website link must be displayed in SupportSection'
+  );
+  const copySiteBtn = root.find(
+    (n) =>
+      n.type === 'TouchableOpacity' &&
+      n.props.accessibilityLabel === 'Copiar link do site oficial do Sonary'
+  );
+  assert.ok(copySiteBtn, 'Copy official site link button must exist');
+  await actAsync(async () => {
+    await copySiteBtn.props.onPress();
+  });
+  const { Clipboard } = require('./mocks/reactNativeMock');
+  assert.strictEqual(
+    await Clipboard.getString(),
+    'https://appsonary.com/',
+    'Clicking copy site button must copy https://appsonary.com/ to clipboard'
+  );
+  assert.ok(
+    getAllText(root).includes('Copiado'),
+    'Copy site button must display Copiado confirmation state'
+  );
+  assert.ok(
     supportText.includes('Música em Execução'),
     'PersistentMiniPlayer must remain visible and playing on Apoiar tab'
   );

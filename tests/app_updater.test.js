@@ -238,7 +238,7 @@ test('Updater: downloadUpdateApk valida URL, SHA-256 e delega instalação ao m�
         releaseNotes: '',
         releaseUrl: 'https://github.com/appsonary/sonary_app/releases',
       }),
-    /não pertence ao GitHub/
+    /não é confiável/
   );
 
   // Hash inválido deve apagar arquivo e falhar
@@ -324,7 +324,7 @@ test('Updater UI: UpdateModal exibe notas, fluxo de atualização e não exibe b
   assert.ok(modalText.includes('v1.0.1 →'));
   assert.ok(modalText.includes('v1.2.0'));
   assert.ok(modalText.includes('NOVIDADES DA VERSÃO'));
-  assert.ok(modalText.includes('Ver no GitHub ↗'));
+  assert.ok(!/github/i.test(modalText), 'UpdateModal must not mention GitHub');
   assert.ok(modalText.includes('Melhorias de estabilidade.'));
   assert.ok(modalText.includes('Atualizar agora (40.0 MB)'));
   assert.ok(modalText.includes('Lembrar mais tarde'));

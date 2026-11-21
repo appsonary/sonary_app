@@ -39,6 +39,7 @@ import {
   ChevronUp,
   Clock,
   Heart,
+  Info,
   ListMusic,
   Maximize2,
   Menu,
@@ -75,7 +76,7 @@ import { LyricsViewer } from './LyricsViewer';
 import { ArtistProfileModal } from './ArtistProfileModal';
 import { TrackRowSkeleton } from './TrackRowSkeleton';
 import { PlayingEqualizer } from './PlayingEqualizer';
-import { AmbientGlowBackground } from './AmbientGlowBackground';
+import { AmbientGlowBackground, useArtworkMiniPlayerColor } from './AmbientGlowBackground';
 import { MarqueeText, TrackMetaRow } from './MarqueeText';
 import { getDominantTrackColor } from './PersistentMiniPlayer';
 import { ToastBanner } from './ToastBanner';
@@ -340,11 +341,17 @@ interface PlayerLyricsSectionProps {
   isLoading: boolean;
   isExpanded: boolean;
   onToggleExpand: () => void;
-  onHeaderPress: () => void;
-  onSeekTo: (seconds: number) => void;
+  onHeaderPress?: () => void;
   onRetry: () => void;
   ambientColor: string;
-  onCardLayout: (y: number) => void;
+  artworkUri?: string | null;
+  onCardLayout?: (y: number) => void;
+  variant?: 'card' | 'fullscreen';
+  isPlaying?: boolean;
+  isBuffering?: boolean;
+  onTogglePlay?: () => void;
+  onClose?: () => void;
+  scrubberSlot?: React.ReactNode;
 }
 
 const PlayerLyricsSection: React.FC<PlayerLyricsSectionProps> = memo(
@@ -357,10 +364,16 @@ const PlayerLyricsSection: React.FC<PlayerLyricsSectionProps> = memo(
     isExpanded,
     onToggleExpand,
     onHeaderPress,
-    onSeekTo,
     onRetry,
     ambientColor,
+    artworkUri,
     onCardLayout,
+    variant = 'card',
+    isPlaying,
+    isBuffering,
+    onTogglePlay,
+    onClose,
+    scrubberSlot,
   }) => {
     const progress = useProgress(250);
     const effectiveDuration =
@@ -389,10 +402,16 @@ const PlayerLyricsSection: React.FC<PlayerLyricsSectionProps> = memo(
         isExpanded={isExpanded}
         onToggleExpand={onToggleExpand}
         onHeaderPress={onHeaderPress}
-        onSeekTo={onSeekTo}
         onRetry={onRetry}
         ambientColor={ambientColor}
+        artworkUri={artworkUri}
         onCardLayout={onCardLayout}
+        variant={variant}
+        isPlaying={isPlaying}
+        isBuffering={isBuffering}
+        onTogglePlay={onTogglePlay}
+        onClose={onClose}
+        scrubberSlot={scrubberSlot}
       />
     );
   }
@@ -911,6 +930,8 @@ export default function NowPlayingModal({
   const sheetBackdropOpacity = useRef(new Animated.Value(0)).current;
   const queueSheetTranslateY = useRef(new Animated.Value(400)).current;
   const queueBackdropOpacity = useRef(new Animated.Value(0)).current;
+  const lyricsOverlayAnim = useRef(new Animated.Value(0)).current;
+  const lyricsScrubberPanRef = useRef<any>(null);
   const draggingQueueIdxRef = useRef<number | null>(null);
   const draggingQueueKeyRef = useRef<string>('');
   const queueScrollRef = useRef<any>(null);
@@ -1897,6 +1918,30 @@ export default function NowPlayingModal({
     trackModalAnim,
   ]);
 
+  const openLyricsFullscreen = useCallback(() => {
+    lyricsOverlayAnim.stopAnimation?.();
+    lyricsOverlayAnim.setValue(0);
+    setIsLyricsExpanded(true);
+    Animated.timing(lyricsOverlayAnim, {
+      toValue: 1,
+      duration: 180,
+      easing: getEaseOutCubic(Easing),
+      useNativeDriver: true,
+    }).start();
+  }, [lyricsOverlayAnim]);
+
+  const closeLyricsFullscreen = useCallback(() => {
+    lyricsOverlayAnim.stopAnimation?.();
+    Animated.timing(lyricsOverlayAnim, {
+      toValue: 0,
+      duration: 140,
+      easing: getEaseOutCubic(Easing),
+      useNativeDriver: true,
+    }).start(() => {
+      setIsLyricsExpanded(false);
+    });
+  }, [lyricsOverlayAnim]);
+
   const handleModalRequestClose = React.useCallback(() => {
     if (isArtistModalVisible) {
       setIsArtistModalVisible(false);
@@ -1915,7 +1960,7 @@ export default function NowPlayingModal({
       return;
     }
     if (isLyricsExpanded) {
-      setIsLyricsExpanded(false);
+      closeLyricsFullscreen();
       return;
     }
     closeWithSlide();
@@ -1925,6 +1970,7 @@ export default function NowPlayingModal({
     isQueueSheetVisible,
     isEditingQueue,
     isLyricsExpanded,
+    closeLyricsFullscreen,
     closeWithSlide,
   ]);
 
@@ -2031,6 +2077,7 @@ export default function NowPlayingModal({
             !isScrubbingRef.current &&
             !showContextMenu &&
             !isQueueSheetVisible &&
+            !isLyricsExpanded &&
             !isArtistModalVisible &&
             scrollYRef.current <= 14 &&
             gestureState.dy > 8 &&
@@ -2074,6 +2121,7 @@ export default function NowPlayingModal({
       isRngHandlerAttached,
       showContextMenu,
       isQueueSheetVisible,
+      isLyricsExpanded,
       isArtistModalVisible,
       updateDragTranslate,
       finishDragTranslate,
@@ -2094,6 +2142,7 @@ export default function NowPlayingModal({
             !isNativePanActiveRef.current &&
             !showContextMenu &&
             !isQueueSheetVisible &&
+            !isLyricsExpanded &&
             !isArtistModalVisible &&
             gestureState.dy > 4 &&
             Math.abs(gestureState.dy) > Math.abs(gestureState.dx)
@@ -2105,6 +2154,7 @@ export default function NowPlayingModal({
             !isNativePanActiveRef.current &&
             !showContextMenu &&
             !isQueueSheetVisible &&
+            !isLyricsExpanded &&
             !isArtistModalVisible &&
             gestureState.dy > 8 &&
             Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 1.2
@@ -2151,6 +2201,7 @@ export default function NowPlayingModal({
       isRngHandlerAttached,
       showContextMenu,
       isQueueSheetVisible,
+      isLyricsExpanded,
       isArtistModalVisible,
       updateDragTranslate,
       finishDragTranslate,
@@ -2279,14 +2330,13 @@ export default function NowPlayingModal({
   const effectiveDuration =
     track?.duration && track.duration > 0 ? track.duration : 0;
 
-  const handleLyricsSeekTo = useCallback(
-    (seconds: number) => (onSeek ? onSeek(seconds) : seekTo(seconds)),
-    [onSeek]
-  );
-
   const handleLyricsToggleExpand = useCallback(() => {
-    setIsLyricsExpanded((prev) => !prev);
-  }, []);
+    if (isLyricsExpanded) {
+      closeLyricsFullscreen();
+    } else {
+      openLyricsFullscreen();
+    }
+  }, [isLyricsExpanded, openLyricsFullscreen, closeLyricsFullscreen]);
 
   const handleLyricsHeaderPress = useCallback(() => {
     scrollToSection('lyrics');
@@ -2300,7 +2350,7 @@ export default function NowPlayingModal({
     setCardPositions((prev) => ({ ...prev, lyrics: y }));
   }, []);
 
-  const dominantBgColor = useMemo(
+  const fallbackDominantBgColor = useMemo(
     () =>
       getDominantTrackColor(
         typeof track?.artwork === 'string' ? track.artwork : undefined,
@@ -2308,6 +2358,10 @@ export default function NowPlayingModal({
         track?.title
       ),
     [track?.artwork, track?.id, track?.title]
+  );
+  const dominantBgColor = useArtworkMiniPlayerColor(
+    typeof track?.artwork === 'string' ? track.artwork : null,
+    fallbackDominantBgColor
   );
 
   useLayoutEffect(() => {
@@ -2363,6 +2417,7 @@ export default function NowPlayingModal({
               isAtTop &&
               !showContextMenu &&
               !isQueueSheetVisible &&
+              !isLyricsExpanded &&
               !isArtistModalVisible &&
               !isScrubbing
             }
@@ -2494,7 +2549,7 @@ export default function NowPlayingModal({
           <PanGestureHandler
             ref={attachRefs ? horizontalPanRef : undefined}
             testID="player-horizontal-pan"
-            enabled={attachRefs && !showContextMenu && !isQueueSheetVisible && !isArtistModalVisible && !isScrubbing}
+            enabled={attachRefs && !showContextMenu && !isQueueSheetVisible && !isLyricsExpanded && !isArtistModalVisible && !isScrubbing}
             activeOffsetX={[-15, 15]}
             failOffsetY={[-12, 12]}
             simultaneousHandlers={dismissPanRef}
@@ -2844,8 +2899,26 @@ export default function NowPlayingModal({
                             )}
                           </View>
 
-                          {/* Pílulas de Navegação Rápida de Seção */}
+                          {/* Ícones de Navegação Rápida (Relacionados à esquerda, Fila à direita) */}
                           <View style={styles.sheetTabsRow}>
+                            <TouchableOpacity
+                              style={[
+                                styles.sheetTabButton,
+                                activePlayerTab === 'related' && styles.sheetTabButtonActive,
+                              ]}
+                              onPress={() => scrollToSection('related')}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              activeOpacity={0.7}
+                              accessibilityRole="button"
+                              accessibilityLabel="Relacionados"
+                            >
+                              <Info
+                                color={activePlayerTab === 'related' ? '#FFFFFF' : '#B3B3B3'}
+                                size={21}
+                                strokeWidth={2}
+                              />
+                            </TouchableOpacity>
+
                             <TouchableOpacity
                               style={[
                                 styles.sheetTabButton,
@@ -2853,56 +2926,20 @@ export default function NowPlayingModal({
                                 styles.sheetTabButtonActive,
                               ]}
                               onPress={openQueueSheet}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              activeOpacity={0.7}
                               accessibilityRole="button"
                               accessibilityLabel="Fila"
                             >
-                              <Text
-                                style={[
-                                  styles.sheetTabText,
-                                  (isQueueSheetVisible || activePlayerTab === 'upnext') &&
-                                  styles.sheetTabTextActive,
-                                ]}
-                              >
-                                FILA
-                              </Text>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity
-                              style={[
-                                styles.sheetTabButton,
-                                activePlayerTab === 'lyrics' && styles.sheetTabButtonActive,
-                              ]}
-                              onPress={() => scrollToSection('lyrics')}
-                              accessibilityRole="button"
-                              accessibilityLabel="Letras"
-                            >
-                              <Text
-                                style={[
-                                  styles.sheetTabText,
-                                  activePlayerTab === 'lyrics' && styles.sheetTabTextActive,
-                                ]}
-                              >
-                                LETRAS
-                              </Text>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity
-                              style={[
-                                styles.sheetTabButton,
-                                activePlayerTab === 'related' && styles.sheetTabButtonActive,
-                              ]}
-                              onPress={() => scrollToSection('related')}
-                              accessibilityRole="button"
-                              accessibilityLabel="Relacionados"
-                            >
-                              <Text
-                                style={[
-                                  styles.sheetTabText,
-                                  activePlayerTab === 'related' && styles.sheetTabTextActive,
-                                ]}
-                              >
-                                RELACIONADOS
-                              </Text>
+                              <ListMusic
+                                color={
+                                  isQueueSheetVisible || activePlayerTab === 'upnext'
+                                    ? '#FFFFFF'
+                                    : '#B3B3B3'
+                                }
+                                size={22}
+                                strokeWidth={2}
+                              />
                             </TouchableOpacity>
                           </View>
                         </Animated.View>
@@ -2919,10 +2956,10 @@ export default function NowPlayingModal({
                           isExpanded={isLyricsExpanded}
                           onToggleExpand={handleLyricsToggleExpand}
                           onHeaderPress={handleLyricsHeaderPress}
-                          onSeekTo={handleLyricsSeekTo}
                           onRetry={handleLyricsRetry}
                           ambientColor={ambientColor}
                           onCardLayout={handleLyricsCardLayout}
+                          variant="card"
                         />
                       </Animated.View>
 
@@ -3217,9 +3254,6 @@ export default function NowPlayingModal({
                     </View>
                     <View style={styles.compactMiniIconBtn}>
                       <SkipForward color="#FFFFFF" size={18} fill="#FFFFFF" />
-                    </View>
-                    <View style={styles.compactMiniIconBtn}>
-                      <ChevronUp color="#B3B3B3" size={18} />
                     </View>
                   </View>
                 </View>
@@ -3691,6 +3725,55 @@ export default function NowPlayingModal({
                       </View>
                     </Animated.View>
                   </TouchableOpacity>
+                </Animated.View>
+              )}
+
+              {/* Tela Cheia Dedicada de Letras (Overlay estilo Spotify) */}
+              {!isInlinePreview && isLyricsExpanded && (
+                <Animated.View
+                  testID="fullscreen-lyrics-overlay"
+                  style={[
+                    styles.modalSheetOverlay,
+                    {
+                      opacity: lyricsOverlayAnim,
+                      transform: [
+                        {
+                          translateY: lyricsOverlayAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [48, 0],
+                            extrapolate: 'clamp',
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                >
+                  <PlayerLyricsSection
+                    track={track}
+                    fallbackPosition={fallbackPosition}
+                    lyricsPayload={lyricsPayload}
+                    syncedLyricsProp={syncedLyrics}
+                    isLoading={isLoadingLyrics}
+                    isExpanded={true}
+                    onToggleExpand={closeLyricsFullscreen}
+                    onClose={closeLyricsFullscreen}
+                    onRetry={handleLyricsRetry}
+                    ambientColor={dominantBgColor}
+                    artworkUri={typeof track.artwork === 'string' ? track.artwork : null}
+                    variant="fullscreen"
+                    isPlaying={isPlaying}
+                    isBuffering={isBuffering}
+                    onTogglePlay={onTogglePlay}
+                    scrubberSlot={
+                      <PlayerProgressSection
+                        trackDuration={effectiveDuration}
+                        fallbackPosition={fallbackPosition}
+                        onSeek={onSeek}
+                        onScrubbingChange={setIsScrubbing}
+                        scrubberPanRef={lyricsScrubberPanRef}
+                      />
+                    }
+                  />
                 </Animated.View>
               )}
 
@@ -4703,28 +4786,18 @@ const styles = StyleSheet.create({
   sheetTabsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 6,
-    gap: 8,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.06)',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
   },
   sheetTabButton: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 9999,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   sheetTabButtonActive: {
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-  },
-  sheetTabText: {
-    color: '#AAAAAA',
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.8,
-  },
-  sheetTabTextActive: {
-    color: '#FFFFFF',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
   },
   modalSheetOverlay: {
     ...StyleSheet.absoluteFillObject,

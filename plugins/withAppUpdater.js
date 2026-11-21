@@ -285,7 +285,7 @@ class SonaryUpdaterWorker(
 
     try {
       if (!isTrustedGitHubUrl(apkUrl)) {
-        failDownload(baseState, "URL de download do APK não pertence ao GitHub oficial.")
+        failDownload(baseState, "URL de download da atualização não é confiável.")
         return@withContext Result.failure()
       }
 
@@ -784,7 +784,7 @@ class SonaryUpdaterModule(
     try {
       val apkUrl = if (params.hasKey("apkUrl")) params.getString("apkUrl") ?: "" else ""
       if (!SonaryUpdaterWorker.isTrustedGitHubUrl(apkUrl)) {
-        promise.reject("E_UNTRUSTED_URL", "URL de download do APK não pertence ao GitHub oficial.")
+        promise.reject("E_UNTRUSTED_URL", "URL de download da atualização não é confiável.")
         return
       }
       val versionName = if (params.hasKey("versionName")) params.getString("versionName") ?: "" else ""

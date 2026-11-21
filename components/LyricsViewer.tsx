@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Platform,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -9,14 +11,19 @@ import {
 } from 'react-native';
 import {
   AlignLeft,
+  ChevronDown,
   ChevronUp,
   Maximize2,
-  Minimize2,
   Music2,
+  Pause,
+  Play,
   RefreshCw,
-  Sparkles,
 } from 'lucide-react-native';
 import { LyricLine, TrackLyricsPayload } from '../services/api';
+import { LyricsBackdropBackground } from './AmbientGlowBackground';
+
+const ANDROID_STATUS_BAR_HEIGHT =
+  Platform.OS === 'android' ? StatusBar.currentHeight ?? 0 : 0;
 
 export interface LyricsViewerProps {
   track: {
@@ -32,10 +39,18 @@ export interface LyricsViewerProps {
   isExpanded: boolean;
   onToggleExpand: () => void;
   onHeaderPress?: () => void;
-  onSeekTo: (seconds: number) => void;
+  /** Mantida opcional para compatibilidade; versos são somente leitura e não disparam seek. */
+  onSeekTo?: (seconds: number) => void;
   onRetry?: () => void;
   ambientColor?: string;
+  artworkUri?: string | null;
   onCardLayout?: (y: number) => void;
+  variant?: 'card' | 'fullscreen';
+  isPlaying?: boolean;
+  isBuffering?: boolean;
+  onTogglePlay?: () => void;
+  onClose?: () => void;
+  scrubberSlot?: React.ReactNode;
 }
 
 export const LyricsViewer = React.memo(function LyricsViewer({
@@ -47,16 +62,25 @@ export const LyricsViewer = React.memo(function LyricsViewer({
   isExpanded,
   onToggleExpand,
   onHeaderPress,
-  onSeekTo,
   onRetry,
   ambientColor = 'rgba(255, 255, 255, 0.06)',
+  artworkUri,
   onCardLayout,
+  variant = 'card',
+  isPlaying = false,
+  isBuffering = false,
+  onTogglePlay,
+  onClose,
+  scrubberSlot,
 }: LyricsViewerProps) {
   const [displayMode, setDisplayMode] = useState<'synced' | 'plain'>('synced');
   const [isUserScrolling, setIsUserScrolling] = useState(false);
+  const [viewportHeight, setViewportHeight] = useState(variant === 'fullscreen' ? 520 : 220);
   const lyricsScrollRef = useRef<ScrollView>(null);
   const lineOffsetsRef = useRef<Record<number, number>>({});
   const userScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const isFullscreen = variant === 'fullscreen';
 
   // Prioriza prop direta syncedLyrics (compatibilidade com suíte de testes) ou payload real da API
   const effectivePayload = useMemo<TrackLyricsPayload>(() => {
@@ -142,23 +166,228 @@ export const LyricsViewer = React.memo(function LyricsViewer({
     ) {
       return;
     }
-    const containerHeight = isExpanded ? 480 : 250;
+    const containerHeight = viewportHeight > 0 ? viewportHeight : isFullscreen ? 520 : 220;
     const measuredY = lineOffsetsRef.current[activeLyricIndex];
     const targetY =
       measuredY !== undefined
         ? Math.max(0, measuredY - containerHeight * 0.35)
-        : Math.max(0, activeLyricIndex * 42 - 60);
+        : Math.max(0, activeLyricIndex * (isFullscreen ? 54 : 38) - 60);
 
     lyricsScrollRef.current?.scrollTo?.({
       y: targetY,
       animated: true,
     });
-  }, [activeLyricIndex, displayMode, effectivePayload.type, isExpanded, isUserScrolling]);
+  }, [activeLyricIndex, displayMode, effectivePayload.type, isFullscreen, isUserScrolling, viewportHeight]);
 
-  const title = track.title || 'Faixa';
-  const artist = track.artist || 'Artista';
   const hasRealLyrics =
     effectivePayload.type !== 'none' && effectivePayload.lines.length > 0;
+
+  const renderLyricsBody = () => {
+    if (!hasRealLyrics) {
+      return (
+        <View
+          style={[
+            styles.emptyLyricsContainer,
+            isFullscreen && styles.emptyLyricsContainerFullscreen,
+          ]}
+        >
+          {isLoading ? (
+            <View style={styles.loadingLyricsBox}>
+              <ActivityIndicator color="#FFFFFF" size="small" />
+              <Text style={styles.emptyLyricsSubtitle}>
+                Buscando letras sincronizadas...
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.unavailableBox}>
+              <Music2 color="rgba(255, 255, 255, 0.55)" size={isFullscreen ? 36 : 28} />
+              <Text style={styles.emptyLyricsTitle}>
+                Letras não disponíveis para esta faixa
+              </Text>
+              <Text style={styles.emptyLyricsSubtitle}>
+                Não encontramos letra sincronizada ou em texto puro para esta música.
+              </Text>
+            </View>
+          )}
+
+          <TouchableOpacity
+            style={styles.retryLyricButton}
+            onPress={() => onRetry?.()}
+            accessibilityRole="button"
+            accessibilityLabel="Tentar carregar letras novamente"
+          >
+            <RefreshCw color="#FFFFFF" size={14} />
+            <Text style={styles.retryLyricButtonText}>Tentar novamente</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    if (displayMode === 'plain' || effectivePayload.type === 'plain') {
+      return (
+        <View style={styles.plainLyricsContainer}>
+          {effectivePayload.lines.map((line, lIdx) => (
+            <View
+              key={lIdx}
+              style={isFullscreen ? styles.fullscreenLyricLineRow : styles.lyricLineRow}
+            >
+              <Text
+                style={
+                  isFullscreen
+                    ? styles.fullscreenPlainLyricText
+                    : styles.plainLyricLineText
+                }
+              >
+                {line.text}
+              </Text>
+            </View>
+          ))}
+        </View>
+      );
+    }
+
+    return effectivePayload.lines.map((line, lIdx) => {
+      const isActive = lIdx === activeLyricIndex;
+      return (
+        <View
+          key={lIdx}
+          style={isFullscreen ? styles.fullscreenLyricLineRow : styles.lyricLineRow}
+          onLayout={(e) => {
+            const y = e?.nativeEvent?.layout?.y;
+            if (typeof y === 'number') {
+              lineOffsetsRef.current[lIdx] = y;
+            }
+          }}
+        >
+          <Text
+            style={[
+              isFullscreen ? styles.fullscreenLyricLineText : styles.lyricLineText,
+              isActive &&
+                (isFullscreen
+                  ? styles.fullscreenLyricLineTextActive
+                  : styles.lyricLineTextActive),
+            ]}
+          >
+            {line.text}
+          </Text>
+        </View>
+      );
+    });
+  };
+
+  if (isFullscreen) {
+    const handleClose = onClose ?? onToggleExpand;
+    return (
+      <View
+        style={styles.fullscreenRoot}
+        testID="fullscreen-lyrics-view"
+      >
+        <LyricsBackdropBackground artworkUri={artworkUri} />
+
+        {/* Header minimalista (sem título/artista) */}
+        <View style={styles.fullscreenHeader}>
+          <TouchableOpacity
+            style={styles.fullscreenCloseBtn}
+            onPress={handleClose}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Recolher letras"
+          >
+            <ChevronDown color="#FFFFFF" size={28} />
+          </TouchableOpacity>
+
+          {effectivePayload.type === 'synced' ? (
+            <TouchableOpacity
+              style={styles.modeToggleBtn}
+              onPress={() =>
+                setDisplayMode((prev) => (prev === 'synced' ? 'plain' : 'synced'))
+              }
+              activeOpacity={0.75}
+              accessibilityRole="button"
+              accessibilityLabel={
+                displayMode === 'synced'
+                  ? 'Alternar para texto puro'
+                  : 'Alternar para letra sincronizada'
+              }
+            >
+              <AlignLeft color="#FFFFFF" size={14} />
+              <Text style={styles.modeToggleText}>
+                {displayMode === 'synced' ? 'TEXTO' : 'SYNC'}
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.fullscreenHeaderSpacer} />
+          )}
+        </View>
+
+        {/* Corpo da letra em tela cheia (somente leitura e scroll) */}
+        <View
+          style={styles.fullscreenScrollWrapper}
+          onLayout={(e) => {
+            const h = e?.nativeEvent?.layout?.height;
+            if (typeof h === 'number' && h > 0) {
+              setViewportHeight(h);
+            }
+          }}
+        >
+          <ScrollView
+            ref={lyricsScrollRef}
+            style={styles.fullscreenScroll}
+            contentContainerStyle={styles.fullscreenScrollContent}
+            showsVerticalScrollIndicator={false}
+            onScrollBeginDrag={handleUserScrollInteraction}
+          >
+            {renderLyricsBody()}
+          </ScrollView>
+
+          {isUserScrolling &&
+            effectivePayload.type === 'synced' &&
+            displayMode === 'synced' && (
+              <TouchableOpacity
+                style={styles.floatingResumeSyncPill}
+                onPress={() => setIsUserScrolling(false)}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Retomar sincronização automática"
+              >
+                <Text style={styles.resumeSyncText}>Sincronizar</Text>
+              </TouchableOpacity>
+            )}
+        </View>
+
+        {/* Rodapé fixo estilo Spotify: Scrubber + Play/Pause */}
+        <View style={styles.fullscreenFooter}>
+          {scrubberSlot ? <View style={styles.fullscreenScrubberSlot}>{scrubberSlot}</View> : null}
+
+          {onTogglePlay ? (
+            <View style={styles.fullscreenPlayRow}>
+              <TouchableOpacity
+                style={styles.fullscreenPlayButton}
+                onPress={onTogglePlay}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Reproduzir ou pausar"
+              >
+                {isBuffering ? (
+                  <ActivityIndicator color="#030303" size="small" />
+                ) : isPlaying ? (
+                  <Pause color="#030303" size={28} fill="#030303" />
+                ) : (
+                  <Play
+                    color="#030303"
+                    size={28}
+                    fill="#030303"
+                    style={{ marginLeft: 3 }}
+                  />
+                )}
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View
@@ -170,10 +399,10 @@ export const LyricsViewer = React.memo(function LyricsViewer({
         }
       }}
     >
-      {/* Header do Card de Letras */}
+      {/* Header do Card Compacto de Letras */}
       <TouchableOpacity
         style={styles.spotifyCardHeader}
-        onPress={onHeaderPress}
+        onPress={hasRealLyrics ? onToggleExpand : onHeaderPress}
         activeOpacity={0.9}
       >
         <View style={styles.spotifyCardHeaderLeft}>
@@ -187,27 +416,6 @@ export const LyricsViewer = React.memo(function LyricsViewer({
         </View>
 
         <View style={styles.headerActionsRow}>
-          {effectivePayload.type === 'synced' && (
-            <TouchableOpacity
-              style={styles.modeToggleBtn}
-              onPress={(e) => {
-                e?.stopPropagation?.();
-                setDisplayMode((prev) => (prev === 'synced' ? 'plain' : 'synced'));
-              }}
-              accessibilityRole="button"
-              accessibilityLabel={
-                displayMode === 'synced'
-                  ? 'Alternar para texto puro'
-                  : 'Alternar para letra sincronizada'
-              }
-            >
-              <AlignLeft color="#FFFFFF" size={14} />
-              <Text style={styles.modeToggleText}>
-                {displayMode === 'synced' ? 'TEXTO' : 'SYNC'}
-              </Text>
-            </TouchableOpacity>
-          )}
-
           <TouchableOpacity
             style={styles.spotifyLyricsExpandBtn}
             onPress={(e) => {
@@ -215,151 +423,36 @@ export const LyricsViewer = React.memo(function LyricsViewer({
               onToggleExpand();
             }}
             accessibilityRole="button"
-            accessibilityLabel={isExpanded ? 'Recolher letras' : 'Expandir letras'}
+            accessibilityLabel="Expandir letras"
           >
-            {isExpanded ? (
-              <Minimize2 color="#FFFFFF" size={16} />
-            ) : (
-              <Maximize2 color="#FFFFFF" size={16} />
-            )}
-            <Text style={styles.spotifyLyricsExpandText}>
-              {isExpanded ? 'RECOLHER' : 'EXPANDIR'}
-            </Text>
+            <Maximize2 color="#FFFFFF" size={15} />
+            <Text style={styles.spotifyLyricsExpandText}>EXPANDIR</Text>
           </TouchableOpacity>
         </View>
       </TouchableOpacity>
 
-      {/* Corpo das Letras: Sincronizada, Texto Puro ou Estado Vazio Elegante */}
+      {/* Corpo compacto das letras (somente leitura; tocar no card com letra abre tela cheia) */}
       <ScrollView
         ref={lyricsScrollRef}
-        style={[
-          styles.spotifyLyricsScroll,
-          isExpanded && styles.spotifyLyricsScrollExpanded,
-        ]}
+        style={styles.spotifyLyricsScroll}
         contentContainerStyle={styles.spotifyLyricsContent}
         nestedScrollEnabled={true}
         showsVerticalScrollIndicator={false}
         onScrollBeginDrag={handleUserScrollInteraction}
       >
         {hasRealLyrics ? (
-          displayMode === 'plain' || effectivePayload.type === 'plain' ? (
-            <View style={styles.plainLyricsContainer}>
-              {effectivePayload.lines.map((line, lIdx) => (
-                <TouchableOpacity
-                  key={lIdx}
-                  style={styles.lyricLineButton}
-                  onPress={() => {
-                    if (effectivePayload.type === 'synced') {
-                      onSeekTo(line.time);
-                    }
-                  }}
-                  activeOpacity={0.85}
-                >
-                  <Text style={styles.plainLyricLineText}>{line.text}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          ) : (
-            effectivePayload.lines.map((line, lIdx) => {
-              const isActive = lIdx === activeLyricIndex;
-              return (
-                <TouchableOpacity
-                  key={lIdx}
-                  style={styles.lyricLineButton}
-                  onLayout={(e) => {
-                    const y = e?.nativeEvent?.layout?.y;
-                    if (typeof y === 'number') {
-                      lineOffsetsRef.current[lIdx] = y;
-                    }
-                  }}
-                  onPress={() => {
-                    setIsUserScrolling(false);
-                    onSeekTo(line.time);
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Text
-                    style={[
-                      styles.lyricLineText,
-                      isActive && styles.lyricLineTextActive,
-                    ]}
-                  >
-                    {line.text}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })
-          )
+          <TouchableOpacity
+            activeOpacity={0.92}
+            onPress={onToggleExpand}
+            accessibilityRole="button"
+            accessibilityLabel="Abrir letras em tela cheia"
+          >
+            {renderLyricsBody()}
+          </TouchableOpacity>
         ) : (
-          <View style={styles.emptyLyricsContainer}>
-            {/* Linha de referência da faixa atual (clicável para voltar ao início) */}
-            <TouchableOpacity
-              style={styles.lyricLineButton}
-              onPress={() => onSeekTo(0)}
-              accessibilityRole="button"
-              accessibilityLabel={`Início de ${title}`}
-            >
-              <Text style={styles.lyricLineTextActive}>
-                {`♪ ${title} • ${artist} ♪`}
-              </Text>
-            </TouchableOpacity>
-
-            {isLoading ? (
-              <View style={styles.loadingLyricsBox}>
-                <ActivityIndicator color="#FFFFFF" size="small" />
-                <Text style={styles.emptyLyricsSubtitle}>
-                  Buscando letras sincronizadas...
-                </Text>
-              </View>
-            ) : (
-              <View style={styles.unavailableBox}>
-                <Music2 color="rgba(255, 255, 255, 0.55)" size={28} />
-                <Text style={styles.emptyLyricsTitle}>
-                  Letras não disponíveis para esta faixa
-                </Text>
-                <Text style={styles.emptyLyricsSubtitle}>
-                  Não encontramos letra sincronizada ou em texto puro para esta música.
-                </Text>
-              </View>
-            )}
-
-            <TouchableOpacity
-              style={styles.retryLyricButton}
-              onPress={() => {
-                onSeekTo(currentPosition >= 0 ? currentPosition : 0);
-                onRetry?.();
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="Tentar carregar letras novamente"
-            >
-              <RefreshCw color="#FFFFFF" size={14} />
-              <Text style={styles.retryLyricButtonText}>Tentar novamente</Text>
-            </TouchableOpacity>
-          </View>
+          renderLyricsBody()
         )}
       </ScrollView>
-
-      {/* Rodapé com status e retomada de autoscroll */}
-      <View style={styles.spotifyLyricsFooter}>
-        <Sparkles color="rgba(255, 255, 255, 0.7)" size={14} />
-        <Text style={styles.spotifyLyricsFooterText}>
-          {effectivePayload.type === 'synced'
-            ? 'Sincronizado via LRCLIB • Toque em um verso para pular'
-            : effectivePayload.type === 'plain'
-            ? 'Letra em texto corrido • LRCLIB'
-            : 'LRCLIB • Verificador de Letras'}
-        </Text>
-        {isUserScrolling && effectivePayload.type === 'synced' && (
-          <TouchableOpacity
-            style={styles.resumeSyncPill}
-            onPress={() => setIsUserScrolling(false)}
-            accessibilityRole="button"
-            accessibilityLabel="Retomar sincronização automática"
-          >
-            <Text style={styles.resumeSyncText}>Sincronizar</Text>
-          </TouchableOpacity>
-        )}
-      </View>
     </View>
   );
 });
@@ -379,7 +472,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 8,
     paddingVertical: 2,
-    marginBottom: 12,
+    marginBottom: 10,
   },
   spotifyCardHeaderLeft: {
     flexDirection: 'row',
@@ -416,17 +509,17 @@ const styles = StyleSheet.create({
   modeToggleBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 5,
     backgroundColor: 'rgba(0, 0, 0, 0.28)',
-    paddingHorizontal: 9,
-    paddingVertical: 6,
-    borderRadius: 14,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.16)',
+    borderColor: 'rgba(255, 255, 255, 0.18)',
   },
   modeToggleText: {
     color: '#FFFFFF',
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '700',
     letterSpacing: 0.5,
   },
@@ -446,33 +539,27 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   spotifyLyricsScroll: {
-    height: 250,
-  },
-  spotifyLyricsScrollExpanded: {
-    height: 480,
+    height: 220,
   },
   spotifyLyricsContent: {
-    paddingVertical: 10,
+    paddingVertical: 6,
   },
-  lyricLineButton: {
-    paddingVertical: 8,
+  lyricLineRow: {
+    paddingVertical: 7,
     alignItems: 'flex-start',
   },
   lyricLineText: {
     color: 'rgba(255, 255, 255, 0.45)',
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '600',
-    lineHeight: 26,
+    lineHeight: 25,
     textAlign: 'left',
   },
   lyricLineTextActive: {
     color: '#FFFFFF',
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '800',
-    lineHeight: 30,
-    textShadowColor: 'rgba(255, 255, 255, 0.3)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 6,
+    lineHeight: 28,
   },
   plainLyricsContainer: {
     paddingVertical: 4,
@@ -485,9 +572,12 @@ const styles = StyleSheet.create({
     textAlign: 'left',
   },
   emptyLyricsContainer: {
-    paddingVertical: 12,
+    paddingVertical: 16,
     alignItems: 'flex-start',
-    gap: 10,
+    gap: 12,
+  },
+  emptyLyricsContainerFullscreen: {
+    paddingTop: 64,
   },
   loadingLyricsBox: {
     flexDirection: 'row',
@@ -496,18 +586,18 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   unavailableBox: {
-    paddingVertical: 8,
-    gap: 6,
+    paddingVertical: 6,
+    gap: 8,
   },
   emptyLyricsTitle: {
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '700',
   },
   emptyLyricsSubtitle: {
     color: 'rgba(255, 255, 255, 0.72)',
     fontSize: 13,
-    lineHeight: 18,
+    lineHeight: 19,
   },
   retryLyricButton: {
     paddingVertical: 8,
@@ -524,31 +614,108 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  spotifyLyricsFooter: {
+  // Fullscreen Spotify-style Lyrics View
+  fullscreenRoot: {
+    flex: 1,
+    paddingTop: Platform.OS === 'android' ? ANDROID_STATUS_BAR_HEIGHT + 8 : 52,
+  },
+  fullscreenHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginTop: 12,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingBottom: 10,
   },
-  spotifyLyricsFooterText: {
-    color: 'rgba(255, 255, 255, 0.65)',
-    fontSize: 11,
-    fontWeight: '500',
+  fullscreenCloseBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fullscreenHeaderSpacer: {
+    width: 44,
+    height: 44,
+  },
+  fullscreenScrollWrapper: {
+    flex: 1,
+    position: 'relative',
+  },
+  fullscreenScroll: {
     flex: 1,
   },
-  resumeSyncPill: {
+  fullscreenScrollContent: {
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    paddingBottom: 48,
+  },
+  fullscreenLyricLineRow: {
+    paddingVertical: 10,
+    alignItems: 'flex-start',
+  },
+  fullscreenLyricLineText: {
+    color: 'rgba(255, 255, 255, 0.62)',
+    fontSize: 22,
+    fontWeight: '700',
+    lineHeight: 32,
+    textAlign: 'left',
+  },
+  fullscreenLyricLineTextActive: {
+    color: '#FFFFFF',
+    fontSize: 25,
+    fontWeight: '800',
+    lineHeight: 34,
+  },
+  fullscreenPlainLyricText: {
+    color: 'rgba(255, 255, 255, 0.94)',
+    fontSize: 20,
+    fontWeight: '600',
+    lineHeight: 30,
+    textAlign: 'left',
+  },
+  floatingResumeSyncPill: {
+    position: 'absolute',
+    alignSelf: 'center',
+    bottom: 12,
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 9999,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 6,
   },
   resumeSyncText: {
     color: '#030303',
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700',
   },
+  fullscreenFooter: {
+    paddingHorizontal: 24,
+    paddingTop: 10,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 24,
+  },
+  fullscreenScrubberSlot: {
+    marginBottom: 8,
+  },
+  fullscreenPlayRow: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 4,
+  },
+  fullscreenPlayButton: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    elevation: 8,
+  },
 });
-

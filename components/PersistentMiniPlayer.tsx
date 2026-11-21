@@ -11,7 +11,6 @@ import {
 } from 'react-native';
 import { Track, useProgress } from 'react-native-track-player';
 import {
-  ChevronUp,
   Heart,
   Music2,
   Pause,
@@ -25,6 +24,7 @@ import {
   VolumeX,
 } from 'lucide-react-native';
 import { RepeatMode } from '../services/player';
+import { useArtworkMiniPlayerColor } from './AmbientGlowBackground';
 import { MarqueeText } from './MarqueeText';
 import { theme } from '../theme';
 
@@ -166,10 +166,14 @@ export const PersistentMiniPlayer: React.FC<PersistentMiniPlayerProps> = ({
     []
   );
 
-  // Cor de fundo dinâmica extraída da capa da faixa atual no padrão Spotify
-  const dominantBgColor = useMemo(
+  // Cor de fundo dinâmica extraída dos pixels reais da capa (com fallback determinístico enquanto carrega)
+  const fallbackDominantBgColor = useMemo(
     () => getDominantTrackColor(activeTrack?.artwork, activeTrack?.id, activeTrack?.title),
     [activeTrack?.artwork, activeTrack?.id, activeTrack?.title]
+  );
+  const dominantBgColor = useArtworkMiniPlayerColor(
+    typeof activeTrack?.artwork === 'string' ? activeTrack.artwork : null,
+    fallbackDominantBgColor
   );
 
   // Isolamento de re-renderização: usa useProgress local apenas se progressPct não for passado
@@ -382,20 +386,6 @@ export const PersistentMiniPlayer: React.FC<PersistentMiniPlayerProps> = ({
               </View>
             </View>
           )}
-
-          {/* Botão de Expandir Painel */}
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={(e) => {
-              e?.stopPropagation?.();
-              onExpand();
-            }}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            accessibilityRole="button"
-            accessibilityLabel="Expandir player"
-          >
-            <ChevronUp color="#B3B3B3" size={18} />
-          </TouchableOpacity>
         </View>
       </View>
 

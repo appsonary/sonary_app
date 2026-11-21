@@ -121,6 +121,10 @@ test('LRA-002: LyricsViewer eliminates static mock, supports Synced/Plain toggle
     'Old static 10-line mock must be completely eliminated'
   );
   assert.ok(
+    !emptyText.includes('Instrumental') && !emptyText.includes('Daft Punk'),
+    'Lyrics component must not repeat track title or artist'
+  );
+  assert.ok(
     emptyText.includes('Letras não disponíveis para esta faixa'),
     'Empty state message must be displayed'
   );
@@ -135,8 +139,10 @@ test('LRA-002: LyricsViewer eliminates static mock, supports Synced/Plain toggle
     retryBtn.props.onPress();
   });
   assert.strictEqual(retried, true, 'Clicking retry button must trigger onRetry');
+  assert.strictEqual(seekedTo, null, 'Clicking retry button must never seek playback');
 
-  // 2. Render with synced lyrics -> Toggle between Synced and Plain mode
+  // 2. Render in fullscreen mode with synced lyrics -> Toggle between Synced and Plain mode without seeking
+  let toggledPlay = false;
   await actAsync(async () => {
     tree.update(
       React.createElement(LyricsViewer, {
@@ -154,7 +160,12 @@ test('LRA-002: LyricsViewer eliminates static mock, supports Synced/Plain toggle
         },
         isLoading: false,
         currentPosition: 12,
-        isExpanded: false,
+        isExpanded: true,
+        variant: 'fullscreen',
+        isPlaying: true,
+        onTogglePlay: () => {
+          toggledPlay = true;
+        },
         onToggleExpand: () => {},
         onSeekTo: (sec) => {
           seekedTo = sec;
@@ -165,13 +176,17 @@ test('LRA-002: LyricsViewer eliminates static mock, supports Synced/Plain toggle
 
   const syncedText = getAllText(tree.root);
   assert.ok(syncedText.includes('Like the legend of the phoenix'));
+  assert.ok(
+    !syncedText.includes('Get Lucky') && !syncedText.includes('Daft Punk'),
+    'Fullscreen lyrics must not repeat track title or artist'
+  );
 
   const toggleModeBtn = tree.root.find(
     (n) =>
       n.type === 'TouchableOpacity' &&
       n.props.accessibilityLabel === 'Alternar para texto puro'
   );
-  assert.ok(toggleModeBtn, 'Toggle button for Plain/Synced mode must exist');
+  assert.ok(toggleModeBtn, 'Toggle button for Plain/Synced mode must exist in fullscreen');
   await actAsync(async () => {
     toggleModeBtn.props.onPress({ stopPropagation: () => {} });
   });
@@ -182,6 +197,18 @@ test('LRA-002: LyricsViewer eliminates static mock, supports Synced/Plain toggle
       n.props.accessibilityLabel === 'Alternar para letra sincronizada'
   );
   assert.ok(syncBackBtn, 'Should switch to plain mode and allow switching back to synced');
+
+  const playPauseBtn = tree.root.find(
+    (n) =>
+      n.type === 'TouchableOpacity' &&
+      n.props.accessibilityLabel === 'Reproduzir ou pausar'
+  );
+  assert.ok(playPauseBtn, 'Fullscreen lyrics footer must provide Play/Pause button');
+  await actAsync(async () => {
+    playPauseBtn.props.onPress();
+  });
+  assert.strictEqual(toggledPlay, true, 'Fullscreen Play/Pause button must invoke onTogglePlay');
+  assert.strictEqual(seekedTo, null, 'Interacting with lyrics must never trigger seek');
 });
 
 test('LRA-003 & LRA-004: getTrackRadio extracts continuationToken and replaceUpcomingQueue preserves active track', async () => {
@@ -573,5 +600,67 @@ test('LRA-007: getRelatedTracks sends RDAMVM playlistId, extracts real artist fr
   assert.strictEqual(fallbackRelated.length, 1);
   assert.strictEqual(fallbackRelated[0].id, 'lt_crash_out');
 });
+
+test('LRA-008: extractLyricsPaletteFromPixels extracts real artwork hue, ignores white background to pick accent color, and enforces WCAG AAA contrast for white text', () => {
+  const {
+    extractLyricsPaletteFromPixels,
+    DEFAULT_LYRICS_PALETTE,
+  } = require('../components/AmbientGlowBackground');
+
+  const hexToRgb = (hex) => [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ];
+  const contrastAgainstWhite = (hex) => {
+    const [r, g, b] = hexToRgb(hex).map((c) => {
+      const s = c / 255;
+      return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    });
+    const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    return 1.05 / (lum + 0.05);
+  };
+  const makeSolid = (r, g, b, count = 64) => {
+    const arr = new Uint8Array(count * 4);
+    for (let i = 0; i < count; i++) {
+      arr[i * 4] = r;
+      arr[i * 4 + 1] = g;
+      arr[i * 4 + 2] = b;
+      arr[i * 4 + 3] = 255;
+    }
+    return arr;
+  };
+
+  // 1. Vibrant blue artwork -> blue dominant backdrop (B > R and B > G)
+  const bluePalette = extractLyricsPaletteFromPixels(makeSolid(30, 110, 220));
+  const [br, bg, bb] = hexToRgb(bluePalette.topColor);
+  assert.ok(bb > br && bb > bg, `Expected blue-dominant topColor, got ${bluePalette.topColor}`);
+  assert.ok(contrastAgainstWhite(bluePalette.topColor) >= 7.0, 'Blue palette must keep >= 7:1 contrast');
+
+  // 2. Mostly white cover (80% white) with 20% teal accent -> picks teal instead of washing out or randomizing
+  const whiteWithTeal = makeSolid(250, 250, 248, 100);
+  for (let i = 0; i < 20; i++) {
+    whiteWithTeal[i * 4] = 20;
+    whiteWithTeal[i * 4 + 1] = 175;
+    whiteWithTeal[i * 4 + 2] = 165;
+  }
+  const tealPalette = extractLyricsPaletteFromPixels(whiteWithTeal);
+  const [tr, tg, tb] = hexToRgb(tealPalette.topColor);
+  assert.ok(tg > tr && tb > tr, `Expected teal-dominant topColor from white cover, got ${tealPalette.topColor}`);
+  assert.ok(contrastAgainstWhite(tealPalette.topColor) >= 7.0, 'White+teal palette must keep >= 7:1 contrast');
+
+  // 3. Pure white monochrome cover -> falls back to neutral dark slate (no random burgundy/hue)
+  const whitePalette = extractLyricsPaletteFromPixels(makeSolid(255, 255, 255));
+  assert.deepStrictEqual(whitePalette, DEFAULT_LYRICS_PALETTE);
+  assert.ok(contrastAgainstWhite(whitePalette.topColor) >= 7.0);
+
+  // 4. Bright neon yellow cover -> clamped dark enough for >= 7:1 contrast with white lyrics
+  const yellowPalette = extractLyricsPaletteFromPixels(makeSolid(255, 245, 40));
+  assert.ok(
+    contrastAgainstWhite(yellowPalette.topColor) >= 7.0,
+    `Bright yellow cover must be darkened for white text readability (got ${yellowPalette.topColor}, contrast=${contrastAgainstWhite(yellowPalette.topColor).toFixed(2)})`
+  );
+});
+
 
 

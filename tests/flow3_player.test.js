@@ -1095,7 +1095,7 @@ test('Flow 3: Swiping right in NowPlayingModal goes to previous track even after
 
   // Open NowPlayingModal by tapping the mini player
   const miniPlayerBtn = root.find(
-    (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel && n.props.accessibilityLabel.includes('Expandir player')
+    (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel && n.props.accessibilityLabel.includes('Toque para expandir player')
   );
   assert.ok(miniPlayerBtn, 'Mini player expand button must exist');
   await actAsync(async () => {

@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Animated,
   AppState,
-  Linking,
   Modal,
   ScrollView,
   StyleSheet,
@@ -397,20 +396,6 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
   const sizeLabel = formatMegabytes(effectiveRelease?.sizeBytes);
   const parsedNotes = effectiveRelease ? parseReleaseNotes(effectiveRelease.releaseNotes) : [];
 
-  const handleOpenReleaseUrl = async () => {
-    const url = effectiveRelease?.releaseUrl;
-    if (!url) return;
-    try {
-      const canOpen =
-        typeof Linking.canOpenURL === 'function' ? await Linking.canOpenURL(url) : true;
-      if (canOpen && typeof Linking.openURL === 'function') {
-        await Linking.openURL(url);
-      }
-    } catch {
-      // Ignora falha ao abrir navegador externo
-    }
-  };
-
   return (
     <Modal
       visible={visible}
@@ -506,17 +491,6 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                 <View style={styles.notesCard}>
                   <View style={styles.notesCardHeader}>
                     <Text style={styles.notesLabel}>NOVIDADES DA VERSÃO</Text>
-                    {!!effectiveRelease.releaseUrl && (
-                      <TouchableOpacity
-                        onPress={() => void handleOpenReleaseUrl()}
-                        activeOpacity={0.75}
-                        accessibilityRole="link"
-                        accessibilityLabel="Ver novidades no GitHub"
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      >
-                        <Text style={styles.githubLink}>Ver no GitHub ↗</Text>
-                      </TouchableOpacity>
-                    )}
                   </View>
 
                   <ScrollView
@@ -547,7 +521,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                     <View style={styles.progressHeader}>
                       <ActivityIndicator size="small" color="#E11D48" />
                       <Text style={styles.statusText}>
-                        {`Baixando APK oficial do GitHub... ${progress}%`}
+                        {`Baixando atualização... ${progress}%`}
                       </Text>
                     </View>
                     <View style={styles.progressTrack}>
@@ -674,8 +648,8 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                           {installedVersion
                             ? `Versão atual: v${installedVersion.versionName}`
                             : isChecking
-                              ? 'Consultando GitHub Releases'
-                              : 'Não foi possível consultar o GitHub'}
+                              ? 'Verificando atualizações'
+                              : 'Não foi possível verificar atualizações'}
                         </Text>
                       </View>
                     </View>
@@ -685,7 +659,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                         <View style={styles.progressHeader}>
                           <ActivityIndicator size="small" color="#E11D48" />
                           <Text style={styles.statusText}>
-                            Buscando a versão mais recente no GitHub...
+                            Buscando a versão mais recente...
                           </Text>
                         </View>
                       </View>
@@ -979,11 +953,6 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     fontWeight: '600',
     letterSpacing: 0.6,
-  },
-  githubLink: {
-    color: '#B8B8C2',
-    fontSize: 12.5,
-    fontWeight: '500',
   },
   notesScroll: {
     maxHeight: 164,

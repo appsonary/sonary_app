@@ -61,6 +61,7 @@ const VectorIconsProxy = new Proxy(
   }
 );
 
+const sharedSkiaNamespace = {};
 const originalLoad = Module._load;
 
 Module._load = function (request, parent, isMain) {
@@ -105,6 +106,7 @@ Module._load = function (request, parent, isMain) {
       Blur: createSkiaComp('Blur'),
       Rect: createSkiaComp('Rect'),
       LinearGradient: createSkiaComp('LinearGradient'),
+      Skia: sharedSkiaNamespace,
       useImage: (uri) => React.useMemo(() => (uri ? { __mockSkImage: true, uri } : null), [uri]),
       vec: (x = 0, y = 0) => ({ x, y }),
     };

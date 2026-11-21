@@ -9,7 +9,7 @@ import {
   View,
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
-import { Check, Copy } from 'lucide-react-native';
+import { Check, Copy, Globe } from 'lucide-react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { theme } from '../theme';
 import {
@@ -26,6 +26,7 @@ import {
 import { snoozeSupportNotificationsUntilNextMonth } from '../services/database';
 
 export const SHOW_PIX_SUPPORT = false;
+export const SONARY_OFFICIAL_SITE_URL = 'https://appsonary.com/';
 
 export interface SupportSectionProps {
   onShowToast?: (message: string) => void;
@@ -41,12 +42,17 @@ export const SupportSection: React.FC<SupportSectionProps> = ({
   const [selectedPreset, setSelectedPreset] = useState<PixPresetId>('5');
   const [customAmountText, setCustomAmountText] = useState('');
   const [copied, setCopied] = useState(false);
+  const [siteLinkCopied, setSiteLinkCopied] = useState(false);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const siteCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     return () => {
       if (copyTimerRef.current) {
         clearTimeout(copyTimerRef.current);
+      }
+      if (siteCopyTimerRef.current) {
+        clearTimeout(siteCopyTimerRef.current);
       }
     };
   }, []);
@@ -100,6 +106,23 @@ export const SupportSection: React.FC<SupportSectionProps> = ({
       copyTimerRef.current = timer;
     }
     onShowToast?.(toastMessage);
+  };
+
+  const handleCopySiteUrl = async () => {
+    await copyTextToClipboard(SONARY_OFFICIAL_SITE_URL);
+    setSiteLinkCopied(true);
+    if (siteCopyTimerRef.current) {
+      clearTimeout(siteCopyTimerRef.current);
+    }
+    const timer = setTimeout(() => {
+      setSiteLinkCopied(false);
+      siteCopyTimerRef.current = null;
+    }, 2000);
+    if (timer && typeof (timer as any).unref === 'function') {
+      (timer as any).unref();
+    }
+    siteCopyTimerRef.current = timer;
+    onShowToast?.('Link do site copiado!');
   };
 
   return (
@@ -250,6 +273,42 @@ export const SupportSection: React.FC<SupportSectionProps> = ({
               Indique para amigos e familiares — cada nova pessoa ouvindo ajuda
               a manter o projeto vivo, gratuito e sem anúncios.
             </Text>
+            <View style={styles.siteLinkBox} testID="support-site-link-box">
+              <View style={styles.siteLinkLeft}>
+                <Globe color={theme.colors.textSecondary} size={16} strokeWidth={2} />
+                <Text
+                  style={styles.siteLinkText}
+                  numberOfLines={1}
+                  selectable={true}
+                >
+                  {SONARY_OFFICIAL_SITE_URL}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[
+                  styles.siteCopyButton,
+                  siteLinkCopied && styles.siteCopyButtonCopied,
+                ]}
+                onPress={handleCopySiteUrl}
+                activeOpacity={0.85}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  siteLinkCopied
+                    ? 'Link do site oficial copiado'
+                    : 'Copiar link do site oficial do Sonary'
+                }
+              >
+                {siteLinkCopied ? (
+                  <Check color="#FFFFFF" size={15} strokeWidth={2.5} />
+                ) : (
+                  <Copy color="#FFFFFF" size={15} strokeWidth={2.2} />
+                )}
+                <Text style={styles.siteCopyButtonText}>
+                  {siteLinkCopied ? 'Copiado' : 'Copiar'}
+                </Text>
+              </TouchableOpacity>
+            </View>
             <View style={styles.communityPill}>
               <Text style={styles.communityPillText}>
                 Obrigado por fazer parte disso ❤️
@@ -461,6 +520,52 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     color: theme.colors.textSecondary,
     textAlign: 'center',
+  },
+  siteLinkBox: {
+    width: '100%',
+    marginTop: 6,
+    backgroundColor: '#0B0B0B',
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: 12,
+    paddingLeft: 14,
+    paddingRight: 6,
+    paddingVertical: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  siteLinkLeft: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  siteLinkText: {
+    flex: 1,
+    fontSize: 13.5,
+    fontWeight: theme.typography.fontWeight.semiBold,
+    color: theme.colors.textPrimary,
+  },
+  siteCopyButton: {
+    minHeight: 36,
+    paddingHorizontal: 14,
+    borderRadius: 9,
+    backgroundColor: theme.colors.brandPrimary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  siteCopyButtonCopied: {
+    backgroundColor: theme.colors.success,
+  },
+  siteCopyButtonText: {
+    fontSize: 13,
+    fontWeight: theme.typography.fontWeight.bold,
+    color: theme.colors.textPrimary,
   },
   communityPill: {
     marginTop: 6,

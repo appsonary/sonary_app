@@ -82,7 +82,8 @@ test('SideDrawerMenu: hidden when closed, renders editorial layout, badges, and 
     assert.ok(text.includes('Modo Desenvolvedor'));
     assert.strictEqual(text.includes('Novidades'), false, 'Novidades must be removed from SideDrawerMenu');
     assert.strictEqual(text.includes('Verificar'), false, 'Verificar must be removed from SideDrawerMenu');
-    assert.ok(text.includes('Nova versão v1.0.5 no GitHub'), 'Must display available GitHub version in footer');
+    assert.ok(text.includes('Nova versão v1.0.5 disponível'), 'Must display available version in footer without mentioning GitHub');
+    assert.strictEqual(/github/i.test(text), false, 'SideDrawerMenu must not mention GitHub');
     assert.ok(text.includes('Atualizar'), 'Must display Atualizar CTA when update is available');
 
     const header = root.find(

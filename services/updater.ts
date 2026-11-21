@@ -330,7 +330,7 @@ export async function checkForAppUpdate(
         return {
           status: 'error',
           installed,
-          error: `GitHub retornou HTTP ${apiRes.status}.`,
+          error: `Servidor de atualizações retornou HTTP ${apiRes.status}.`,
         };
       }
       release = parseGitHubApiRelease(apiRes.data, repo);
@@ -497,7 +497,7 @@ export function subscribeUpdateDownload(
 
 export async function startBackgroundUpdateDownload(release: RemoteReleaseInfo): Promise<void> {
   if (!isTrustedGitHubUrl(release.apkUrl)) {
-    throw new Error('URL de download do APK não pertence ao GitHub oficial.');
+    throw new Error('URL de download da atualização não é confiável.');
   }
   const nativeMod = getNativeUpdater();
   if (!nativeMod?.startBackgroundDownload) {
@@ -602,7 +602,7 @@ export async function downloadUpdateApk(
   }
 ): Promise<DownloadUpdateResult> {
   if (!isTrustedGitHubUrl(release.apkUrl)) {
-    throw new Error('URL de download do APK não pertence ao GitHub oficial.');
+    throw new Error('URL de download da atualização não é confiável.');
   }
 
   const updatesDir = getUpdatesDirectory();

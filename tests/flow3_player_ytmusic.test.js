@@ -139,9 +139,14 @@ test('YouTube Music Player: Rapid open/close of Now Playing drawer is interrupti
   assert.strictEqual(mockPlayer.state, State.Playing);
   assert.strictEqual(mockPlayer.getActiveTrack().id, 'yt_track_1');
 
-  // Find expand button (ChevronUp) in mini player
-  const expandBtn = findButtonByIcon(root, 'ChevronUp');
-  assert.ok(expandBtn, 'Mini-player must have ChevronUp expand button');
+  // Find mini player card (ChevronUp button removed; card itself expands player)
+  assert.strictEqual(findButtonByIcon(root, 'ChevronUp'), null, 'Mini-player must not render ChevronUp button');
+  const expandBtn = root.find(
+    (n) =>
+      n.type === 'TouchableOpacity' &&
+      String(n.props.accessibilityLabel || '').includes('Toque para expandir player')
+  );
+  assert.ok(expandBtn, 'Mini-player card must be clickable to expand');
 
   // Rapidly toggle Now Playing open and closed 10 times in quick succession
   for (let i = 0; i < 10; i++) {
@@ -263,7 +268,11 @@ test('YouTube Music Player: Global media shortcuts (Space/K, Seek, Mute, Next/Pr
   assert.strictEqual(mockPlayer.getActiveTrack().id, 'yt_track_1', 'p key should skip to previous track');
 
   // 10. Escape closes Now Playing modal
-  const expandBtn = findButtonByIcon(root, 'ChevronUp');
+  const expandBtn = root.find(
+    (n) =>
+      n.type === 'TouchableOpacity' &&
+      String(n.props.accessibilityLabel || '').includes('Toque para expandir player')
+  );
   await actAsync(async () => {
     expandBtn.props.onPress({ stopPropagation: () => {} });
   });
@@ -348,12 +357,16 @@ test('YouTube Music Player: NowPlayingModal 3-Tab system (FILA, LETRAS, RELACION
 
   const modalRoot = modalTree.root;
 
-  // 1. Tab "FILA" -> opens Spotify-style queue sheet
+  // 1. Icon-only "Fila" button on the right -> opens Spotify-style queue sheet
   const queueTabBtn = modalRoot.find(
     (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Fila'
   );
-  assert.ok(queueTabBtn, 'Fila tab button must exist');
-  assert.ok(getAllText(queueTabBtn).includes('FILA'), 'Tab text must be FILA');
+  assert.ok(queueTabBtn, 'Fila icon button must exist');
+  assert.strictEqual(getAllText(queueTabBtn), '', 'Fila button must be icon-only without text');
+  assert.ok(
+    queueTabBtn.findAll((n) => n.type === 'LucideIcon' && n.props.name === 'ListMusic').length === 1,
+    'Fila button must render ListMusic icon'
+  );
 
   await actAsync(async () => {
     queueTabBtn.props.onPress();
@@ -419,38 +432,66 @@ test('YouTube Music Player: NowPlayingModal 3-Tab system (FILA, LETRAS, RELACION
     closeQueueBtn.props.onPress();
   });
 
-  // 2. Tab "LETRAS"
-  const lyricsTabBtn = modalRoot.find(
+  // 2. "Letras" tab button is removed; lyrics are read-only (no accidental seek) and open fullscreen on Expand
+  const lyricsTabBtns = modalRoot.findAll(
     (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Letras'
   );
-  assert.ok(lyricsTabBtn, 'Letras tab button must exist');
+  assert.strictEqual(lyricsTabBtns.length, 0, 'Letras button must be removed from the quick-action bar');
 
-  await actAsync(async () => {
-    lyricsTabBtn.props.onPress();
-  });
-
-  textContent = getAllText(modalRoot);
-  // Default lyrics should contain generated song lines
-  assert.ok(textContent.includes('Starboy'), 'Lyrics should reference track title');
-
-  // Find lyric lines
-  const lyricButtons = modalRoot.findAll(
-    (n) => n.type === 'TouchableOpacity' && n.props.style && n.props.style.paddingVertical
+  const positionBefore = mockPlayer.position;
+  const expandLyricsBtn = modalRoot.find(
+    (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Expandir letras'
   );
-  assert.ok(lyricButtons.length > 0, 'Lyrics lines buttons must be rendered');
-
-  // Click a lyric line to seek
   await actAsync(async () => {
-    lyricButtons[1].props.onPress();
+    expandLyricsBtn.props.onPress();
   });
-  // Verify seekTo was called
-  assert.ok(mockPlayer.position >= 0, 'Clicking lyrics line should update position');
+  assert.ok(
+    modalRoot.findAllByProps({ testID: 'fullscreen-lyrics-overlay' }).length > 0,
+    'Expanding lyrics must mount dedicated fullscreen-lyrics-overlay'
+  );
+  assert.strictEqual(
+    mockPlayer.position,
+    positionBefore,
+    'Opening fullscreen lyrics must not change playback position'
+  );
+  const collapseLyricsBtn = modalRoot.find(
+    (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Recolher letras'
+  );
+  await actAsync(async () => {
+    collapseLyricsBtn.props.onPress();
+  });
+  assert.strictEqual(
+    modalRoot.findAllByProps({ testID: 'fullscreen-lyrics-overlay' }).length,
+    0,
+    'Closing fullscreen lyrics must unmount fullscreen-lyrics-overlay'
+  );
 
-  // 3. Tab "RELACIONADOS"
+  // 3. Icon-only "Relacionados" button (Info icon) positioned before "Fila" (right side)
   const relatedTabBtn = modalRoot.find(
     (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Relacionados'
   );
-  assert.ok(relatedTabBtn, 'Relacionados tab button must exist');
+  assert.ok(relatedTabBtn, 'Relacionados icon button must exist');
+  assert.strictEqual(getAllText(relatedTabBtn), '', 'Relacionados button must be icon-only without text');
+  assert.ok(
+    relatedTabBtn.findAll((n) => n.type === 'LucideIcon' && n.props.name === 'Info').length === 1,
+    'Relacionados button must render Info icon'
+  );
+  let tabsRowNode = relatedTabBtn.parent;
+  while (tabsRowNode && tabsRowNode.type !== 'View') {
+    tabsRowNode = tabsRowNode.parent;
+  }
+  const rowButtons = tabsRowNode.findAllByType('TouchableOpacity');
+  assert.strictEqual(rowButtons.length, 2, 'Quick-action row must contain only Relacionados and Fila icons');
+  assert.strictEqual(
+    rowButtons[0].props.accessibilityLabel,
+    'Relacionados',
+    'Relacionados icon button must be on the left side of the row'
+  );
+  assert.strictEqual(
+    rowButtons[1].props.accessibilityLabel,
+    'Fila',
+    'Fila icon button must be positioned on the right side of the row'
+  );
 
   await actAsync(async () => {
     relatedTabBtn.props.onPress();
@@ -678,15 +719,7 @@ test('YouTube Music Player: NowPlayingModal Up Next queue remove and reorder but
     closeQueueBtn.props.onPress();
   });
 
-  // 2. Switch to 'LETRAS' tab
-  const lyricsTabBtn = root.find(
-    (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Letras'
-  );
-  assert.ok(lyricsTabBtn);
-  await actAsync(async () => {
-    lyricsTabBtn.props.onPress();
-  });
-
+  // 2. Verify custom LRCLIB lyrics are rendered in the Lyrics card (no separate Letras tab button)
   const lyricsText = getAllText(root);
   assert.ok(lyricsText.includes('P1 cleaner than your church shoes'), 'Custom LRCLIB lyrics should be rendered');
 });
@@ -734,9 +767,15 @@ test('Spotify-Style Now Playing: Scroll feed renders Lyrics Card, About Artist, 
   assert.ok(initialText.includes('Letras'), 'Lyrics card header must exist');
   assert.ok(initialText.includes('Sobre o artista'), 'About the artist card must exist');
   assert.ok(!initialText.includes('A Seguir • Fila'), 'Inline bottom queue card should not render in scroll feed');
-  assert.ok(initialText.includes('FILA'), 'Queue tab button must read FILA');
+  assert.ok(!initialText.includes('FILA'), 'Queue button should be icon-only (no FILA text)');
+  assert.ok(!initialText.includes('LETRAS'), 'Letras tab button should be removed');
+  assert.ok(!initialText.includes('RELACIONADOS'), 'Relacionados button should be icon-only (no RELACIONADOS text)');
+  assert.ok(
+    root.find((n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Fila'),
+    'Queue icon button must exist'
+  );
 
-  // 2. Verify Lyrics Expand / Collapse toggle
+  // 2. Verify Lyrics Expand opens dedicated fullscreen overlay with Recolher letras button
   const expandBtn = root.find(
     (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Expandir letras'
   );
@@ -747,11 +786,23 @@ test('Spotify-Style Now Playing: Scroll feed renders Lyrics Card, About Artist, 
     expandBtn.props.onPress();
   });
 
+  assert.ok(
+    root.findAllByProps({ testID: 'fullscreen-lyrics-overlay' }).length > 0,
+    'Fullscreen lyrics overlay should mount when expanded'
+  );
   const collapseBtn = root.find(
     (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Recolher letras'
   );
-  assert.ok(collapseBtn, 'Collapse lyrics button should exist after expanding');
-  assert.ok(getAllText(collapseBtn).includes('RECOLHER'));
+  assert.ok(collapseBtn, 'Collapse lyrics button (ChevronDown) should exist in fullscreen view');
+
+  await actAsync(async () => {
+    collapseBtn.props.onPress();
+  });
+  assert.strictEqual(
+    root.findAllByProps({ testID: 'fullscreen-lyrics-overlay' }).length,
+    0,
+    'Fullscreen lyrics overlay should unmount after pressing Recolher letras'
+  );
 });
 
 test('YouTube Music Player: Queue drag auto-scrolls up and down on long queue near viewport edges', async () => {
@@ -967,7 +1018,11 @@ test('YouTube Music Player: Toggling Aleatório mid-queue only shuffles upcoming
   const root = tree.root;
 
   // Open Queue sheet via mini-player -> Expand -> Fila
-  const expandBtn = findButtonByIcon(root, 'ChevronUp');
+  const expandBtn = root.find(
+    (n) =>
+      n.type === 'TouchableOpacity' &&
+      String(n.props.accessibilityLabel || '').includes('Toque para expandir player')
+  );
   await actAsync(async () => {
     expandBtn.props.onPress({ stopPropagation: () => {} });
   });
@@ -1127,7 +1182,11 @@ test('App UI: Adding recommended track to queue inside open NowPlayingModal disp
       starboyCard.props.onPress();
     });
 
-    const miniExpandBtn = findButtonByIcon(root, 'ChevronUp');
+    const miniExpandBtn = root.find(
+      (n) =>
+        n.type === 'TouchableOpacity' &&
+        String(n.props.accessibilityLabel || '').includes('Toque para expandir player')
+    );
     await actAsync(async () => {
       miniExpandBtn.props.onPress({ stopPropagation: () => {} });
     });
@@ -1599,7 +1658,11 @@ test('YT Music Morph: Snap-back below threshold and 10x rapid-tap async interrup
   };
 
   try {
-    const expandBtn = findButtonByIcon(root, 'ChevronUp');
+    const expandBtn = root.find(
+    (n) =>
+      n.type === 'TouchableOpacity' &&
+      String(n.props.accessibilityLabel || '').includes('Toque para expandir player')
+  );
     for (let i = 0; i < 10; i++) {
       await actAsync(async () => {
         expandBtn.props.onPress({ stopPropagation: () => {} });
@@ -1713,7 +1776,11 @@ test('YT Music Morph: BEGAN->FAILED tap during enter/close does not freeze, and 
     root.findAll((n) => n.type === 'View' && n.props.testID === 'now-playing-modal-content').length;
 
   try {
-    const expandBtn = findButtonByIcon(root, 'ChevronUp');
+    const expandBtn = root.find(
+    (n) =>
+      n.type === 'TouchableOpacity' &&
+      String(n.props.accessibilityLabel || '').includes('Toque para expandir player')
+  );
 
     // (a) BEGAN -> FAILED during animateToExpanded() must settle headerToolbar opacity to 1
     await actAsync(async () => {
