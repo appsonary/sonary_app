@@ -44,6 +44,7 @@ import {
 import { PersistentMiniPlayer } from './components/PersistentMiniPlayer';
 import { YouTubeMusicSidebar } from './components/YouTubeMusicSidebar';
 import { QuickPicksSection } from './components/QuickPicksSection';
+import { DirectLinkResultCard } from './components/DirectLinkResultCard';
 import { ArtistResultsSection } from './components/ArtistResultsSection';
 import { ArtistProfileModal } from './components/ArtistProfileModal';
 import { AtmosphericGradient } from './components/AtmosphericGradient';
@@ -85,6 +86,7 @@ import {
   ArtistProfile,
   ArtistSearchResult,
   TrackSummary,
+  extractYouTubeUrlVideoId,
   searchTracksPage,
   getAudioStream,
   AllInstancesFailedError,
@@ -1942,9 +1944,11 @@ export default function App() {
       setQuery(overrideQuery);
     }
 
-    recordSearchHistory(trimmed)
-      .then(setRecentSearchQueries)
-      .catch(() => { });
+    if (!extractYouTubeUrlVideoId(trimmed)) {
+      recordSearchHistory(trimmed)
+        .then(setRecentSearchQueries)
+        .catch(() => { });
+    }
 
     setIsSearching(true);
     setIsLoadingMoreSearch(false);
@@ -2829,15 +2833,48 @@ export default function App() {
                       />
 
                       {/* Lista de Resultados Online / Descoberta (oculta durante o modo busca focado) */}
-                      {!isSearchFocused && (
+                      {!isSearchFocused && (() => {
+                        const directLinkVideoId = lastSearchedQuery
+                          ? extractYouTubeUrlVideoId(lastSearchedQuery)
+                          : null;
+                        const directLinkTrack =
+                          directLinkVideoId && searchResults[0]?.id === directLinkVideoId
+                            ? searchResults[0]
+                            : null;
+                        const displayedSearchTracks = directLinkTrack
+                          ? searchResults.slice(1)
+                          : searchResults;
+
+                        return (
                         <FlatList
-                          data={searchResults}
+                          data={displayedSearchTracks}
                           keyExtractor={(item) => item.id}
                           keyboardShouldPersistTaps="handled"
                           contentContainerStyle={styles.listContent}
                           ListHeaderComponent={
                             searchResults.length > 0 || searchArtistsResults.length > 0 ? (
                               <View style={styles.searchResultsHeaderContainer}>
+                                {directLinkTrack ? (
+                                  <>
+                                    <DirectLinkResultCard
+                                      track={directLinkTrack}
+                                      isActive={activeTrack?.id === directLinkTrack.id}
+                                      isPlaying={isPlaying}
+                                      isDownloaded={downloadedIds.has(directLinkTrack.id)}
+                                      isDownloading={downloadingId === directLinkTrack.id}
+                                      isQueued={queuedDownloadIds.has(directLinkTrack.id)}
+                                      downloadProgress={downloadProgress}
+                                      onPlay={() => handleSelectTrack(directLinkTrack, 0)}
+                                      onTogglePlay={handleTogglePlay}
+                                      onPlayNext={() => handlePlayNext(directLinkTrack)}
+                                      onAddToPlaylist={() => handleOpenAddToPlaylist(directLinkTrack)}
+                                      onDownload={() => handleDownload(directLinkTrack)}
+                                    />
+                                    {(searchArtistsResults.length > 0 || displayedSearchTracks.length > 0) ? (
+                                      <View style={styles.resultsDivider} />
+                                    ) : null}
+                                  </>
+                                ) : null}
                                 <ArtistResultsSection
                                   artists={searchArtistsResults}
                                   onSelectArtist={(artist) =>
@@ -2849,10 +2886,10 @@ export default function App() {
                                     })
                                   }
                                 />
-                                {searchResults.length > 0 && (
+                                {displayedSearchTracks.length > 0 && (
                                   <>
                                     <QuickPicksSection
-                                      tracks={searchResults.slice(0, 8).map((t) => ({
+                                      tracks={displayedSearchTracks.slice(0, 8).map((t) => ({
                                         id: t.id,
                                         title: t.title,
                                         artist: t.artist,
@@ -2864,20 +2901,22 @@ export default function App() {
                                       isPlaying={isPlaying}
                                       downloadedTrackIds={downloadedIds}
                                       onSelectTrack={(track, index) => {
-                                        const found = searchResults.find((r) => r.id === track.id);
+                                        const found = displayedSearchTracks.find((r) => r.id === track.id);
                                         if (found) handleSelectTrack(found, index);
                                       }}
                                       onAddToPlaylist={(track) => {
-                                        const found = searchResults.find((r) => r.id === track.id);
+                                        const found = displayedSearchTracks.find((r) => r.id === track.id);
                                         if (found) handleOpenAddToPlaylist(found);
                                       }}
                                     />
                                     <View style={styles.resultsDivider} />
                                     <View style={styles.resultsHeaderRow}>
-                                      <Text style={styles.resultsHeaderTitle}>Músicas e Resultados</Text>
+                                      <Text style={styles.resultsHeaderTitle}>
+                                        {directLinkTrack ? 'Faixas Relacionadas' : 'Músicas e Resultados'}
+                                      </Text>
                                       <View style={styles.resultsBadge}>
                                         <Text style={styles.resultsBadgeText}>
-                                          {`${searchResults.length} faixas`}
+                                          {`${displayedSearchTracks.length} faixas`}
                                         </Text>
                                       </View>
                                     </View>
@@ -2889,7 +2928,7 @@ export default function App() {
                           ListEmptyComponent={
                             isSearching ? (
                               <TrackRowSkeleton count={searchSkeletonRows} fadeBottom />
-                            ) : searchArtistsResults.length > 0 ? null : (
+                            ) : searchArtistsResults.length > 0 || directLinkTrack ? null : (
                               <View style={styles.emptyContainer}>
                                 {/* Seção de Descoberta Rápida por Gênero */}
                                 <View style={styles.exploreSection}>
@@ -3034,7 +3073,8 @@ export default function App() {
                             ) : null
                           }
                         />
-                      )}
+                        );
+                      })()}
                     </View>
                   )}
 

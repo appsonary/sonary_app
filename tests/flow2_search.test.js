@@ -1586,3 +1586,525 @@ test('Flow 2: Pagination with continuationToken never invokes searchArtists or a
     api.searchArtists = originalSearchArtists;
   }
 });
+
+test('Flow 2: extractYouTubeUrlVideoId parses valid single-video URLs and rejects text, playlists, and other hosts', () => {
+  assert.strictEqual(
+    api.extractYouTubeUrlVideoId('https://www.youtube.com/watch?v=dQw4w9WgXcQ'),
+    'dQw4w9WgXcQ'
+  );
+  assert.strictEqual(
+    api.extractYouTubeUrlVideoId('https://youtu.be/kJQP7kiw5Fk?si=abc123&t=42'),
+    'kJQP7kiw5Fk'
+  );
+  assert.strictEqual(
+    api.extractYouTubeUrlVideoId('https://music.youtube.com/watch?v=9bZkp7q19f0&list=RDAMVM9bZkp7q19f0'),
+    '9bZkp7q19f0'
+  );
+  assert.strictEqual(
+    api.extractYouTubeUrlVideoId('https://m.youtube.com/shorts/abcdefghijk?feature=share'),
+    'abcdefghijk'
+  );
+  assert.strictEqual(
+    api.extractYouTubeUrlVideoId('https://www.youtube.com/live/1234567890_'),
+    '1234567890_'
+  );
+  assert.strictEqual(
+    api.extractYouTubeUrlVideoId('https://www.youtube.com/embed/a1b2c3d4e5f'),
+    'a1b2c3d4e5f'
+  );
+  assert.strictEqual(
+    api.extractYouTubeUrlVideoId('https://www.youtube.com/v/z9y8x7w6v5u'),
+    'z9y8x7w6v5u'
+  );
+  assert.strictEqual(
+    api.extractYouTubeUrlVideoId('youtu.be/dQw4w9WgXcQ'),
+    'dQw4w9WgXcQ'
+  );
+
+  // Must reject normal queries, playlists, invalid IDs, and non-YouTube domains
+  assert.strictEqual(api.extractYouTubeUrlVideoId('Charlie Brown Jr'), null);
+  assert.strictEqual(api.extractYouTubeUrlVideoId('dQw4w9WgXcQ'), null);
+  assert.strictEqual(
+    api.extractYouTubeUrlVideoId('https://www.youtube.com/playlist?list=PL1234567890'),
+    null
+  );
+  assert.strictEqual(
+    api.extractYouTubeUrlVideoId('https://open.spotify.com/track/dQw4w9WgXcQ'),
+    null
+  );
+  assert.strictEqual(
+    api.extractYouTubeUrlVideoId('https://youtu.be/short'),
+    null
+  );
+  assert.strictEqual(
+    api.extractYouTubeUrlVideoId('https://youtu.be/dQw4w9WgXcQ texto extra'),
+    null
+  );
+});
+
+test('Flow 2: searchTracksPage resolves direct link to exact track + related tracks and uses neutral error message on failure', async () => {
+  const originalGetAudioStream = api.getAudioStream;
+  const originalGetRelatedTracks = api.getRelatedTracks;
+  const originalSearchArtists = api.searchArtists;
+
+  try {
+    api.getAudioStream = async (id) => ({
+      videoId: id,
+      title: 'Como Tudo Deve Ser',
+      artist: 'Charlie Brown Jr.',
+      duration: 273,
+      thumbnailUrl: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+      streamUrl: 'https://cdn.example.com/audio.m4a',
+      mimeType: 'audio/mp4',
+      format: 'm4a',
+      bitrate: 128000,
+    });
+    api.searchArtists = async (q) => [
+      {
+        id: 'UCcharliebrownjr',
+        name: q,
+        subtitle: 'Artista',
+        thumbnailUrl: 'https://example.com/cbjr.jpg',
+      },
+    ];
+    api.getRelatedTracks = async (id) => [
+      // Duplicate of seed must be filtered out
+      {
+        id,
+        title: 'Como Tudo Deve Ser',
+        artist: 'Charlie Brown Jr.',
+        duration: 273,
+        formattedDuration: '4:33',
+        thumbnailUrl: 'https://example.com/dup.jpg',
+      },
+      {
+        id: 'rel_track_01',
+        title: 'Céu Azul',
+        artist: 'Charlie Brown Jr.',
+        duration: 199,
+        formattedDuration: '3:19',
+        thumbnailUrl: 'https://example.com/rel1.jpg',
+      },
+      {
+        id: 'rel_track_02',
+        title: 'Só os Loucos Sabem',
+        artist: 'Charlie Brown Jr.',
+        duration: 206,
+        formattedDuration: '3:26',
+        thumbnailUrl: 'https://example.com/rel2.jpg',
+      },
+    ];
+
+    const page = await api.searchTracksPage('https://youtu.be/kJQP7kiw5Fk?si=xyz');
+    assert.strictEqual(page.tracks.length, 3);
+    assert.strictEqual(page.tracks[0].id, 'kJQP7kiw5Fk');
+    assert.strictEqual(page.tracks[0].title, 'Como Tudo Deve Ser');
+    assert.strictEqual(page.tracks[0].formattedDuration, '4:33');
+    assert.strictEqual(page.tracks[1].id, 'rel_track_01');
+    assert.strictEqual(page.tracks[2].id, 'rel_track_02');
+    assert.strictEqual(page.artists.length, 1);
+    assert.strictEqual(page.artists[0].id, 'UCcharliebrownjr');
+    assert.strictEqual(page.continuationToken, null);
+
+    // Unavailable track must throw neutral error message (even when getAudioStream throws AllInstancesFailedError)
+    api.getAudioStream = async () => {
+      throw new api.AllInstancesFailedError({ 'https://fallback.example': 'HTTP 404' });
+    };
+    await assert.rejects(
+      () => api.searchTracksPage('https://www.youtube.com/watch?v=00000000000'),
+      (err) => {
+        assert.ok(err instanceof Error);
+        assert.strictEqual(err instanceof api.AllInstancesFailedError, false);
+        assert.strictEqual(/youtube/i.test(err.message), false, 'Error message must not mention YouTube');
+        assert.strictEqual(/v[ií]deo/i.test(err.message), false, 'Error message must not mention vídeo');
+        assert.ok(err.message.includes('música'));
+        return true;
+      }
+    );
+
+    // Related tracks failure must never fail the primary direct link resolution
+    api.getAudioStream = async (id) => ({
+      videoId: id,
+      title: 'Faixa Isolada',
+      artist: 'Artista Solo',
+      duration: 180,
+      thumbnailUrl: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+      streamUrl: 'https://cdn.example.com/solo.m4a',
+      mimeType: 'audio/mp4',
+      format: 'm4a',
+      bitrate: 128000,
+    });
+    api.getRelatedTracks = async () => {
+      throw new Error('Related endpoint down');
+    };
+    const resilientPage = await api.searchTracksPage('https://youtu.be/dQw4w9WgXcQ');
+    assert.strictEqual(resilientPage.tracks.length, 1);
+    assert.strictEqual(resilientPage.tracks[0].id, 'dQw4w9WgXcQ');
+    assert.strictEqual(resilientPage.continuationToken, null);
+  } finally {
+    api.getAudioStream = originalGetAudioStream;
+    api.getRelatedTracks = originalGetRelatedTracks;
+    api.searchArtists = originalSearchArtists;
+  }
+});
+
+test('Flow 2: Direct link combines primary artist(s) + top related track artists (filtering noise) and falls back to /browse similar artists when only 1 matches', async () => {
+  const originalGetAudioStream = api.getAudioStream;
+  const originalGetRelatedTracks = api.getRelatedTracks;
+  const originalSearchArtists = api.searchArtists;
+  const originalFetch = global.fetch;
+
+  try {
+    // 1. Cover with dual primary artists + related tracks + fan upload noise
+    api.getAudioStream = async (id) => ({
+      videoId: id,
+      title: 'Ex Factor - Lauryn Hill (Joseph Solomon Cover)',
+      artist: 'Joseph Solomon',
+      duration: 294,
+      thumbnailUrl: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+      streamUrl: 'https://cdn.example.com/cover.m4a',
+      mimeType: 'audio/mp4',
+      format: 'm4a',
+      bitrate: 128000,
+    });
+    api.getRelatedTracks = async () => [
+      { id: 'r1', title: 'Doo Wop', artist: 'Lauryn Hill', duration: 240, formattedDuration: '4:00', thumbnailUrl: '' },
+      { id: 'r2', title: 'On & On', artist: 'Erykah Badu', duration: 225, formattedDuration: '3:45', thumbnailUrl: '' },
+      { id: 'r3', title: 'Bag Lady', artist: 'Erykah Badu', duration: 300, formattedDuration: '5:00', thumbnailUrl: '' },
+      { id: 'r4', title: 'Untitled (How Does It Feel)', artist: "D'Angelo", duration: 420, formattedDuration: '7:00', thumbnailUrl: '' },
+      { id: 'r5', title: 'Random Live Rip', artist: 'HiddenHalo', duration: 400, formattedDuration: '6:40', thumbnailUrl: '' },
+    ];
+    api.searchArtists = async (q) => {
+      const lower = q.toLowerCase();
+      if (lower.includes('lauryn')) {
+        return [{ id: 'UClauryn', name: 'Ms. Lauryn Hill', subtitle: 'Artista', thumbnailUrl: 'https://img/lh.jpg' }];
+      }
+      if (lower.includes('joseph solomon')) {
+        return [{ id: 'UCjoseph', name: 'Joseph Solomon', subtitle: 'Artista', thumbnailUrl: 'https://img/js.jpg' }];
+      }
+      if (lower.includes('erykah')) {
+        return [{ id: 'UCerykah', name: 'Erykah Badu', subtitle: 'Artista', thumbnailUrl: 'https://img/eb.jpg' }];
+      }
+      if (lower.includes('angelo')) {
+        return [{ id: 'UCdangelo', name: "D'Angelo", subtitle: 'Artista', thumbnailUrl: 'https://img/da.jpg' }];
+      }
+      // Noise channel returns an unrelated artist -> must be rejected by strict match
+      return [{ id: 'UCunrelated', name: 'Completely Different Band', subtitle: 'Artista', thumbnailUrl: 'https://img/no.jpg' }];
+    };
+
+    const hybridPage = await api.searchTracksPage('https://youtu.be/dQw4w9WgXcQ');
+    const artistIds = hybridPage.artists.map((a) => a.id);
+    assert.ok(artistIds.includes('UCjoseph'), 'Primary uploader artist must be included');
+    assert.ok(artistIds.includes('UClauryn'), 'Primary title artist must be included');
+    assert.ok(artistIds.includes('UCerykah'), 'Frequent related artist Erykah Badu must be included');
+    assert.ok(artistIds.includes('UCdangelo'), 'Related artist D Angelo must be included');
+    assert.strictEqual(artistIds.includes('UCunrelated'), false, 'Unrelated noise match must be filtered out');
+    // Erykah Badu (2 tracks) must come before D'Angelo (1 track)
+    assert.ok(artistIds.indexOf('UCerykah') < artistIds.indexOf('UCdangelo'));
+
+    // 2. Obscure link with 0 related tracks -> only 1 official artist -> /browse fallback pulls similar artists
+    api.getAudioStream = async (id) => ({
+      videoId: id,
+      title: 'Faixa Rara',
+      artist: 'Joseph Solomon',
+      duration: 200,
+      thumbnailUrl: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+      streamUrl: 'https://cdn.example.com/rare.m4a',
+      mimeType: 'audio/mp4',
+      format: 'm4a',
+      bitrate: 128000,
+    });
+    api.getRelatedTracks = async () => [];
+    global.fetch = async (url) => {
+      if (String(url).includes('/youtubei/v1/browse')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            contents: {
+              singleColumnBrowseResultsRenderer: {
+                tabs: [{
+                  tabRenderer: {
+                    content: {
+                      sectionListRenderer: {
+                        contents: [{
+                          musicCarouselShelfRenderer: {
+                            header: {
+                              musicCarouselShelfBasicHeaderRenderer: {
+                                title: { runs: [{ text: 'Fãs também curtem' }] },
+                              },
+                            },
+                            contents: [
+                              {
+                                musicTwoRowItemRenderer: {
+                                  title: { runs: [{ text: 'Daniel Caesar' }] },
+                                  subtitle: { runs: [{ text: 'Artista' }] },
+                                  navigationEndpoint: { browseEndpoint: { browseId: 'UCdanielcaesar' } },
+                                  thumbnailRenderer: {
+                                    musicThumbnailRenderer: {
+                                      thumbnail: { thumbnails: [{ url: 'https://img/dc.jpg' }] },
+                                    },
+                                  },
+                                },
+                              },
+                              {
+                                musicTwoRowItemRenderer: {
+                                  title: { runs: [{ text: 'H.E.R.' }] },
+                                  subtitle: { runs: [{ text: 'Artista' }] },
+                                  navigationEndpoint: { browseEndpoint: { browseId: 'UCherartist' } },
+                                  thumbnailRenderer: {
+                                    musicThumbnailRenderer: {
+                                      thumbnail: { thumbnails: [{ url: 'https://img/her.jpg' }] },
+                                    },
+                                  },
+                                },
+                              },
+                            ],
+                          },
+                        }],
+                      },
+                    },
+                  },
+                }],
+              },
+            },
+          }),
+        };
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    const fallbackPage = await api.searchTracksPage('https://youtu.be/kJQP7kiw5Fk');
+    assert.deepStrictEqual(
+      fallbackPage.artists.map((a) => a.id),
+      ['UCjoseph', 'UCdanielcaesar', 'UCherartist']
+    );
+
+    // 3. Normal text search returning only 1 artist (e.g. typo "braison tyller" -> Bryson Tiller)
+    // must also expand with similar artists via /browse so the shelf never shows a lonely circle
+    api.searchArtists = async () => [
+      { id: 'UCbrysontiller', name: 'Bryson Tiller', subtitle: 'Artista', thumbnailUrl: 'https://img/bt.jpg' },
+    ];
+    global.fetch = async (url) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/youtubei/v1/search')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            contents: {
+              sectionListRenderer: {
+                contents: [{
+                  itemSectionRenderer: {
+                    contents: [{
+                      videoRenderer: {
+                        videoId: 'dQw4w9WgXcQ',
+                        title: { runs: [{ text: "Bryson Tiller - Don't" }] },
+                        shortBylineText: { runs: [{ text: 'Bryson Tiller' }] },
+                        lengthText: { runs: [{ text: '3:18' }] },
+                        thumbnail: { thumbnails: [{ url: 'https://img/bt.jpg' }] },
+                      },
+                    }],
+                  },
+                }],
+              },
+            },
+          }),
+        };
+      }
+      if (urlStr.includes('/youtubei/v1/browse')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            contents: {
+              singleColumnBrowseResultsRenderer: {
+                tabs: [{
+                  tabRenderer: {
+                    content: {
+                      sectionListRenderer: {
+                        contents: [{
+                          musicCarouselShelfRenderer: {
+                            header: {
+                              musicCarouselShelfBasicHeaderRenderer: {
+                                title: { runs: [{ text: 'Fãs também curtem' }] },
+                              },
+                            },
+                            contents: [
+                              {
+                                musicTwoRowItemRenderer: {
+                                  title: { runs: [{ text: 'PARTYNEXTDOOR' }] },
+                                  subtitle: { runs: [{ text: 'Artista' }] },
+                                  navigationEndpoint: { browseEndpoint: { browseId: 'UCpartynextdoor' } },
+                                  thumbnailRenderer: {
+                                    musicThumbnailRenderer: {
+                                      thumbnail: { thumbnails: [{ url: 'https://img/pnd.jpg' }] },
+                                    },
+                                  },
+                                },
+                              },
+                              {
+                                musicTwoRowItemRenderer: {
+                                  title: { runs: [{ text: 'Bryson Tiller' }] },
+                                  subtitle: { runs: [{ text: 'Artista' }] },
+                                  navigationEndpoint: { browseEndpoint: { browseId: 'UCbrysontiller' } },
+                                  thumbnailRenderer: {
+                                    musicThumbnailRenderer: {
+                                      thumbnail: { thumbnails: [{ url: 'https://img/bt.jpg' }] },
+                                    },
+                                  },
+                                },
+                              },
+                            ],
+                          },
+                        }],
+                      },
+                    },
+                  },
+                }],
+              },
+            },
+          }),
+        };
+      }
+      throw new Error(`Unexpected fetch: ${urlStr}`);
+    };
+
+    const normalSingleArtistPage = await api.searchTracksPage('braison tyller', { targetCount: 1 });
+    assert.deepStrictEqual(
+      normalSingleArtistPage.artists.map((a) => a.id),
+      ['UCbrysontiller', 'UCpartynextdoor']
+    );
+  } finally {
+    api.getAudioStream = originalGetAudioStream;
+    api.getRelatedTracks = originalGetRelatedTracks;
+    api.searchArtists = originalSearchArtists;
+    global.fetch = originalFetch;
+  }
+});
+
+test('Flow 2: Pasting a direct link in Search UI displays exact song + related tracks and skips search history', async () => {
+  const { getSearchHistory } = require('../services/database');
+  const originalGetAudioStream = api.getAudioStream;
+  const originalGetRelatedTracks = api.getRelatedTracks;
+  const originalSearchArtists = api.searchArtists;
+
+  let tree;
+  try {
+    api.getAudioStream = async (id) => ({
+      videoId: id,
+      title: 'Música Secreta do Link',
+      artist: 'Banda Exemplo',
+      duration: 215,
+      thumbnailUrl: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+      streamUrl: 'https://cdn.example.com/secret.m4a',
+      mimeType: 'audio/mp4',
+      format: 'm4a',
+      bitrate: 128000,
+    });
+    api.searchArtists = async (q) => {
+      if (q.toLowerCase().includes('relacionado')) {
+        return [
+          {
+            id: 'UCartistarel',
+            name: 'Artista Relacionado',
+            subtitle: 'Artista',
+            thumbnailUrl: 'https://example.com/rel_artist.jpg',
+          },
+        ];
+      }
+      return [
+        {
+          id: 'UCbandaexemplo',
+          name: 'Banda Exemplo',
+          subtitle: 'Artista',
+          thumbnailUrl: 'https://example.com/banda.jpg',
+        },
+      ];
+    };
+    api.getRelatedTracks = async () => [
+      {
+        id: 'rel_secret_1',
+        title: 'Faixa Relacionada 1',
+        artist: 'Artista Relacionado',
+        duration: 185,
+        formattedDuration: '3:05',
+        thumbnailUrl: 'https://example.com/rel.jpg',
+      },
+    ];
+
+    await actAsync(async () => {
+      tree = renderer.create(React.createElement(App));
+    });
+
+    const root = tree.root;
+    const input = findInputByPlaceholder(root, 'Buscar faixas');
+    await actAsync(async () => {
+      input.props.onChangeText('https://youtu.be/dQw4w9WgXcQ?si=test');
+    });
+
+    const searchBtn = findSearchActionButton(root);
+    await actAsync(async () => {
+      await searchBtn.props.onPress();
+    });
+
+    const fullText = getAllText(root);
+    assert.ok(fullText.includes('ENCONTRADO PELO LINK'), 'Direct link search must show eyebrow label');
+    assert.ok(fullText.includes('Resultado Preciso'), 'Direct link search must show Resultado Preciso hero section');
+    assert.ok(fullText.includes('Tocar a seguir'), 'Direct link hero card must show Tocar a seguir action');
+    assert.ok(fullText.includes('Salvar na playlist'), 'Direct link hero card must show Salvar na playlist action');
+    assert.ok(fullText.includes('Baixar'), 'Direct link hero card must show Baixar action');
+    assert.ok(fullText.includes('Artistas'), 'Direct link search must show Artistas shelf above Escolhas Rápidas');
+    assert.ok(fullText.includes('Música Secreta do Link'), 'Exact track from link must appear in search results');
+    assert.ok(fullText.includes('Faixas Relacionadas'), 'Related section header must appear below direct link card');
+    assert.ok(fullText.includes('Faixa Relacionada 1'), 'Related track must appear below exact track');
+    assert.strictEqual(
+      root.findAll(
+        (node) => node.type === 'View' && node.props.testID === 'direct-link-result-section'
+      ).length,
+      1,
+      'Direct link section must render once'
+    );
+
+    const history = await getSearchHistory();
+    assert.strictEqual(history.length, 0, 'Direct link must not be saved in search history');
+
+    // Normal text search must NOT show the direct-link Resultado Preciso section
+    const originalSearchTracks = api.searchTracks;
+    try {
+      api.searchTracks = async () => [
+        {
+          id: 'normal_track_1',
+          title: 'Música Normal',
+          artist: 'Artista Comum',
+          duration: 200,
+          formattedDuration: '3:20',
+          thumbnailUrl: 'https://example.com/norm.jpg',
+        },
+      ];
+      await actAsync(async () => {
+        input.props.onChangeText('Artista Comum');
+      });
+      await actAsync(async () => {
+        await findSearchActionButton(root).props.onPress();
+      });
+      assert.strictEqual(
+        root.findAllByProps({ testID: 'direct-link-result-section' }).length,
+        0,
+        'Normal text search must not render DirectLinkResultCard'
+      );
+      assert.ok(getAllText(root).includes('Músicas e Resultados'));
+    } finally {
+      api.searchTracks = originalSearchTracks;
+    }
+  } finally {
+    if (tree) {
+      await actAsync(async () => {
+        tree.unmount();
+      });
+    }
+    api.getAudioStream = originalGetAudioStream;
+    api.getRelatedTracks = originalGetRelatedTracks;
+    api.searchArtists = originalSearchArtists;
+  }
+});
