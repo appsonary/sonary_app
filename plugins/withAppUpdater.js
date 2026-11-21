@@ -458,7 +458,7 @@ class SonaryUpdaterWorker(
         instanceFollowRedirects = false
         connectTimeout = 15000
         readTimeout = 30000
-        setRequestProperty("User-Agent", "SonaryProUpdater/1.0")
+        setRequestProperty("User-Agent", "SonaryUpdater/1.0")
       }
       val code = conn.responseCode
       if (code in listOf(301, 302, 303, 307, 308)) {

@@ -452,7 +452,7 @@ export const SideDrawerMenu: React.FC<SideDrawerMenuProps> = ({
           <View style={styles.footer} testID="drawer-footer-card">
             <View style={styles.versionBlock}>
               <View style={styles.versionTitleRow}>
-                <Text style={styles.versionBrand}>Sonary Pro</Text>
+                <Text style={styles.versionBrand}>Sonary</Text>
                 <Text style={styles.versionText} testID="drawer-version-pill">
                   {`v${versionName}`}
                 </Text>

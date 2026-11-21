@@ -365,7 +365,7 @@ export const CoverCropModal: React.FC<CoverCropModalProps> = ({
           translucent={true}
         />
 
-        {/* Glow atmosférico no padrão do Sonary Pro */}
+        {/* Glow atmosférico no padrão do Sonary */}
         <View pointerEvents="none" style={styles.glowBackdrop}>
           {asset.uri ? (
             <AmbientGlowBackground

@@ -6,7 +6,7 @@ Este documento é o guia definitivo para gerar builds de produção assinados, p
 
 ## 1. Como o sistema funciona (Visão Geral)
 
-O fluxo de publicação e atualização do Sonary Pro não depende de lojas nem de servidores de terceiros:
+O fluxo de publicação e atualização do Sonary não depende de lojas nem de servidores de terceiros:
 
 1. **Assinatura CNG ([`plugins/withReleaseSigning.js`](./plugins/withReleaseSigning.js)):** injeta no `android/app/build.gradle` a configuração de assinatura de release lendo `release-signing.properties` (local) ou variáveis de ambiente `SONARY_UPLOAD_*` (GitHub Actions).
 2. **Automação de versão ([`scripts/release.js`](./scripts/release.js)):** `npm run release` valida o Git, atualiza `app.json` (`expo.version` e `expo.android.versionCode`) e `package.json`, roda `tsc` e `npm test`, cria o commit, gera a tag `vX.Y.Z` e envia para o GitHub.

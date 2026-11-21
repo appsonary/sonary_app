@@ -623,7 +623,7 @@ class SonaryDownloadWorker(
     val powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
     val wakeLock = powerManager.newWakeLock(
       PowerManager.PARTIAL_WAKE_LOCK,
-      "SonaryPro:DownloadWakeLock",
+      "Sonary:DownloadWakeLock",
     )
     wakeLock.setReferenceCounted(false)
     wakeLock.acquire(30 * 60 * 1000L)

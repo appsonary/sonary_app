@@ -203,7 +203,7 @@ async function fetchJsonWithTimeout(
       signal: controller.signal,
       headers: {
         Accept: 'application/json',
-        'User-Agent': 'SonaryProUpdater/1.0',
+        'User-Agent': 'SonaryUpdater/1.0',
         ...(headers || {}),
       },
     });

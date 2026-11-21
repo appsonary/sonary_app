@@ -1,7 +1,7 @@
 /**
  * scripts/init-keystore.js
  *
- * Gera a keystore oficial de produção (PKCS12) para assinatura de APKs do Sonary Pro
+ * Gera a keystore oficial de produção (PKCS12) para assinatura de APKs do Sonary
  * sem depender de serviços externos. Idempotente: não sobrescreve uma keystore existente.
  */
 
@@ -87,7 +87,7 @@ function initKeystore(argv = process.argv.slice(2)) {
       '-keypass',
       keyPassword,
       '-dname',
-      'CN=Sonary Pro, O=Sonary Open Source, C=BR',
+      'CN=Sonary, O=Sonary Open Source, C=BR',
     ],
     { stdio: 'inherit' }
   );

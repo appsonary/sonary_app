@@ -1,7 +1,7 @@
 /**
  * theme.ts
  *
- * Sistema de Design Tokens do Sonary Pro
+ * Sistema de Design Tokens do Sonary
  *
  * Filosofia: "Deep Dark Mode & Atmospheric Gradients" + Detalhes Emil Kowalski
  */

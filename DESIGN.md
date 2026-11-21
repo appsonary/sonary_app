@@ -1,6 +1,6 @@
 ---
 version: alpha
-name: Sonary Pro Dark
+name: Sonary Dark
 description: Design System and layout specification for the sonary_pro audio streaming application.
 colors:
   background-base: "#030303"
@@ -76,7 +76,7 @@ components:
     borderTopColor: "{colors.border-subtle}"
 ---
 
-# Sonary Pro Dark Design System Specification
+# Sonary Dark Design System Specification
 
 ## Overview
 This document formalizes the visual language and layout architecture for the `sonary_pro` React Native audio streaming application. The design language features a deep pitch-black immersive backdrop (`#030303`), elevated dark-gray surfaces (`#0f0f0f` and `#212121`), high-contrast pure white typography (`#FFFFFF`), muted secondary metadata (`#AAAAAA`), and Sonary's crimson brand accent (`#FF0000`).

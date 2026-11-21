@@ -72,7 +72,8 @@ test('SideDrawerMenu: hidden when closed, renders editorial layout, badges, and 
 
     const root = openTree.root;
     const text = getAllText(root);
-    assert.ok(text.includes('Sonary Pro'), 'Must display Sonary Pro brand label in footer');
+    assert.ok(text.includes('Sonary'), 'Must display Sonary brand label in footer');
+    assert.strictEqual(text.includes('Sonary Pro'), false, 'SideDrawerMenu must not display Sonary Pro');
     assert.ok(text.includes('v1.0.4'), 'Must display installed version pill');
     assert.ok(text.includes('Apoiar o Sonary'));
     assert.ok(text.includes('Fila de downloads'));
@@ -197,7 +198,8 @@ test('SideDrawerMenu: hidden when closed, renders editorial layout, badges, and 
       );
     });
     const prodText = getAllText(prodUpToDateTree.root);
-    assert.ok(prodText.includes('Sonary Pro'));
+    assert.ok(prodText.includes('Sonary'));
+    assert.strictEqual(prodText.includes('Sonary Pro'), false);
     assert.ok(prodText.includes('v1.0.4'));
     assert.ok(prodText.includes('Atualizado'));
     assert.ok(prodText.includes('Vazia'), 'Empty download queue must show Vazia badge');

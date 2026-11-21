@@ -1,7 +1,7 @@
 /**
  * scripts/release.js
  *
- * Automação segura de release para o Sonary Pro:
+ * Automação segura de release para o Sonary:
  *   npm run release               -> bump patch (ex: 1.0.1 -> 1.0.2, versionCode +1)
  *   npm run release -- minor      -> bump minor (ex: 1.0.1 -> 1.1.0, versionCode +1)
  *   npm run release -- major      -> bump major (ex: 1.0.1 -> 2.0.0, versionCode +1)

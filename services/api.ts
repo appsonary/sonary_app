@@ -161,7 +161,7 @@ async function fetchWithTimeout(
   try {
     const headers = {
       Accept: 'application/json',
-      'User-Agent': 'SonaryProMobile/1.0',
+      'User-Agent': 'SonaryMobile/1.0',
       ...(init?.headers || {}),
     };
     const response = await fetch(url, {
@@ -3057,7 +3057,7 @@ export async function getTrackLyrics(
 
     const response = await fetchWithTimeout(url, 6000, {
       headers: {
-        'User-Agent': 'SonaryPro/1.0.0 (https://github.com/sonary)',
+        'User-Agent': 'Sonary/1.0.0 (https://appsonary.com)',
       },
     });
 
