@@ -1,0 +1,8 @@
+{
+  "name": "@sonary/default-media-provider",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Default standalone MediaProvider adapter for Sonary (fetch-only, zero app dependencies).",
+  "main": "index.ts",
+  "types": "index.ts"
+}

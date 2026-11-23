@@ -42,7 +42,7 @@ import {
   LibrarySection,
 } from './components/LibrarySection';
 import { PersistentMiniPlayer } from './components/PersistentMiniPlayer';
-import { YouTubeMusicSidebar } from './components/YouTubeMusicSidebar';
+import { DesktopSidebar } from './components/DesktopSidebar';
 import { QuickPicksSection } from './components/QuickPicksSection';
 import { DirectLinkResultCard } from './components/DirectLinkResultCard';
 import { ArtistResultsSection } from './components/ArtistResultsSection';
@@ -86,9 +86,10 @@ import {
   ArtistProfile,
   ArtistSearchResult,
   TrackSummary,
-  extractYouTubeUrlVideoId,
+  extractDirectMediaId,
   searchTracksPage,
   getAudioStream,
+  invalidateStreamCache,
   AllInstancesFailedError,
   getRelatedTracks,
   getTrackRadio,
@@ -817,6 +818,7 @@ export default function App() {
           'Stream bloqueado pelo servidor. Sincronizando faixa para reprodução offline direta...'
         );
         try {
+          invalidateStreamCache(failedTrack.id);
           const streamInfo = await getAudioStream(failedTrack.id);
           const trackSummary: TrackSummary = {
             id: failedTrack.id,
@@ -827,9 +829,16 @@ export default function App() {
             thumbnailUrl:
               typeof failedTrack.artwork === 'string' ? failedTrack.artwork : '',
           };
+          const fallbackHeaders = streamInfo.headers
+            ? streamInfo.headers
+            : streamInfo.userAgent
+              ? { 'User-Agent': streamInfo.userAgent }
+              : undefined;
           const downloaded = await downloadTrackFile(
             trackSummary,
-            streamInfo.streamUrl
+            streamInfo.streamUrl,
+            undefined,
+            fallbackHeaders
           );
           await loadOfflineTracks();
           await playTrack({
@@ -842,6 +851,7 @@ export default function App() {
           });
           setErrorMessage(null);
         } catch (fallbackErr) {
+          console.warn('[App] Falha no fallback offline após PlaybackError:', fallbackErr);
           setErrorMessage(
             'Não foi possível reproduzir a faixa selecionada. Tente novamente mais tarde.'
           );
@@ -1944,7 +1954,7 @@ export default function App() {
       setQuery(overrideQuery);
     }
 
-    if (!extractYouTubeUrlVideoId(trimmed)) {
+    if (!extractDirectMediaId(trimmed)) {
       recordSearchHistory(trimmed)
         .then(setRecentSearchQueries)
         .catch(() => { });
@@ -2465,7 +2475,7 @@ export default function App() {
   };
 
   /**
-   * Atalhos de Teclado e Controles de Mídia Globais (Padrão YouTube Music)
+   * Atalhos de Teclado e Controles de Mídia Globais
    * Suporta Espaço/K (Play/Pause), Setas/J/L (Seek +/-5s), M (Mudo), N/P (Próxima/Anterior), Esc (Fechar Modal)
    */
   useEffect(() => {
@@ -2703,9 +2713,9 @@ export default function App() {
           ]}
         >
         <View style={styles.shellContainer}>
-          {/* Barra Lateral Expansível YouTube Music para Telas Grandes / Desktop */}
+          {/* Barra Lateral Expansível para Telas Grandes / Desktop */}
           {isDesktop && (
-            <YouTubeMusicSidebar
+            <DesktopSidebar
               isCollapsed={isSidebarCollapsed}
               onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
               activeTab={pendingTab ?? activeTab}
@@ -2721,7 +2731,7 @@ export default function App() {
           )}
 
           <View style={styles.mainContent}>
-            {/* Gradiente Atmosférico de Topo Reativo (YouTube Music Deep Dark Glow) */}
+            {/* Gradiente Atmosférico de Topo Reativo (Deep Dark Glow) */}
             <AtmosphericGradient height={320} glowColor={activeGlowColor} />
 
             {isPlaylistDetailVisible ? (
@@ -2799,7 +2809,7 @@ export default function App() {
                   {/* Conteúdo da Aba Ativa */}
                   {activeTab === 'search' && (
                     <View style={styles.tabContent}>
-                      {/* Barra de Pesquisa YouTube Music */}
+                      {/* Barra de Pesquisa */}
                       <SearchBarSection
                         query={query}
                         onChangeQuery={setQuery}
@@ -2835,7 +2845,7 @@ export default function App() {
                       {/* Lista de Resultados Online / Descoberta (oculta durante o modo busca focado) */}
                       {!isSearchFocused && (() => {
                         const directLinkVideoId = lastSearchedQuery
-                          ? extractYouTubeUrlVideoId(lastSearchedQuery)
+                          ? extractDirectMediaId(lastSearchedQuery)
                           : null;
                         const directLinkTrack =
                           directLinkVideoId && searchResults[0]?.id === directLinkVideoId
@@ -3213,7 +3223,7 @@ export default function App() {
           </View>
         </View>
 
-        {/* Dock inferior flutuante no mobile para o conteúdo passar atrás do menu estilo Spotify */}
+        {/* Dock inferior flutuante no mobile para o conteúdo passar atrás do menu */}
         <View
           style={!isDesktop ? styles.bottomDock : undefined}
           pointerEvents="box-none"
@@ -3262,7 +3272,7 @@ export default function App() {
             </Animated.View>
           )}
 
-          {/* Barra de Navegação Inferior Mobile (< 768px) estilo YouTube Music */}
+          {/* Barra de Navegação Inferior Mobile (< 768px) */}
           {!isDesktop && (
             <Animated.View
               onLayout={(e) => {

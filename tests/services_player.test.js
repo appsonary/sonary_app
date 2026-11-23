@@ -53,6 +53,23 @@ test('Player: playTrack resets queue and starts playback', async () => {
   assert.strictEqual(queue[0].id, 'track_1');
   assert.strictEqual(queue[0].title, 'Song A');
   assert.strictEqual(queue[0].artist, 'Artist A');
+  assert.strictEqual(queue[0].headers?.Referer, undefined, 'Player must not inject hardcoded third-party Referer');
+  assert.strictEqual(queue[0].headers?.Origin, undefined, 'Player must not inject hardcoded third-party Origin');
+
+  // Custom headers from MediaProvider must be forwarded verbatim
+  await playTrack({
+    id: 'track_2',
+    url: 'https://stream.example.com/audio2.mp4',
+    title: 'Song B',
+    artist: 'Artist B',
+    headers: {
+      'User-Agent': 'ProviderUA/2.0',
+      'X-Provider-Token': 'abc123',
+    },
+  });
+  const queueAfter = await getQueue();
+  assert.strictEqual(queueAfter[0].headers?.['User-Agent'], 'ProviderUA/2.0');
+  assert.strictEqual(queueAfter[0].headers?.['X-Provider-Token'], 'abc123');
 });
 
 test('Player: playTrackList loads multiple tracks and starts playback at initial index', async () => {

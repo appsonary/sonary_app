@@ -1,4 +1,4 @@
-// tests/spotify_mini_player.test.js
+// tests/persistent_mini_player.test.js
 const test = require('node:test');
 const assert = require('node:assert');
 const React = require('react');
@@ -6,7 +6,7 @@ const renderer = require('react-test-renderer');
 const {
   PersistentMiniPlayer,
   getDominantTrackColor,
-  SPOTIFY_DARK_PALETTES,
+  AMBIENT_DARK_PALETTES,
 } = require('../components/PersistentMiniPlayer');
 const { actAsync, findButtonByIcon, getAllText, resetAllMocks } = require('./helpers/testUtils');
 
@@ -14,25 +14,25 @@ test.beforeEach(async () => {
   resetAllMocks();
 });
 
-test('Spotify Mini Player: getDominantTrackColor extracts dynamic dark background colors', () => {
+test('Persistent Mini Player: getDominantTrackColor extracts dynamic dark background colors', () => {
   // Test distinct track seeds produce valid deep dark tones
   const colorNavy = getDominantTrackColor('https://example.com/blue_cover.jpg', 'track_1', 'Still Yours');
   const colorForest = getDominantTrackColor('https://example.com/forest.jpg', 'track_2', 'Chill Green');
   const colorBurgundy = getDominantTrackColor('https://example.com/red_love.jpg', 'track_3', 'Red Love');
   const colorPlum = getDominantTrackColor('https://example.com/violet.jpg', 'track_4', 'Starboy');
 
-  assert.strictEqual(colorNavy, '#132438', 'Blue/Navy track should get Spotify deep midnight navy');
-  assert.strictEqual(colorForest, '#0e2d24', 'Green track should get Spotify deep forest emerald');
-  assert.strictEqual(colorBurgundy, '#351419', 'Red track should get Spotify deep wine burgundy');
-  assert.strictEqual(colorPlum, '#2a1435', 'Purple track should get Spotify deep velvet violet');
+  assert.strictEqual(colorNavy, '#132438', 'Blue/Navy track should get deep midnight navy');
+  assert.strictEqual(colorForest, '#0e2d24', 'Green track should get deep forest emerald');
+  assert.strictEqual(colorBurgundy, '#351419', 'Red track should get deep wine burgundy');
+  assert.strictEqual(colorPlum, '#2a1435', 'Purple track should get deep velvet violet');
 
   // Verify all palette colors are valid hex colors
-  for (const hex of SPOTIFY_DARK_PALETTES) {
+  for (const hex of AMBIENT_DARK_PALETTES) {
     assert.match(hex, /^#[0-9a-fA-F]{6}$/, `${hex} must be a valid 6-digit hex color`);
   }
 });
 
-test('Spotify Mini Player: Renders floating card with dynamic background, bottom progress bar and Spotify controls', async () => {
+test('Persistent Mini Player: Renders floating card with dynamic background, bottom progress bar and playback controls', async () => {
   let playToggled = false;
   let favoriteToggled = false;
   let expanded = false;
@@ -111,7 +111,7 @@ test('Spotify Mini Player: Renders floating card with dynamic background, bottom
   assert.strictEqual(playToggled, true, 'Pressing play/pause should trigger callback');
 });
 
-test('Spotify Mini Player: Upward drag gestures drive onDragMove/onDragRelease without hijacking taps or horizontal swipes', async () => {
+test('Persistent Mini Player: Upward drag gestures drive onDragMove/onDragRelease without hijacking taps or horizontal swipes', async () => {
   const moves = [];
   let released = null;
   let cancelled = false;
@@ -178,7 +178,7 @@ test('Spotify Mini Player: Upward drag gestures drive onDragMove/onDragRelease w
   assert.strictEqual(cancelled, true);
 });
 
-test('Spotify Mini Player: Extracts real artwork pixel color for PersistentMiniPlayer and NowPlayingModal compactMiniBar with safe cancellation and WCAG contrast', async () => {
+test('Persistent Mini Player: Extracts real artwork pixel color for PersistentMiniPlayer and NowPlayingModal compactMiniBar with safe cancellation and WCAG contrast', async () => {
   const { Skia } = require('@shopify/react-native-skia');
   const {
     extractLyricsPaletteFromPixels,
@@ -228,9 +228,9 @@ test('Spotify Mini Player: Extracts real artwork pixel color for PersistentMiniP
   assert.ok(contrastRatio('#B3B3B3', yellowPalette.miniColor) >= 4.5, 'Yellow miniColor must keep gray artist >= 4.5:1');
 
   // 3. Wire mock Skia decoding pipeline to test PersistentMiniPlayer + NowPlayingModal + rapid track switch
-  const coralUri = 'https://i.ytimg.com/vi/notion_coral/hqdefault.jpg';
-  const greenUri = 'https://i.ytimg.com/vi/emerald_track/hqdefault.jpg';
-  const brokenUri = 'https://i.ytimg.com/vi/offline_broken/hqdefault.jpg';
+  const coralUri = 'https://cdn.example.com/art/notion_coral/letterbox.jpg';
+  const greenUri = 'https://cdn.example.com/art/emerald_track/letterbox.jpg';
+  const brokenUri = 'https://cdn.example.com/art/offline_broken/letterbox.jpg';
   const greenPixels = makeSolidPixels(30, 175, 90);
   const greenPalette = extractLyricsPaletteFromPixels(greenPixels);
 
@@ -242,6 +242,9 @@ test('Spotify Mini Player: Extracts real artwork pixel color for PersistentMiniP
     [greenUri, greenPixels],
   ]);
 
+  const { getMediaProvider, registerMediaProvider } = require('../services/mediaProvider');
+  const prevProvider = getMediaProvider();
+  registerMediaProvider({ ...prevProvider, hasLetterboxArtwork: (uri) => Boolean(uri && /letterbox\.jpg$/i.test(uri)) });
   clearArtworkPaletteCacheForTest();
   Skia.Data = {
     fromURI: (uri) => {
@@ -346,7 +349,7 @@ test('Spotify Mini Player: Extracts real artwork pixel color for PersistentMiniP
     );
     assert.ok(
       capturedCropRect && capturedCropRect.y > 0 && capturedCropRect.height < 360,
-      'hqdefault.jpg thumbnails must crop top/bottom YouTube letterbox bars before sampling'
+      'letterbox thumbnails must crop top/bottom bars before sampling'
     );
 
     // Now resolve the stale slow coralUri fetch — must NOT overwrite greenTrack's color!
@@ -442,6 +445,7 @@ test('Spotify Mini Player: Extracts real artwork pixel color for PersistentMiniP
     );
     assert.ok(disposedCount >= 4, 'Native Skia Data/Image/Surface/Paint objects must be disposed');
   } finally {
+    registerMediaProvider(prevProvider);
     delete Skia.Data;
     delete Skia.Image;
     delete Skia.Paint;

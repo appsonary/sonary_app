@@ -68,6 +68,7 @@ import {
   getArtistProfile,
   getRelatedTracks,
   getTrackLyrics,
+  hasLetterboxArtwork,
   LyricLine,
   TrackLyricsPayload,
   TrackSummary,
@@ -2376,7 +2377,7 @@ export default function NowPlayingModal({
 
   const renderArtworkVisual = (targetTrack: Track | null | undefined, isCurrent: boolean) => {
     const artworkUri = typeof targetTrack?.artwork === 'string' ? targetTrack.artwork : undefined;
-    const hasLetterboxBars = Boolean(artworkUri && /(?:hqdefault|sddefault)\.jpg/i.test(artworkUri));
+    const hasLetterboxBars = hasLetterboxArtwork(artworkUri);
 
     return targetTrack?.artwork ? (
       <Image
@@ -2530,9 +2531,8 @@ export default function NowPlayingModal({
                       fadeDuration={0}
                       style={[
                         styles.artwork,
-                        Boolean(
-                          typeof track.artwork === 'string' &&
-                            /(?:hqdefault|sddefault)\.jpg/i.test(track.artwork)
+                        hasLetterboxArtwork(
+                          typeof track.artwork === 'string' ? track.artwork : null
                         ) && styles.artworkLetterboxCrop,
                       ]}
                       resizeMode="cover"
@@ -2604,7 +2604,7 @@ export default function NowPlayingModal({
                       </TouchableOpacity>
                     </Animated.View>
 
-                    {/* ScrollView Vertical Unificado Estilo Spotify */}
+                    {/* ScrollView Vertical Unificado */}
                     <GHScrollView
                       ref={attachRefs ? mainScrollRef : undefined}
                       waitFor={attachRefs ? [dismissPanRef, horizontalPanRef] : undefined}
@@ -2636,9 +2636,9 @@ export default function NowPlayingModal({
                         }
                       }}
                     >
-                      {/* 1. SEÇÃO HERO DO PLAYER (Layout ergonômico estilo Spotify: thumb zone inferior) */}
+                      {/* 1. SEÇÃO HERO DO PLAYER (Layout ergonômico: thumb zone inferior) */}
                       <View style={[styles.heroSection, { minHeight: viewportHeight - 64 }]}>
-                        {/* Capa expansiva estilo carrossel Spotify: revela capa anterior/próxima ao arrastar */}
+                        {/* Capa expansiva em carrossel: revela capa anterior/próxima ao arrastar */}
                         <View style={styles.artworkContainer}>
                           {previousTrack && (
                             <Animated.View
@@ -2945,7 +2945,7 @@ export default function NowPlayingModal({
                         </Animated.View>
                       </View>
 
-                      {/* 2. CARD DE LETRAS (SPOTIFY LYRICS CARD - Componente desacoplado e memoizado) */}
+                      {/* 2. CARD DE LETRAS (Componente desacoplado e memoizado) */}
                       <Animated.View style={{ opacity: morphInterpolations.expandedControlsOpacity }}>
                         <PlayerLyricsSection
                           track={track}
@@ -2963,10 +2963,10 @@ export default function NowPlayingModal({
                         />
                       </Animated.View>
 
-                      {/* 3. CARD DE RELACIONADOS E SOBRE O ARTISTA (SPOTIFY ARTIST & RECOMMENDATIONS) */}
+                      {/* 3. CARD DE RELACIONADOS E SOBRE O ARTISTA */}
                       <Animated.View
                         style={[
-                          styles.spotifyArtistCard,
+                          styles.cardDeckArtistCard,
                           { opacity: morphInterpolations.expandedControlsOpacity },
                         ]}
                         onLayout={(e) => {
@@ -2974,10 +2974,10 @@ export default function NowPlayingModal({
                           setCardPositions((prev) => ({ ...prev, related: y }));
                         }}
                       >
-                        <Text style={styles.spotifyCardTitle}>Sobre o artista</Text>
+                        <Text style={styles.cardDeckCardTitle}>Sobre o artista</Text>
 
                         <TouchableOpacity
-                          style={styles.spotifyArtistHero}
+                          style={styles.cardDeckArtistHero}
                           onPress={() => {
                             if (onOpenArtistProfile) {
                               onClose();
@@ -2994,11 +2994,11 @@ export default function NowPlayingModal({
                           accessibilityRole="button"
                           accessibilityLabel="Abrir perfil do artista"
                         >
-                          <View style={styles.spotifyArtistAvatar}>
+                          <View style={styles.cardDeckArtistAvatar}>
                             {artistProfile?.avatarUrl ? (
                               <Image
                                 source={{ uri: artistProfile.avatarUrl }}
-                                style={styles.spotifyArtistAvatarImg}
+                                style={styles.cardDeckArtistAvatarImg}
                                 resizeMode="cover"
                                 accessibilityRole="image"
                                 accessibilityLabel={`Foto de ${track.artist || 'Artista'}`}
@@ -3007,11 +3007,11 @@ export default function NowPlayingModal({
                               <Sparkles color="#FFFFFF" size={24} />
                             )}
                           </View>
-                          <View style={styles.spotifyArtistMeta}>
-                            <Text style={styles.spotifyArtistName} numberOfLines={1}>
+                          <View style={styles.cardDeckArtistMeta}>
+                            <Text style={styles.cardDeckArtistName} numberOfLines={1}>
                               {artistProfile?.name || effectiveArtistName}
                             </Text>
-                            <Text style={styles.spotifyArtistSub} numberOfLines={1}>
+                            <Text style={styles.cardDeckArtistSub} numberOfLines={1}>
                               {`${
                                 (artistProfile?.monthlyListenersText &&
                                   artistProfile.monthlyListenersText.toLowerCase() !== 'artista'
@@ -3025,33 +3025,33 @@ export default function NowPlayingModal({
                           <ChevronRight color="#AAAAAA" size={20} />
                         </TouchableOpacity>
 
-                        <Text style={styles.spotifyArtistBio}>
+                        <Text style={styles.cardDeckArtistBio}>
                           {artistProfile?.bio ||
                             'Ouça os maiores sucessos, novas faixas e mergulhe na rádio personalizada com base nas suas preferências musicais.'}
                         </Text>
 
-                        <View style={styles.spotifyDivider} />
+                        <View style={styles.cardDeckDivider} />
 
-                        <Text style={styles.spotifySectionHeading}>Você também pode gostar</Text>
+                        <Text style={styles.cardDeckSectionHeading}>Você também pode gostar</Text>
 
                         {/* Ação 1: Rádio da Música (Track Radio) */}
-                        <View style={styles.spotifyRelatedCard}>
-                          <View style={styles.spotifyRelatedLeft}>
-                            <View style={styles.spotifyRelatedIconBadge}>
+                        <View style={styles.cardDeckRelatedCard}>
+                          <View style={styles.cardDeckRelatedLeft}>
+                            <View style={styles.cardDeckRelatedIconBadge}>
                               <Music2 color="#FFFFFF" size={20} />
                             </View>
-                            <View style={styles.spotifyRelatedInfo}>
-                              <Text style={styles.spotifyRelatedTrackTitle} numberOfLines={1}>
+                            <View style={styles.cardDeckRelatedInfo}>
+                              <Text style={styles.cardDeckRelatedTrackTitle} numberOfLines={1}>
                                 {`Mix Especial de ${resolvedTrackMeta.cleanTitle || track.title || 'Músicas'}`}
                               </Text>
-                              <Text style={styles.spotifyRelatedSubtitle}>
+                              <Text style={styles.cardDeckRelatedSubtitle}>
                                 Sonary Smart Radio
                               </Text>
                             </View>
                           </View>
 
                           <TouchableOpacity
-                            style={styles.spotifyPlayCircle}
+                            style={styles.cardDeckPlayCircle}
                             onPress={() => {
                               if (onStartTrackRadio) {
                                 onStartTrackRadio();
@@ -3072,7 +3072,7 @@ export default function NowPlayingModal({
 
                         {/* Ação 2: Rádio do Artista (Artist Radio) */}
                         <TouchableOpacity
-                          style={styles.spotifyRelatedCard}
+                          style={styles.cardDeckRelatedCard}
                           onPress={() => {
                             if (onStartArtistRadio) {
                               onStartArtistRadio(
@@ -3087,22 +3087,22 @@ export default function NowPlayingModal({
                           accessibilityRole="button"
                           accessibilityLabel="Iniciar rádio do artista"
                         >
-                          <View style={styles.spotifyRelatedLeft}>
-                            <View style={[styles.spotifyRelatedIconBadge, { backgroundColor: '#333333' }]}>
+                          <View style={styles.cardDeckRelatedLeft}>
+                            <View style={[styles.cardDeckRelatedIconBadge, { backgroundColor: '#333333' }]}>
                               <Radio color="#FFFFFF" size={20} />
                             </View>
-                            <View style={styles.spotifyRelatedInfo}>
-                              <Text style={styles.spotifyRelatedTrackTitle} numberOfLines={1}>
+                            <View style={styles.cardDeckRelatedInfo}>
+                              <Text style={styles.cardDeckRelatedTrackTitle} numberOfLines={1}>
                                 {`Rádio de ${effectiveArtistName}`}
                               </Text>
-                              <Text style={styles.spotifyRelatedSubtitle}>
+                              <Text style={styles.cardDeckRelatedSubtitle}>
                                 Descobertas e faixas similares
                               </Text>
                             </View>
                           </View>
 
-                          <View style={styles.spotifyPillBadge}>
-                            <Text style={styles.spotifyPillBadgeText}>Mix Contínuo</Text>
+                          <View style={styles.cardDeckPillBadge}>
+                            <Text style={styles.cardDeckPillBadgeText}>Mix Contínuo</Text>
                           </View>
                         </TouchableOpacity>
 
@@ -3122,13 +3122,13 @@ export default function NowPlayingModal({
                           effectiveRelatedTracks.slice(0, 6).map((relTrack, rIdx) => (
                             <TouchableOpacity
                               key={`${relTrack.id}-${rIdx}`}
-                              style={styles.spotifyRelatedCard}
+                              style={styles.cardDeckRelatedCard}
                               onPress={() => onPlayRelatedTrack?.(relTrack)}
                               activeOpacity={0.8}
                               accessibilityRole="button"
                               accessibilityLabel={`Tocar relacionada ${relTrack.title}`}
                             >
-                              <View style={styles.spotifyRelatedLeft}>
+                              <View style={styles.cardDeckRelatedLeft}>
                                 {relTrack.thumbnailUrl ? (
                                   <Image
                                     source={{ uri: relTrack.thumbnailUrl }}
@@ -3136,22 +3136,22 @@ export default function NowPlayingModal({
                                     resizeMode="cover"
                                   />
                                 ) : (
-                                  <View style={styles.spotifyRelatedIconBadge}>
+                                  <View style={styles.cardDeckRelatedIconBadge}>
                                     <Music2 color="#FFFFFF" size={18} />
                                   </View>
                                 )}
-                                <View style={styles.spotifyRelatedInfo}>
+                                <View style={styles.cardDeckRelatedInfo}>
                                   <MarqueeText
                                     active={track?.id === relTrack.id}
-                                    style={styles.spotifyRelatedTrackTitle}
+                                    style={styles.cardDeckRelatedTrackTitle}
                                   >
                                     {relTrack.title}
                                   </MarqueeText>
                                   <TrackMetaRow
-                                    style={styles.spotifyRelatedMetaRow}
+                                    style={styles.cardDeckRelatedMetaRow}
                                     active={track?.id === relTrack.id}
                                     artistText={relTrack.artist}
-                                    textStyle={styles.spotifyRelatedSubtitle}
+                                    textStyle={styles.cardDeckRelatedSubtitle}
                                   />
                                 </View>
                               </View>
@@ -3173,7 +3173,7 @@ export default function NowPlayingModal({
                                   <ListPlus color="#FFFFFF" size={18} />
                                 </TouchableOpacity>
                               ) : (
-                                <View style={styles.spotifyPlayCircle}>
+                                <View style={styles.cardDeckPlayCircle}>
                                   <Play color="#030303" size={14} fill="#030303" style={{ marginLeft: 2 }} />
                                 </View>
                               )}
@@ -3265,7 +3265,7 @@ export default function NowPlayingModal({
                 </Animated.View>
               </Animated.View>
 
-              {/* Menu Contextual Estilo Bottom Sheet do YouTube Music */}
+              {/* Menu Contextual Estilo Bottom Sheet */}
               {showContextMenu && (
                 <Animated.View
                   style={[styles.modalSheetOverlay, { opacity: sheetBackdropOpacity }]}
@@ -3324,7 +3324,7 @@ export default function NowPlayingModal({
 
                       <View style={styles.sheetDivider} />
 
-                      {/* 3 Blocos de Ação Rápida no Topo (YouTube Music Tiles) */}
+                      {/* 3 Blocos de Ação Rápida no Topo */}
                       <View style={styles.quickTilesRow}>
                         {onPlayNext ? (
                           <TouchableOpacity
@@ -3487,7 +3487,7 @@ export default function NowPlayingModal({
                 </Animated.View>
               )}
 
-              {/* Modal Bottom Sheet da Fila Estilo Spotify */}
+              {/* Modal Bottom Sheet da Fila */}
               {isQueueSheetVisible && (
                 <Animated.View
                   style={[styles.modalSheetOverlay, { opacity: queueBackdropOpacity }]}
@@ -3670,7 +3670,7 @@ export default function NowPlayingModal({
                         )}
                       </GHScrollView>
 
-                      {/* Barra Inferior Estilo Spotify: Aleatório, Repetir e Fechar */}
+                      {/* Barra Inferior: Aleatório, Repetir e Fechar */}
                       <View style={styles.queueBottomBar}>
                         <TouchableOpacity
                           style={styles.queueBottomAction}
@@ -3728,7 +3728,7 @@ export default function NowPlayingModal({
                 </Animated.View>
               )}
 
-              {/* Tela Cheia Dedicada de Letras (Overlay estilo Spotify) */}
+              {/* Tela Cheia Dedicada de Letras (Overlay em tela cheia) */}
               {!isInlinePreview && isLyricsExpanded && (
                 <Animated.View
                   testID="fullscreen-lyrics-overlay"
@@ -4094,7 +4094,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
   },
-  spotifySwipePeek: {
+  cardDeckSwipePeek: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -4107,34 +4107,34 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.16)',
     borderBottomWidth: 0,
   },
-  spotifySwipePeekLeft: {
+  cardDeckSwipePeekLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
-  spotifySwipePeekTitles: {
+  cardDeckSwipePeekTitles: {
     justifyContent: 'center',
   },
-  spotifySwipePeekTitle: {
+  cardDeckSwipePeekTitle: {
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '700',
     letterSpacing: -0.2,
   },
-  spotifySwipePeekText: {
+  cardDeckSwipePeekText: {
     color: 'rgba(255, 255, 255, 0.8)',
     fontSize: 11,
     fontWeight: '500',
     marginTop: 1,
   },
-  spotifySwipePeekRight: {
+  cardDeckSwipePeekRight: {
     padding: 6,
     backgroundColor: 'rgba(255, 255, 255, 0.18)',
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  spotifyLyricsCard: {
+  cardDeckLyricsCard: {
     borderRadius: 24,
     padding: 16,
     marginTop: 8,
@@ -4142,34 +4142,34 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.14)',
   },
-  spotifyCardHeader: {
+  cardDeckCardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 2,
     marginBottom: 12,
   },
-  spotifyCardHeaderLeft: {
+  cardDeckCardHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
-  spotifyCardTitleBlock: {
+  cardDeckCardTitleBlock: {
     justifyContent: 'center',
   },
-  spotifyCardTitle: {
+  cardDeckCardTitle: {
     fontSize: 16,
     fontWeight: '700',
     color: '#FFFFFF',
     letterSpacing: -0.2,
   },
-  spotifyCardSubtitle: {
+  cardDeckCardSubtitle: {
     fontSize: 11,
     color: 'rgba(255, 255, 255, 0.75)',
     fontWeight: '500',
     marginTop: 1,
   },
-  spotifyLyricsExpandBtn: {
+  cardDeckLyricsExpandBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -4178,19 +4178,19 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 14,
   },
-  spotifyLyricsExpandText: {
+  cardDeckLyricsExpandText: {
     color: '#FFFFFF',
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 0.5,
   },
-  spotifyLyricsScroll: {
+  cardDeckLyricsScroll: {
     height: 250,
   },
-  spotifyLyricsScrollExpanded: {
+  cardDeckLyricsScrollExpanded: {
     height: 480,
   },
-  spotifyLyricsContent: {
+  cardDeckLyricsContent: {
     paddingVertical: 10,
   },
   lyricLineButton: {
@@ -4213,7 +4213,7 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 6,
   },
-  spotifyLyricsFooter: {
+  cardDeckLyricsFooter: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -4222,12 +4222,12 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: 'rgba(255, 255, 255, 0.1)',
   },
-  spotifyLyricsFooterText: {
+  cardDeckLyricsFooterText: {
     color: 'rgba(255, 255, 255, 0.65)',
     fontSize: 11,
     fontWeight: '500',
   },
-  spotifyArtistCard: {
+  cardDeckArtistCard: {
     backgroundColor: 'rgba(0, 0, 0, 0.52)',
     borderRadius: 24,
     padding: 20,
@@ -4235,13 +4235,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.09)',
   },
-  spotifyArtistHero: {
+  cardDeckArtistHero: {
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 12,
     marginBottom: 10,
   },
-  spotifyArtistAvatar: {
+  cardDeckArtistAvatar: {
     width: 50,
     height: 50,
     borderRadius: 25,
@@ -4251,45 +4251,45 @@ const styles = StyleSheet.create({
     marginRight: 14,
     overflow: 'hidden',
   },
-  spotifyArtistAvatarImg: {
+  cardDeckArtistAvatarImg: {
     width: '100%',
     height: '100%',
     borderRadius: 25,
   },
-  spotifyArtistMeta: {
+  cardDeckArtistMeta: {
     flex: 1,
     marginRight: 8,
   },
-  spotifyArtistName: {
+  cardDeckArtistName: {
     color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '700',
   },
-  spotifyArtistSub: {
+  cardDeckArtistSub: {
     color: '#AAAAAA',
     fontSize: 12,
     marginTop: 2,
   },
-  spotifyArtistBio: {
+  cardDeckArtistBio: {
     color: '#CCCCCC',
     fontSize: 13,
     lineHeight: 18,
     marginTop: 4,
     marginBottom: 12,
   },
-  spotifyDivider: {
+  cardDeckDivider: {
     height: 1,
     backgroundColor: 'rgba(255, 255, 255, 0.08)',
     marginVertical: 14,
   },
-  spotifySectionHeading: {
+  cardDeckSectionHeading: {
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '700',
     marginBottom: 10,
     letterSpacing: 0.2,
   },
-  spotifyRelatedCard: {
+  cardDeckRelatedCard: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -4300,7 +4300,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.06)',
   },
-  spotifyRelatedLeft: {
+  cardDeckRelatedLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
@@ -4308,7 +4308,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
     marginRight: 10,
   },
-  spotifyRelatedIconBadge: {
+  cardDeckRelatedIconBadge: {
     width: 40,
     height: 40,
     borderRadius: 8,
@@ -4316,19 +4316,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  spotifyRelatedInfo: {
+  cardDeckRelatedInfo: {
     flex: 1,
     minWidth: 0,
   },
-  spotifyRelatedTrackTitle: {
+  cardDeckRelatedTrackTitle: {
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '600',
   },
-  spotifyRelatedMetaRow: {
+  cardDeckRelatedMetaRow: {
     marginTop: 2,
   },
-  spotifyRelatedSubtitle: {
+  cardDeckRelatedSubtitle: {
     color: '#AAAAAA',
     fontSize: 12,
   },
@@ -4339,7 +4339,7 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     marginRight: 10,
   },
-  spotifyPlayCircle: {
+  cardDeckPlayCircle: {
     width: 36,
     height: 36,
     borderRadius: 18,
@@ -4347,13 +4347,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  spotifyPillBadge: {
+  cardDeckPillBadge: {
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 12,
   },
-  spotifyPillBadgeText: {
+  cardDeckPillBadgeText: {
     color: '#AAAAAA',
     fontSize: 11,
     fontWeight: '600',

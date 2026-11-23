@@ -675,6 +675,13 @@ test('Flow 4: PlaylistDetailModal renders atmospheric glow, 1:1 cropped cover, a
   const { StyleSheet } = require('react-native');
   const { AmbientGlowBackground } = require('../components/AmbientGlowBackground');
   const { AtmosphericGradient } = require('../components/AtmosphericGradient');
+  const { getMediaProvider, registerMediaProvider } = require('../services/mediaProvider');
+  const prevProvider = getMediaProvider();
+  registerMediaProvider({
+    ...prevProvider,
+    hasLetterboxArtwork: (uri) => Boolean(uri && /letterbox\.jpg$/i.test(uri)),
+  });
+  try {
 
   const pl = await createPlaylist('Night Drive');
   await addTrackToPlaylist(pl.id, {
@@ -682,14 +689,14 @@ test('Flow 4: PlaylistDetailModal renders atmospheric glow, 1:1 cropped cover, a
     title: 'Nightcall',
     artist: 'Kavinsky',
     duration: 258,
-    thumbnailUrl: 'https://i.ytimg.com/vi/MV_3Dpw-BRY/hqdefault.jpg',
+    thumbnailUrl: 'https://cdn.example.com/art/nd_1/letterbox.jpg',
   });
   await addTrackToPlaylist(pl.id, {
     id: 'nd_2',
     title: 'Midnight City',
     artist: 'M83',
     duration: 243,
-    thumbnailUrl: 'https://i.ytimg.com/vi/dX3k_QDnzHE/hqdefault.jpg',
+    thumbnailUrl: 'https://cdn.example.com/art/nd_2/letterbox.jpg',
   });
 
   let tree;
@@ -724,7 +731,7 @@ test('Flow 4: PlaylistDetailModal renders atmospheric glow, 1:1 cropped cover, a
   const glow = root.findByType(AmbientGlowBackground);
   assert.strictEqual(
     glow.props.artworkUri,
-    'https://i.ytimg.com/vi/MV_3Dpw-BRY/hqdefault.jpg'
+    'https://cdn.example.com/art/nd_1/letterbox.jpg'
   );
   let glowBackdrop = glow.parent;
   while (glowBackdrop && glowBackdrop.type !== 'View') {
@@ -735,11 +742,11 @@ test('Flow 4: PlaylistDetailModal renders atmospheric glow, 1:1 cropped cover, a
   assert.strictEqual(glowBackdropStyle.top, 0);
   assert.strictEqual(glowBackdropStyle.zIndex, 0);
 
-  // 2. 1:1 cover with borderRadius 12, resizeMode="cover" & hqdefault crop
+  // 2. 1:1 cover with borderRadius 12, resizeMode="cover" & letterbox crop
   const coverImage = root.findAllByType('Image').find(
     (img) =>
       img.props.source &&
-      img.props.source.uri === 'https://i.ytimg.com/vi/MV_3Dpw-BRY/hqdefault.jpg' &&
+      img.props.source.uri === 'https://cdn.example.com/art/nd_1/letterbox.jpg' &&
       img.props.resizeMode === 'cover'
   );
   assert.ok(coverImage, 'Playlist cover Image must use resizeMode="cover"');
@@ -838,6 +845,9 @@ test('Flow 4: PlaylistDetailModal renders atmospheric glow, 1:1 cropped cover, a
     emptyTree.root.findAllByType(AtmosphericGradient).length >= 1,
     'Empty playlist without thumbnail should render AtmosphericGradient fallback'
   );
+  } finally {
+    registerMediaProvider(prevProvider);
+  }
 });
 
 test('Flow 4: PlaylistCover renders 2x2 collage only for >= 4 tracks, single cover for < 4 tracks, and custom cover overrides collage', async () => {

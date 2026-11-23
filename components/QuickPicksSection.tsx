@@ -149,7 +149,7 @@ export const QuickPicksSection: React.FC<QuickPicksSectionProps> = ({
 }) => {
   if (!tracks || tracks.length === 0) return null;
 
-  // Organiza em colunas de até 4 itens por coluna (padrão 4-row horizontal do YouTube Music)
+  // Organiza em colunas de até 4 itens por coluna (grade horizontal de 4 linhas)
   const columns: QuickPickItem[][] = [];
   for (let i = 0; i < tracks.length; i += 4) {
     columns.push(tracks.slice(i, i + 4));

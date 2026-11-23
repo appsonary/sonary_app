@@ -58,7 +58,7 @@ import { SearchPillInput } from './SearchBarSection';
 import { AmbientGlowBackground } from './AmbientGlowBackground';
 import { AtmosphericGradient } from './AtmosphericGradient';
 import { FavoritesRubyBadge } from './LibrarySection';
-import { hasYouTubeLetterbox, PlaylistCover } from './PlaylistCover';
+import { hasLetterboxArtwork, PlaylistCover } from './PlaylistCover';
 import { PlaylistOptionsSheet } from './PlaylistOptionsSheet';
 import { EditPlaylistModal, EditPlaylistSavePayload } from './EditPlaylistModal';
 import { CoverCropModal } from './CoverCropModal';
@@ -186,7 +186,7 @@ const PlaylistTrackRow = React.memo<PlaylistTrackRowProps>(
             source={{ uri: item.thumbnailUrl }}
             style={[
               styles.trackThumbnail,
-              hasYouTubeLetterbox(item.thumbnailUrl) && styles.trackThumbnailLetterboxCrop,
+              hasLetterboxArtwork(item.thumbnailUrl) && styles.trackThumbnailLetterboxCrop,
             ]}
             resizeMode="cover"
           />

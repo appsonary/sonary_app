@@ -21,7 +21,21 @@ import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+
+data class ResolvedAudioStream(
+  val url: String,
+  val headers: Map<String, String>,
+)
+
+data class StreamBridgeResponse(
+  val streamUrl: String?,
+  val headersJson: String?,
+  val error: String?,
+)
 
 object SonaryDownloadEvents {
   const val EVENT_NAME = "SonaryDownloadQueueChanged"
@@ -30,6 +44,7 @@ object SonaryDownloadEvents {
   private var reactContext: ReactApplicationContext? = null
 
   private val cancelledTrackIds = ConcurrentHashMap.newKeySet<String>()
+  private val pendingStreamRequests = ConcurrentHashMap<String, CompletableDeferred<StreamBridgeResponse>>()
 
   @Volatile
   var cancelAllRequested: Boolean = false
@@ -39,6 +54,15 @@ object SonaryDownloadEvents {
 
   fun attachReactContext(context: ReactApplicationContext) {
     reactContext = context
+  }
+
+  fun hasActiveJsRuntime(): Boolean {
+    val ctx = reactContext ?: return false
+    return try {
+      ctx.hasActiveReactInstance()
+    } catch (_: Throwable) {
+      false
+    }
   }
 
   fun markTrackCancelled(trackId: String) {
@@ -58,6 +82,54 @@ object SonaryDownloadEvents {
   fun clearAllCancellations() {
     cancelAllRequested = false
     cancelledTrackIds.clear()
+    for ((id, deferred) in pendingStreamRequests.entries) {
+      if (pendingStreamRequests.remove(id, deferred)) {
+        deferred.cancel()
+      }
+    }
+  }
+
+  suspend fun requestStreamFromJs(
+    trackId: String,
+    forceRefresh: Boolean,
+    timeoutMs: Long = 15_000L,
+  ): StreamBridgeResponse? {
+    if (!hasActiveJsRuntime()) return null
+    val requestId = UUID.randomUUID().toString()
+    val deferred = CompletableDeferred<StreamBridgeResponse>()
+    pendingStreamRequests[requestId] = deferred
+
+    val map = Arguments.createMap().apply {
+      putString("type", "needStream")
+      putString("requestId", requestId)
+      putString("trackId", trackId)
+      putBoolean("forceRefresh", forceRefresh)
+    }
+    emit(map)
+
+    return try {
+      withTimeoutOrNull(timeoutMs) {
+        deferred.await()
+      }
+    } finally {
+      pendingStreamRequests.remove(requestId)
+    }
+  }
+
+  fun completeStreamRequest(
+    requestId: String,
+    streamUrl: String?,
+    headersJson: String?,
+    error: String?,
+  ) {
+    val deferred = pendingStreamRequests.remove(requestId) ?: return
+    deferred.complete(
+      StreamBridgeResponse(
+        streamUrl = streamUrl,
+        headersJson = headersJson,
+        error = error,
+      ),
+    )
   }
 
   fun emitProgress(trackId: String, progress: Double) {
@@ -133,162 +205,6 @@ object SonaryDownloadEvents {
 }
 `,
 
-  'SonaryInnerTubeClient.kt': `package com.sonarypro.app.downloads
-
-import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
-import java.net.HttpURLConnection
-import java.net.URL
-
-data class ResolvedAudioStream(
-  val url: String,
-  val headers: Map<String, String>,
-)
-
-object SonaryInnerTubeClient {
-  const val USER_AGENT =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6.0 Safari/605.1.15"
-
-  private const val VISITOR_TTL_MS = 6L * 60L * 60L * 1000L
-
-  @Volatile
-  private var cachedVisitorData: String? = null
-
-  @Volatile
-  private var cachedVisitorTimestamp: Long = 0L
-
-  fun invalidateVisitorData() {
-    cachedVisitorData = null
-    cachedVisitorTimestamp = 0L
-  }
-
-  private fun postJson(endpoint: String, payload: JSONObject, timeoutMs: Int = 8000): JSONObject {
-    val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-      requestMethod = "POST"
-      connectTimeout = timeoutMs
-      readTimeout = timeoutMs
-      doOutput = true
-      setRequestProperty("Content-Type", "application/json")
-      setRequestProperty("Accept", "application/json")
-      setRequestProperty("User-Agent", USER_AGENT)
-      setRequestProperty("X-Goog-Api-Format-Version", "2")
-    }
-    try {
-      OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
-        writer.write(payload.toString())
-        writer.flush()
-      }
-      val status = conn.responseCode
-      val stream = if (status in 200..299) conn.inputStream else conn.errorStream
-      val body = stream?.let {
-        BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader -> reader.readText() }
-      } ?: ""
-      if (status !in 200..299) {
-        throw RuntimeException("InnerTube HTTP $status")
-      }
-      return JSONObject(body)
-    } finally {
-      conn.disconnect()
-    }
-  }
-
-  private fun getVisitorData(): String {
-    val existing = cachedVisitorData
-    if (!existing.isNullOrEmpty() && System.currentTimeMillis() - cachedVisitorTimestamp < VISITOR_TTL_MS) {
-      return existing
-    }
-    val client = JSONObject().apply {
-      put("clientName", "VISIONOS")
-      put("clientVersion", "1.04")
-      put("deviceMake", "Apple")
-      put("deviceModel", "RealityDevice17,1")
-      put("osName", "visionOS")
-      put("osVersion", "26.6.0.23O770")
-      put("platform", "MOBILE")
-      put("hl", "en")
-      put("gl", "US")
-    }
-    val payload = JSONObject().apply {
-      put("context", JSONObject().apply { put("client", client) })
-    }
-    val data = postJson("https://www.youtube.com/youtubei/v1/visitor_id?prettyPrint=false", payload, 7000)
-    val visitor = data.optJSONObject("responseContext")?.optString("visitorData") ?: ""
-    if (visitor.isEmpty()) {
-      throw RuntimeException("InnerTube visitorData ausente")
-    }
-    cachedVisitorData = visitor
-    cachedVisitorTimestamp = System.currentTimeMillis()
-    return visitor
-  }
-
-  fun resolveAudioStream(videoId: String): ResolvedAudioStream {
-    val visitorData = getVisitorData()
-    val client = JSONObject().apply {
-      put("clientName", "VISIONOS")
-      put("clientVersion", "1.04")
-      put("clientId", "101")
-      put("clientScreen", "WATCH")
-      put("deviceMake", "Apple")
-      put("deviceModel", "RealityDevice17,1")
-      put("osName", "visionOS")
-      put("osVersion", "26.6.0.23O770")
-      put("platform", "MOBILE")
-      put("hl", "en")
-      put("gl", "US")
-      put("visitorData", visitorData)
-    }
-    val payload = JSONObject().apply {
-      put("context", JSONObject().apply { put("client", client) })
-      put("videoId", videoId)
-      put("contentCheckOk", true)
-      put("racyCheckOk", true)
-    }
-    val data = postJson("https://www.youtube.com/youtubei/v1/player?prettyPrint=false", payload, 8000)
-    val status = data.optJSONObject("playabilityStatus")?.optString("status") ?: "ERROR"
-    if (status != "OK") {
-      val reason = data.optJSONObject("playabilityStatus")?.optString("reason") ?: "sem razão"
-      throw RuntimeException("Stream indisponível ($status: $reason)")
-    }
-
-    val formats = data.optJSONObject("streamingData")?.optJSONArray("adaptiveFormats")
-      ?: throw RuntimeException("Formatos de áudio ausentes")
-
-    var itag140Url: String? = null
-    var mp4Url: String? = null
-    var fallbackUrl: String? = null
-
-    for (i in 0 until formats.length()) {
-      val fmt = formats.optJSONObject(i) ?: continue
-      val mime = fmt.optString("mimeType", "")
-      val url = fmt.optString("url", "")
-      if (!mime.contains("audio") || url.isEmpty()) continue
-      val itag = fmt.optInt("itag", -1)
-      if (itag == 140 && itag140Url == null) {
-        itag140Url = url
-      } else if (mime.contains("audio/mp4") && mp4Url == null) {
-        mp4Url = url
-      } else if (fallbackUrl == null) {
-        fallbackUrl = url
-      }
-    }
-
-    val chosenUrl = itag140Url ?: mp4Url ?: fallbackUrl
-      ?: throw RuntimeException("Nenhuma URL de áudio direta encontrada")
-
-    return ResolvedAudioStream(
-      url = chosenUrl,
-      headers = mapOf(
-        "User-Agent" to USER_AGENT,
-        "Referer" to "https://www.youtube.com/",
-        "Origin" to "https://www.youtube.com",
-      ),
-    )
-  }
-}
-`,
-
   'SonaryDownloadDb.kt': `package com.sonarypro.app.downloads
 
 import android.content.ContentValues
@@ -308,6 +224,8 @@ data class QueuedTrackRecord(
   val localAudioUri: String?,
   val localArtworkUri: String?,
   val downloadedAt: Long?,
+  val streamUrl: String?,
+  val headersJson: String?,
 )
 
 data class QueuedTrackInput(
@@ -316,6 +234,8 @@ data class QueuedTrackInput(
   val artist: String,
   val duration: Int,
   val thumbnailUrl: String,
+  val streamUrl: String? = null,
+  val headersJson: String? = null,
 )
 
 class SonaryDownloadDb private constructor(
@@ -342,6 +262,8 @@ class SonaryDownloadDb private constructor(
         localAudioUri TEXT,
         localArtworkUri TEXT,
         downloadedAt INTEGER,
+        streamUrl TEXT,
+        headersJson TEXT,
         position INTEGER NOT NULL,
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
@@ -355,6 +277,31 @@ class SonaryDownloadDb private constructor(
 
   override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
     onCreate(db)
+    if (oldVersion < 2) {
+      ensureColumnExists(db, "download_queue", "streamUrl", "TEXT")
+      ensureColumnExists(db, "download_queue", "headersJson", "TEXT")
+    }
+  }
+
+  private fun ensureColumnExists(
+    db: SQLiteDatabase,
+    table: String,
+    column: String,
+    definition: String,
+  ) {
+    var exists = false
+    db.rawQuery("PRAGMA table_info(\$table)", null).use { cursor ->
+      val nameIdx = cursor.getColumnIndex("name")
+      while (cursor.moveToNext()) {
+        if (nameIdx >= 0 && cursor.getString(nameIdx) == column) {
+          exists = true
+          break
+        }
+      }
+    }
+    if (!exists) {
+      db.execSQL("ALTER TABLE \$table ADD COLUMN \$column \$definition;")
+    }
   }
 
   @Synchronized
@@ -382,6 +329,8 @@ class SonaryDownloadDb private constructor(
           putNull("localAudioUri")
           putNull("localArtworkUri")
           putNull("downloadedAt")
+          if (!item.streamUrl.isNullOrBlank()) put("streamUrl", item.streamUrl) else putNull("streamUrl")
+          if (!item.headersJson.isNullOrBlank()) put("headersJson", item.headersJson) else putNull("headersJson")
           put("position", nextPos++)
           put("createdAt", now)
           put("updatedAt", now)
@@ -395,13 +344,33 @@ class SonaryDownloadDb private constructor(
   }
 
   @Synchronized
+  fun updateStreamInfo(trackId: String, streamUrl: String, headersJson: String?) {
+    val values = ContentValues().apply {
+      put("streamUrl", streamUrl)
+      if (!headersJson.isNullOrBlank()) put("headersJson", headersJson) else putNull("headersJson")
+      put("updatedAt", System.currentTimeMillis())
+    }
+    writableDatabase.update("download_queue", values, "trackId = ?", arrayOf(trackId))
+  }
+
+  @Synchronized
+  fun clearStreamInfo(trackId: String) {
+    val values = ContentValues().apply {
+      putNull("streamUrl")
+      putNull("headersJson")
+      put("updatedAt", System.currentTimeMillis())
+    }
+    writableDatabase.update("download_queue", values, "trackId = ?", arrayOf(trackId))
+  }
+
+  @Synchronized
   fun getQueueSnapshot(): List<QueuedTrackRecord> {
     val db = readableDatabase
     val result = mutableListOf<QueuedTrackRecord>()
     db.rawQuery(
       """
       SELECT trackId, title, artist, duration, thumbnailUrl, status, progress, error,
-             localAudioUri, localArtworkUri, downloadedAt
+             localAudioUri, localArtworkUri, downloadedAt, streamUrl, headersJson
       FROM download_queue
       ORDER BY position ASC, createdAt ASC
       """.trimIndent(),
@@ -421,6 +390,8 @@ class SonaryDownloadDb private constructor(
             localAudioUri = cursor.getString(8),
             localArtworkUri = cursor.getString(9),
             downloadedAt = if (cursor.isNull(10)) null else cursor.getLong(10),
+            streamUrl = cursor.getString(11),
+            headersJson = cursor.getString(12),
           ),
         )
       }
@@ -439,13 +410,18 @@ class SonaryDownloadDb private constructor(
   }
 
   @Synchronized
-  fun nextPendingItem(): QueuedTrackRecord? {
+  fun nextPendingItem(requireStreamUrl: Boolean = false): QueuedTrackRecord? {
+    val whereClause = if (requireStreamUrl) {
+      "status = 'pending' AND streamUrl IS NOT NULL AND streamUrl != ''"
+    } else {
+      "status = 'pending'"
+    }
     readableDatabase.rawQuery(
       """
       SELECT trackId, title, artist, duration, thumbnailUrl, status, progress, error,
-             localAudioUri, localArtworkUri, downloadedAt
+             localAudioUri, localArtworkUri, downloadedAt, streamUrl, headersJson
       FROM download_queue
-      WHERE status = 'pending'
+      WHERE \$whereClause
       ORDER BY position ASC, createdAt ASC
       LIMIT 1
       """.trimIndent(),
@@ -464,6 +440,8 @@ class SonaryDownloadDb private constructor(
         localAudioUri = cursor.getString(8),
         localArtworkUri = cursor.getString(9),
         downloadedAt = if (cursor.isNull(10)) null else cursor.getLong(10),
+        streamUrl = cursor.getString(11),
+        headersJson = cursor.getString(12),
       )
     }
   }
@@ -530,7 +508,7 @@ class SonaryDownloadDb private constructor(
 
   companion object {
     private const val DB_NAME = "sonary_downloads.db"
-    private const val DB_VERSION = 1
+    private const val DB_VERSION = 2
 
     @Volatile
     private var instance: SonaryDownloadDb? = null
@@ -588,6 +566,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -599,6 +578,7 @@ class SonaryDownloadWorker(
 ) : CoroutineWorker(appContext, workerParams) {
 
   private class DownloadAbortedException : RuntimeException("Download cancelado")
+  private class StreamPendingJsException : RuntimeException("Aguardando sessão do app para resolver stream")
 
   private val db = SonaryDownloadDb.getInstance(appContext)
   private val notificationManager =
@@ -638,13 +618,14 @@ class SonaryDownloadWorker(
       val thumbsDir = File(applicationContext.filesDir, "thumbnails").apply { mkdirs() }
 
       var processedCount = 0
+      var pausedForJs = false
 
       do {
         SonaryDownloadEvents.isWorkerRunning = true
         System.setProperty("sonary.downloads.running", "true")
 
         while (!isStopped && !SonaryDownloadEvents.cancelAllRequested) {
-          val item = db.nextPendingItem() ?: break
+          val item = db.nextPendingItem(requireStreamUrl = !SonaryDownloadEvents.hasActiveJsRuntime()) ?: break
           val remaining = db.countActiveAndPending()
           val totalBatch = processedCount + remaining
 
@@ -732,6 +713,11 @@ class SonaryDownloadWorker(
             SonaryDownloadEvents.clearTrackCancelled(item.trackId)
             db.removeQueueItem(item.trackId)
             SonaryDownloadEvents.emitCancelled(item.trackId)
+          } catch (_: StreamPendingJsException) {
+            db.updateQueueState(item.trackId, "pending", 0.0, null)
+            SonaryDownloadEvents.emitSync()
+            pausedForJs = true
+            break
           } catch (ce: CancellationException) {
             throw ce
           } catch (err: Throwable) {
@@ -745,7 +731,12 @@ class SonaryDownloadWorker(
         }
 
         SonaryDownloadEvents.isWorkerRunning = false
-      } while (!isStopped && !SonaryDownloadEvents.cancelAllRequested && db.nextPendingItem() != null)
+      } while (
+        !pausedForJs &&
+        !isStopped &&
+        !SonaryDownloadEvents.cancelAllRequested &&
+        db.nextPendingItem(requireStreamUrl = !SonaryDownloadEvents.hasActiveJsRuntime()) != null
+      )
 
       if (SonaryDownloadEvents.cancelAllRequested) {
         db.clearActiveItems()
@@ -788,6 +779,57 @@ class SonaryDownloadWorker(
     }
   }
 
+  private fun parseHeadersJson(headersJson: String?): Map<String, String> {
+    if (headersJson.isNullOrBlank()) return emptyMap()
+    return try {
+      val json = JSONObject(headersJson)
+      val map = mutableMapOf<String, String>()
+      val keys = json.keys()
+      while (keys.hasNext()) {
+        val key = keys.next()
+        val value = json.optString(key, "")
+        if (key.isNotBlank() && value.isNotBlank()) {
+          map[key] = value
+        }
+      }
+      map
+    } catch (_: Throwable) {
+      emptyMap()
+    }
+  }
+
+  private suspend fun resolveStreamForItem(
+    item: QueuedTrackRecord,
+    forceRefresh: Boolean,
+  ): ResolvedAudioStream {
+    if (!forceRefresh && !item.streamUrl.isNullOrBlank()) {
+      return ResolvedAudioStream(
+        url = item.streamUrl,
+        headers = parseHeadersJson(item.headersJson),
+      )
+    }
+
+    val response = SonaryDownloadEvents.requestStreamFromJs(
+      trackId = item.trackId,
+      forceRefresh = forceRefresh,
+    )
+    if (response == null) {
+      if (!forceRefresh) {
+        throw StreamPendingJsException()
+      }
+      throw RuntimeException("Link temporário expirado em segundo plano. Abra o app para retomar.")
+    }
+    if (!response.error.isNullOrBlank() || response.streamUrl.isNullOrBlank()) {
+      throw RuntimeException(response.error ?: "Falha ao resolver stream de áudio")
+    }
+
+    db.updateStreamInfo(item.trackId, response.streamUrl, response.headersJson)
+    return ResolvedAudioStream(
+      url = response.streamUrl,
+      headers = parseHeadersJson(response.headersJson),
+    )
+  }
+
   private suspend fun downloadWithRetry(
     item: QueuedTrackRecord,
     partAudioFile: File,
@@ -795,18 +837,23 @@ class SonaryDownloadWorker(
     currentIndex: Int,
     totalBatch: Int,
   ) {
-    val initialStream = SonaryInnerTubeClient.resolveAudioStream(item.trackId)
+    val initialStream = resolveStreamForItem(item, forceRefresh = false)
 
     try {
       executeHttpDownload(item, initialStream, partAudioFile, finalAudioFile, currentIndex, totalBatch)
     } catch (firstErr: Throwable) {
-      if (firstErr is DownloadAbortedException || isStopped || SonaryDownloadEvents.isTrackCancelled(item.trackId)) {
-        throw DownloadAbortedException()
+      if (
+        firstErr is DownloadAbortedException ||
+        firstErr is StreamPendingJsException ||
+        isStopped ||
+        SonaryDownloadEvents.isTrackCancelled(item.trackId)
+      ) {
+        throw firstErr
       }
-      // Remove .part potencialmente expirado, invalida visitorData e re-resolve stream fresco via InnerTube
+      // Remove .part potencialmente expirado, invalida stream persistido e solicita novo stream ao provedor JS
       partAudioFile.delete()
-      SonaryInnerTubeClient.invalidateVisitorData()
-      val freshStream = SonaryInnerTubeClient.resolveAudioStream(item.trackId)
+      db.clearStreamInfo(item.trackId)
+      val freshStream = resolveStreamForItem(item, forceRefresh = true)
       executeHttpDownload(item, freshStream, partAudioFile, finalAudioFile, currentIndex, totalBatch)
     }
   }
@@ -824,9 +871,11 @@ class SonaryDownloadWorker(
       connectTimeout = 15000
       readTimeout = 20000
       instanceFollowRedirects = true
-      setRequestProperty("User-Agent", stream.headers["User-Agent"] ?: SonaryInnerTubeClient.USER_AGENT)
-      setRequestProperty("Referer", stream.headers["Referer"] ?: "https://www.youtube.com/")
-      setRequestProperty("Origin", stream.headers["Origin"] ?: "https://www.youtube.com")
+      for ((headerKey, headerVal) in stream.headers) {
+        if (headerKey.isNotBlank() && headerVal.isNotBlank()) {
+          setRequestProperty(headerKey, headerVal)
+        }
+      }
       if (existingBytes > 0L) {
         setRequestProperty("Range", "bytes=\$existingBytes-")
       }
@@ -1083,6 +1132,16 @@ class SonaryDownloadModule(
         } else {
           0
         }
+        val streamUrl = if (map.hasKey("streamUrl") && !map.isNull("streamUrl")) {
+          map.getString("streamUrl")
+        } else {
+          null
+        }
+        val headersJson = if (map.hasKey("headersJson") && !map.isNull("headersJson")) {
+          map.getString("headersJson")
+        } else {
+          null
+        }
         batch.add(
           QueuedTrackInput(
             trackId = trackId,
@@ -1090,6 +1149,8 @@ class SonaryDownloadModule(
             artist = map.getString("artist") ?: "Artista",
             duration = durationVal,
             thumbnailUrl = map.getString("thumbnailUrl") ?: "",
+            streamUrl = streamUrl,
+            headersJson = headersJson,
           ),
         )
       }
@@ -1097,6 +1158,34 @@ class SonaryDownloadModule(
       promise.resolve(null)
     } catch (err: Throwable) {
       promise.reject("E_ENQUEUE_ITEMS", err)
+    }
+  }
+
+  @ReactMethod
+  fun updateTrackStream(trackId: String, streamUrl: String, headersJson: String?, promise: Promise) {
+    try {
+      if (trackId.isNotBlank() && streamUrl.isNotBlank()) {
+        db.updateStreamInfo(trackId, streamUrl, headersJson)
+      }
+      promise.resolve(null)
+    } catch (err: Throwable) {
+      promise.reject("E_UPDATE_TRACK_STREAM", err)
+    }
+  }
+
+  @ReactMethod
+  fun provideResolvedStream(
+    requestId: String,
+    streamUrl: String?,
+    headersJson: String?,
+    error: String?,
+    promise: Promise,
+  ) {
+    try {
+      SonaryDownloadEvents.completeStreamRequest(requestId, streamUrl, headersJson, error)
+      promise.resolve(null)
+    } catch (err: Throwable) {
+      promise.reject("E_PROVIDE_STREAM", err)
     }
   }
 
@@ -1243,6 +1332,16 @@ function syncDownloadKotlinFiles(projectRoot) {
   );
   fs.mkdirSync(targetDir, { recursive: true });
   let changed = false;
+
+  for (const existingFile of fs.readdirSync(targetDir)) {
+    if (
+      existingFile.endsWith('.kt') &&
+      !Object.prototype.hasOwnProperty.call(KOTLIN_FILES, existingFile)
+    ) {
+      fs.unlinkSync(path.join(targetDir, existingFile));
+      changed = true;
+    }
+  }
 
   for (const [filename, content] of Object.entries(KOTLIN_FILES)) {
     const filePath = path.join(targetDir, filename);

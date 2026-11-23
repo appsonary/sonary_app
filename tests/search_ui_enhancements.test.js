@@ -128,7 +128,7 @@ test('Search UI: AtmosphericGradient provides subtle ambient glow without harsh 
   assert.ok(svgElements.length >= 2, 'Must contain SVG gradient defs and rect elements');
 });
 
-test('Search UI: SearchBarSection renders YouTube Music pill bar, circular search button, and recent search rows', async () => {
+test('Search UI: SearchBarSection renders pill search bar, circular search button, and recent search rows', async () => {
   const { StyleSheet } = require('react-native');
   let submittedQuery = null;
   let currentQuery = '';

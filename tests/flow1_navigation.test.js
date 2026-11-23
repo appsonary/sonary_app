@@ -14,7 +14,7 @@ const {
 const { initDatabase } = require('../services/database');
 const { Clipboard } = require('./mocks/reactNativeMock');
 const { mockPlayer } = require('./mocks/trackPlayerMock');
-const YouTubeMusicSidebar = require('../components/YouTubeMusicSidebar').default;
+const DesktopSidebar = require('../components/DesktopSidebar').default;
 
 test.beforeEach(async () => {
   resetAllMocks();
@@ -48,8 +48,8 @@ test('Flow 1: Initial rendering displays brand header and default search tab', a
   assert.ok(downloadsTabBtn, 'Tab button "Baixadas" must exist');
   assert.ok(supportTabBtn, 'Tab button "Apoiar" must exist');
 
-  const navFade = root.findByProps({ testID: 'spotify-nav-fade' });
-  assert.ok(navFade, 'Bottom NavigationTabBar must render Spotify-style vertical fade gradient');
+  const navFade = root.findByProps({ testID: 'bottom-nav-fade' });
+  assert.ok(navFade, 'Bottom NavigationTabBar must render vertical fade gradient');
   const gradientStops = navFade.findAll(
     (n) => n.type === 'SvgElement' && n.props && n.props.tag === 'Stop'
   );
@@ -384,12 +384,12 @@ test('Flow 1: Support tab renders Pix mock flow, updates amount chips, copies ke
   });
 });
 
-test('Flow 1: YouTubeMusicSidebar supports "support" tab parity', async () => {
+test('Flow 1: DesktopSidebar supports "support" tab parity', async () => {
   let selectedTab = 'search';
   let sidebarTree;
   await actAsync(async () => {
     sidebarTree = renderer.create(
-      React.createElement(YouTubeMusicSidebar, {
+      React.createElement(DesktopSidebar, {
         isCollapsed: false,
         onToggleCollapse: () => {},
         activeTab: 'search',

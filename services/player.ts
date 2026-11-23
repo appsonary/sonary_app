@@ -91,8 +91,7 @@ export async function setupPlayer(): Promise<boolean> {
   return setupPlayerPromise;
 }
 
-export const DEFAULT_USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6.0 Safari/605.1.15';
+export const DEFAULT_USER_AGENT = 'SonaryPlayer/1.0';
 
 export interface PlayTrackParams {
   id: string;
@@ -106,18 +105,26 @@ export interface PlayTrackParams {
   contentType?: string;
 }
 
+function normalizeTrackHeaders(
+  isHttp: boolean,
+  userAgent?: string,
+  headers?: Record<string, string>
+): Record<string, string> | undefined {
+  if (headers) {
+    return headers;
+  }
+  if (!isHttp) {
+    return undefined;
+  }
+  return {
+    'User-Agent': userAgent || DEFAULT_USER_AGENT,
+  };
+}
+
 function buildNormalizedTrack(params: PlayTrackParams): Track {
   const isHttp = typeof params.url === 'string' && params.url.startsWith('http');
   const userAgent = params.userAgent || (isHttp ? DEFAULT_USER_AGENT : undefined);
-  const headers =
-    params.headers ||
-    (isHttp
-      ? {
-          'User-Agent': userAgent || DEFAULT_USER_AGENT,
-          Referer: 'https://www.youtube.com/',
-          Origin: 'https://www.youtube.com',
-        }
-      : undefined);
+  const headers = normalizeTrackHeaders(isHttp, userAgent, params.headers);
 
   return {
     id: params.id,
@@ -129,6 +136,17 @@ function buildNormalizedTrack(params: PlayTrackParams): Track {
     userAgent,
     headers,
     contentType: params.contentType || (isHttp ? 'audio/mp4' : undefined),
+  };
+}
+
+function normalizeQueueTrack(t: Track): Track {
+  const isHttp = typeof t.url === 'string' && t.url.startsWith('http');
+  const userAgent = t.userAgent || (isHttp ? DEFAULT_USER_AGENT : undefined);
+  return {
+    ...t,
+    userAgent,
+    headers: normalizeTrackHeaders(isHttp, userAgent, t.headers as Record<string, string> | undefined),
+    contentType: t.contentType || (isHttp ? 'audio/mp4' : undefined),
   };
 }
 
@@ -208,19 +226,7 @@ export async function playTrackList(tracks: Track[], initialIndex: number = 0): 
   await setupPlayer();
   await TrackPlayer.reset();
 
-  const normalizedTracks = tracks.map((t) => {
-    const isHttp = typeof t.url === 'string' && t.url.startsWith('http');
-    return {
-      ...t,
-      userAgent: t.userAgent || (isHttp ? DEFAULT_USER_AGENT : undefined),
-      headers: t.headers || (isHttp ? {
-        'User-Agent': DEFAULT_USER_AGENT,
-        Referer: 'https://www.youtube.com/',
-        Origin: 'https://www.youtube.com',
-      } : undefined),
-      contentType: t.contentType || (isHttp ? 'audio/mp4' : undefined),
-    };
-  });
+  const normalizedTracks = tracks.map(normalizeQueueTrack);
 
   await TrackPlayer.add(normalizedTracks);
 
@@ -238,19 +244,7 @@ export async function addTracksToQueue(tracks: Track[]): Promise<void> {
   if (!tracks || tracks.length === 0) return;
   await setupPlayer();
 
-  const normalizedTracks = tracks.map((t) => {
-    const isHttp = typeof t.url === 'string' && t.url.startsWith('http');
-    return {
-      ...t,
-      userAgent: t.userAgent || (isHttp ? DEFAULT_USER_AGENT : undefined),
-      headers: t.headers || (isHttp ? {
-        'User-Agent': DEFAULT_USER_AGENT,
-        Referer: 'https://www.youtube.com/',
-        Origin: 'https://www.youtube.com',
-      } : undefined),
-      contentType: t.contentType || (isHttp ? 'audio/mp4' : undefined),
-    };
-  });
+  const normalizedTracks = tracks.map(normalizeQueueTrack);
 
   await TrackPlayer.add(normalizedTracks);
 }
@@ -429,17 +423,7 @@ export async function playNextTrack(track: Track): Promise<void> {
   const queue = await TrackPlayer.getQueue();
   const activeIdx = await TrackPlayer.getActiveTrackIndex();
 
-  const isHttp = typeof track.url === 'string' && track.url.startsWith('http');
-  const normalizedTrack: Track = {
-    ...track,
-    userAgent: track.userAgent || (isHttp ? DEFAULT_USER_AGENT : undefined),
-    headers: track.headers || (isHttp ? {
-      'User-Agent': DEFAULT_USER_AGENT,
-      Referer: 'https://www.youtube.com/',
-      Origin: 'https://www.youtube.com',
-    } : undefined),
-    contentType: track.contentType || (isHttp ? 'audio/mp4' : undefined),
-  };
+  const normalizedTrack = normalizeQueueTrack(track);
 
   if (activeIdx === undefined || activeIdx < 0 || queue.length === 0) {
     await TrackPlayer.add(normalizedTrack);
@@ -453,17 +437,7 @@ export async function playNextTrack(track: Track): Promise<void> {
  */
 export async function addTrackToEndOfQueue(track: Track): Promise<void> {
   await setupPlayer();
-  const isHttp = typeof track.url === 'string' && track.url.startsWith('http');
-  const normalizedTrack: Track = {
-    ...track,
-    userAgent: track.userAgent || (isHttp ? DEFAULT_USER_AGENT : undefined),
-    headers: track.headers || (isHttp ? {
-      'User-Agent': DEFAULT_USER_AGENT,
-      Referer: 'https://www.youtube.com/',
-      Origin: 'https://www.youtube.com',
-    } : undefined),
-    contentType: track.contentType || (isHttp ? 'audio/mp4' : undefined),
-  };
+  const normalizedTrack = normalizeQueueTrack(track);
   await TrackPlayer.add(normalizedTrack);
 }
 
@@ -680,19 +654,7 @@ export async function replaceUpcomingQueue(tracks: Track[]): Promise<void> {
 
   if (!tracks || tracks.length === 0) return;
 
-  const normalizedTracks = tracks.map((t) => {
-    const isHttp = typeof t.url === 'string' && t.url.startsWith('http');
-    return {
-      ...t,
-      userAgent: t.userAgent || (isHttp ? DEFAULT_USER_AGENT : undefined),
-      headers: t.headers || (isHttp ? {
-        'User-Agent': DEFAULT_USER_AGENT,
-        Referer: 'https://www.youtube.com/',
-        Origin: 'https://www.youtube.com',
-      } : undefined),
-      contentType: t.contentType || (isHttp ? 'audio/mp4' : undefined),
-    };
-  });
+  const normalizedTracks = tracks.map(normalizeQueueTrack);
 
   await TrackPlayer.add(normalizedTracks);
 }

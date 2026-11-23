@@ -734,7 +734,7 @@ test('Flow 3: Restored downloaded session loads directly into TrackPlayer paused
   assert.strictEqual(mockPlayer.position, 30);
 });
 
-test('Flow 3: NowPlayingModal native horizontal PanGestureHandler skips next/previous like Spotify without dismissing or hijacking scrubber', async () => {
+test('Flow 3: NowPlayingModal native horizontal PanGestureHandler skips next/previous smoothly without dismissing or hijacking scrubber', async () => {
   const { State: GestureState } = require('react-native-gesture-handler');
   let skipNextCount = 0;
   let skipPrevCount = 0;
@@ -793,7 +793,7 @@ test('Flow 3: NowPlayingModal native horizontal PanGestureHandler skips next/pre
   assert.strictEqual(horizontalPan.props.enabled, true, 'Horizontal swipe PanGestureHandler must be enabled');
   assert.ok(horizontalPan.props.waitFor, 'Horizontal swipe must waitFor scrubber PanGestureHandler');
 
-  // Adjacent track artworks are rendered for Spotify-style horizontal carousel transition
+  // Adjacent track artworks are rendered for horizontal carousel transition
   const images = modalRoot.findAllByType('Image');
   assert.ok(images.some((img) => img.props.source?.uri === prevTrack.artwork), 'Previous cover preview should render');
   assert.ok(images.some((img) => img.props.source?.uri === nextTrack.artwork), 'Next cover preview should render');

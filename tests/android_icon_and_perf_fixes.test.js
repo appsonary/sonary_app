@@ -107,7 +107,7 @@ test('NavigationTabBar renders 4 equal tabs including Apoiar and continuous SVG 
     );
   });
 
-  const fadeContainer = tree.root.findByProps({ testID: 'spotify-nav-fade' });
+  const fadeContainer = tree.root.findByProps({ testID: 'bottom-nav-fade' });
   const linearGradients = fadeContainer.findAll((n) => n.props?.tag === 'LinearGradient');
   const stops = fadeContainer.findAll((n) => n.props?.tag === 'Stop');
 
@@ -317,6 +317,11 @@ test('BackgroundDownloads plugin: applies WorkManager, dataSync FGS, MainApplica
       '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n  <application>\n  </application>\n</manifest>\n'
     );
 
+    const downloadsDir = path.join(javaDir, 'downloads');
+    fs.mkdirSync(downloadsDir, { recursive: true });
+    const obsoleteFile = path.join(downloadsDir, 'ObsoleteLegacyClient.kt');
+    fs.writeFileSync(obsoleteFile, 'package com.sonarypro.app.downloads\nobject ObsoleteLegacyClient\n');
+
     assert.strictEqual(applyBackgroundDownloadPatches(tmpRoot), true);
 
     const gradle = fs.readFileSync(path.join(appDir, 'build.gradle'), 'utf8');
@@ -331,18 +336,25 @@ test('BackgroundDownloads plugin: applies WorkManager, dataSync FGS, MainApplica
     assert.ok(manifest.includes('android:foregroundServiceType="dataSync"'));
     assert.ok(manifest.includes('SonaryDownloadCancelReceiver'));
 
-    assert.ok(fs.existsSync(path.join(javaDir, 'downloads', 'SonaryDownloadWorker.kt')));
-    assert.ok(fs.existsSync(path.join(javaDir, 'downloads', 'SonaryInnerTubeClient.kt')));
-    assert.ok(fs.existsSync(path.join(javaDir, 'downloads', 'SonaryDownloadDb.kt')));
-    assert.ok(fs.existsSync(path.join(javaDir, 'downloads', 'SonaryDownloadModule.kt')));
+    assert.ok(fs.existsSync(path.join(downloadsDir, 'SonaryDownloadWorker.kt')));
+    assert.ok(fs.existsSync(path.join(downloadsDir, 'SonaryDownloadEvents.kt')));
+    assert.ok(fs.existsSync(path.join(downloadsDir, 'SonaryDownloadDb.kt')));
+    assert.ok(fs.existsSync(path.join(downloadsDir, 'SonaryDownloadModule.kt')));
+    assert.strictEqual(
+      fs.existsSync(obsoleteFile),
+      false,
+      'syncDownloadKotlinFiles must prune obsolete generated Kotlin files'
+    );
 
-    const dbKt = fs.readFileSync(path.join(javaDir, 'downloads', 'SonaryDownloadDb.kt'), 'utf8');
+    const dbKt = fs.readFileSync(path.join(downloadsDir, 'SonaryDownloadDb.kt'), 'utf8');
     assert.ok(dbKt.includes('sonary_downloads.db'), 'Kotlin DB must use dedicated sonary_downloads.db');
     assert.ok(dbKt.includes('SQLiteOpenHelper'), 'Kotlin DB must use singleton SQLiteOpenHelper');
+    assert.ok(dbKt.includes('DB_VERSION = 2'), 'Kotlin DB must bump schema version for streamUrl/headersJson');
+    assert.ok(dbKt.includes('streamUrl') && dbKt.includes('headersJson'), 'Kotlin DB must persist streamUrl and headersJson');
     assert.ok(!dbKt.includes('sonary.db'), 'Kotlin DB must never open expo-sqlite sonary.db');
     assert.ok(!dbKt.includes('downloaded_tracks'), 'Kotlin DB must never write downloaded_tracks directly');
 
-    const workerKt = fs.readFileSync(path.join(javaDir, 'downloads', 'SonaryDownloadWorker.kt'), 'utf8');
+    const workerKt = fs.readFileSync(path.join(downloadsDir, 'SonaryDownloadWorker.kt'), 'utf8');
     assert.ok(
       workerKt.includes('System.setProperty("sonary.downloads.running", "true")') &&
         workerKt.includes('System.setProperty("sonary.downloads.running", "false")'),
@@ -354,14 +366,27 @@ test('BackgroundDownloads plugin: applies WorkManager, dataSync FGS, MainApplica
       'SonaryDownloadWorker must guard setForeground via trySetForegroundSafely and use notificationManager.notify for progress'
     );
     assert.ok(
-      workerKt.includes('SonaryInnerTubeClient.invalidateVisitorData()'),
-      'SonaryDownloadWorker must invalidate cached visitorData before retry'
+      workerKt.includes('db.clearStreamInfo(item.trackId)') &&
+        workerKt.includes('resolveStreamForItem(item, forceRefresh = true)'),
+      'SonaryDownloadWorker must clear stale streamUrl and request a fresh stream via JS MediaProvider bridge before retry'
+    );
+    assert.ok(
+      workerKt.includes('parseHeadersJson'),
+      'SonaryDownloadWorker must apply dynamic HTTP headers from headersJson'
+    );
+    assert.ok(
+      workerKt.includes('pausedForJs = true') && workerKt.includes('!pausedForJs'),
+      'SonaryDownloadWorker must break outer loop on StreamPendingJsException to avoid infinite retry loop'
     );
 
-    const moduleKt = fs.readFileSync(path.join(javaDir, 'downloads', 'SonaryDownloadModule.kt'), 'utf8');
+    const moduleKt = fs.readFileSync(path.join(downloadsDir, 'SonaryDownloadModule.kt'), 'utf8');
     assert.ok(
       moduleKt.includes('ExistingWorkPolicy.REPLACE') && moduleKt.includes('ExistingWorkPolicy.KEEP'),
       'SonaryDownloadModule must use REPLACE when worker is not running and KEEP when running'
+    );
+    assert.ok(
+      moduleKt.includes('fun updateTrackStream(') && moduleKt.includes('fun provideResolvedStream('),
+      'SonaryDownloadModule must expose stream pre-resolution and on-demand bridge methods'
     );
 
     assert.strictEqual(applyBackgroundDownloadPatches(tmpRoot), false, 'Second call must be idempotent');

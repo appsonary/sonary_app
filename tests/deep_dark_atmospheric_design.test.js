@@ -18,7 +18,7 @@ test.beforeEach(async () => {
   resetAllMocks();
 });
 
-test('Theme Tokens: Deep Dark Mode & YouTube Music Palette are strictly defined', () => {
+test('Theme Tokens: Deep Dark Mode & Atmospheric Palette are strictly defined', () => {
   // 1. Pitch Black OLED base
   assert.strictEqual(theme.colors.background, '#030303');
   // 2. Surfaces and Elevation
@@ -169,9 +169,16 @@ test('App Shell: Includes top Atmospheric Gradient and renders Skeletons during 
 });
 
 test('AmbientGlowBackground: Renders Skia Canvas with Fill #000000, Blur decal, dithered LinearGradient vignette, crossfade, square artwork & neutral Lyrics card', async () => {
+  const { getMediaProvider, registerMediaProvider } = require('../services/mediaProvider');
+  const prevProvider = getMediaProvider();
+  registerMediaProvider({
+    ...prevProvider,
+    hasLetterboxArtwork: (uri) => Boolean(uri && /letterbox\.jpg$/i.test(uri)),
+  });
+  try {
   const flattenStyle = (s) => (Array.isArray(s) ? Object.assign({}, ...s.filter(Boolean)) : s || {});
-  const artworkUrl1 = 'https://i.ytimg.com/vi/abc123/hqdefault.jpg';
-  const artworkUrl2 = 'https://i.ytimg.com/vi/xyz789/hqdefault.jpg';
+  const artworkUrl1 = 'https://cdn.example.com/art/abc123/letterbox.jpg';
+  const artworkUrl2 = 'https://cdn.example.com/art/xyz789/letterbox.jpg';
 
   // 1. Verify Skia Canvas structure: Fill #000000, Group(0.55) -> Image(cover) -> Blur(70, decal), Rect(dither) -> LinearGradient
   let glowTree;
@@ -267,7 +274,7 @@ test('AmbientGlowBackground: Renders Skia Canvas with Fill #000000, Blur decal, 
 
   const coverImage = modalTree.root.findByProps({ accessibilityLabel: 'Capa do álbum de Arrival of the Birds' });
   const coverStyle = flattenStyle(coverImage.props.style);
-  assert.deepStrictEqual(coverStyle.transform, [{ scale: 1.35 }], 'Should crop YouTube hqdefault 4:3 letterbox bars');
+  assert.deepStrictEqual(coverStyle.transform, [{ scale: 1.35 }], 'Should crop 4:3 letterbox bars when provider flags letterbox artwork');
   const wrapperStyle = flattenStyle(coverImage.parent.props.style);
   assert.strictEqual(typeof wrapperStyle.width, 'number');
   assert.strictEqual(wrapperStyle.width, wrapperStyle.height, 'Artwork wrapper must have explicit equal pixel width and height so Android Yoga never collapses it');
@@ -311,6 +318,9 @@ test('AmbientGlowBackground: Renders Skia Canvas with Fill #000000, Blur decal, 
     );
   });
   assert.ok(artistCard, 'Artist card should use smoked black glass surface over the ambient glow');
+  } finally {
+    registerMediaProvider(prevProvider);
+  }
 });
 
 test('LibrarySection & App Glow: Transparent layers expose crimson AtmosphericGradient through translucent StatusBar, frosted + Nova button, LinearGradient Favorites hero, and borderless playlist rows', async () => {
@@ -356,7 +366,14 @@ test('LibrarySection & App Glow: Transparent layers expose crimson AtmosphericGr
   assert.strictEqual(tabContentStyle.backgroundColor, 'transparent', 'tabContent must be transparent so AtmosphericGradient shows behind LibrarySection');
 
   // 3. LibrarySection hero, frosted button, SUAS PLAYLISTS header, and open rows
+  const { getMediaProvider, registerMediaProvider } = require('../services/mediaProvider');
+  const prevProvider = getMediaProvider();
+  registerMediaProvider({
+    ...prevProvider,
+    hasLetterboxArtwork: (uri) => Boolean(uri && /letterbox\.jpg$/i.test(uri)),
+  });
   let libTree;
+  try {
   await actAsync(async () => {
     libTree = renderer.create(
       React.createElement(LibrarySection, {
@@ -367,7 +384,7 @@ test('LibrarySection & App Glow: Transparent layers expose crimson AtmosphericGr
             name: 'Synthwave Night',
             trackCount: 7,
             isSystem: false,
-            thumbnailUrl: 'https://i.ytimg.com/vi/MV_3Dpw-BRY/hqdefault.jpg',
+            thumbnailUrl: 'https://cdn.example.com/art/pl_1/letterbox.jpg',
           },
         ],
         isLoading: false,
@@ -406,6 +423,9 @@ test('LibrarySection & App Glow: Transparent layers expose crimson AtmosphericGr
   const thumbImg = userRowBtn.findByType('Image');
   assert.strictEqual(thumbImg.props.resizeMode, 'cover');
   assert.deepStrictEqual(StyleSheet.flatten(thumbImg.props.style).transform, [{ scale: 1.35 }]);
+  } finally {
+    registerMediaProvider(prevProvider);
+  }
 });
 
 test('App Tabs Glow Continuity: Search and Downloads FlatLists keep transparent contentContainerStyle without clipping AtmosphericGradient', async () => {
@@ -628,7 +648,7 @@ test('Smooth Tab Crossfade & Search-Only Skeletons: local tabs/modals fade witho
           name: 'Immediate Preview Mix',
           description: 'No SQLite stall',
           trackCount: 3,
-          thumbnailUrl: 'https://i.ytimg.com/vi/abc/hqdefault.jpg',
+          thumbnailUrl: 'https://cdn.example.com/art/preview/cover.jpg',
           isSystem: false,
         },
         onClose: () => {},

@@ -64,14 +64,14 @@ O **Sonary** foi projetado para operar sem servidores dedicados, bancos de dados
 │        ▼        ▼                     │                                │
 │   ┌────────┐ ┌────────┐               ▼                                │
 │   │api.ts  │ │database│    ┌─────────────────────┐                     │
-│   │Piped + │ │storage │───>│ Android Media Subsys│                     │
-│   │Invid.  │ │Scoped  │    │ ExoPlayer Core      │                     │
+│   │Media   │ │storage │───>│ Android Media Subsys│                     │
+│   │Provider│ │Scoped  │    │ ExoPlayer Core      │                     │
 │   └────────┘ └────────┘    │ MediaSessionCompat  │                     │
 │                            └─────────────────────┘                     │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Zero-Backend:** Extração direta client-side via YouTube InnerTube (zero restrição territorial ou bloqueio de IP) com fallback federado de instâncias públicas (Piped / Invidious) e seleção de baixo TTFB (~128kbps AAC).
+- **Zero-Backend & Provedor Plugável (`MediaProvider`):** Arquitetura client-side desacoplada por trás de um contrato genérico (`services/mediaProvider.ts`), separando completamente o player/UI do adaptador de catálogo e extração de mídia.
 - **Player Nativo em Primeiro Plano:** Implementado com `react-native-track-player` v4.1+ registrado no ciclo de vida nativo para continuar tocando em segundo plano e com a tela bloqueada.
 - **Config Plugin Nativo Android 14+ ([`plugins/withTrackPlayerFGS.js`](./plugins/withTrackPlayerFGS.js)):** Injeta programaticamente no `AndroidManifest.xml` a declaração obrigatória `android:foregroundServiceType="mediaPlayback"` e `android:exported="true"` para o `MusicService`.
 - **Persistência Real com Expo SQLite ([`services/database.ts`](./services/database.ts)):** Rastreia e armazena os metadados de todas as faixas baixadas offline (`downloaded_tracks`), com suporte a consultas em lote instantâneas (`getDownloadedTrackIds`) para eliminar jank na busca.
@@ -94,7 +94,7 @@ O **Sonary** foi projetado para operar sem servidores dedicados, bancos de dados
 | [`app.json`](./app.json) | Configuração nativa Expo com permissões Android 14+ (`FOREGROUND_SERVICE_MEDIA_PLAYBACK`, `FOREGROUND_SERVICE`, `POST_NOTIFICATIONS`, `WAKE_LOCK`, `INTERNET`), plugins `expo-build-properties` (Target/Compile SDK 34) e plugins locais. |
 | [`theme.ts`](./theme.ts) | Sistema de tokens de design do Sonary (cores `#030303`, `#121212`, `#FF0000`, escalas de espaçamento e tipografia). |
 | [`DESIGN.md`](./DESIGN.md) | Especificação visual e técnica detalhada do design system escuro do Sonary. |
-| [`components/YouTubeMusicSidebar.tsx`](./components/YouTubeMusicSidebar.tsx) | Sidebar retrátil para telas maiores/desktop com seções de navegação, biblioteca e playlists fixadas. |
+| [`components/DesktopSidebar.tsx`](./components/DesktopSidebar.tsx) | Sidebar retrátil para telas maiores/desktop com seções de navegação, biblioteca e playlists fixadas. |
 | [`components/QuickPicksSection.tsx`](./components/QuickPicksSection.tsx) | Seção "Escolhas rápidas" em grid de 4 linhas com paginação horizontal, cards densos e equalizador animado na faixa ativa. |
 | [`components/PersistentMiniPlayer.tsx`](./components/PersistentMiniPlayer.tsx) | Barra de reprodução persistente com barra vermelha superior de progresso (`#FF0000`), botões de Like, Shuffle, Repeat e expansão da gaveta. |
 | [`components/NowPlayingModal.tsx`](./components/NowPlayingModal.tsx) | Gaveta imersiva "Tocando Agora" com sistema de 3 abas ("A SEGUIR", "LETRAS", "RELACIONADOS"), capa expandida, scrubber interativo e atalhos de teclado. |
@@ -107,7 +107,8 @@ O **Sonary** foi projetado para operar sem servidores dedicados, bancos de dados
 | [`services/database.ts`](./services/database.ts) | Camada de persistência local SQLite assíncrona (`SQLite.openDatabaseAsync('sonary.db')`), gerenciando o schema `downloaded_tracks`, playlists e músicas curtidas com consultas em lote. |
 | [`services/storage.ts`](./services/storage.ts) | Gerenciador de Scoped Storage (`tracks/` e `thumbnails/`), download atômico (`.part` ➔ `.m4a`), validação estrita de `Content-Length`, checagem prévia de espaço em disco (mínimo 25 MB) e limpeza profunda de arquivos órfãos. |
 | [`services/player.ts`](./services/player.ts) | Módulo Singleton com trava de concorrência (`setupPlayerPromise`), proteção contra reentrância de inicialização, configuração de capacidades de notificação e funções utilitárias (`playTrack`, `togglePlayback`, `seekTo`, `resetPlayer`). |
-| [`services/api.ts`](./services/api.ts) | Camada de resiliência de rede com motor primário InnerTube client-side e fallback federado (Piped + Invidious), timeout de 10.000ms (`AbortController`), failover automático para HTTP 429/5xx e classe de erro tipada `AllInstancesFailedError`. |
+| [`services/mediaProvider.ts`](./services/mediaProvider.ts) | Contrato agnóstico `MediaProvider` e registro do provedor de catálogo/streams ativo, desacoplando o core do app de qualquer origem de mídia específica. |
+| [`services/api.ts`](./services/api.ts) | Fachada agnóstica unificando o `MediaProvider` ativo, módulo de letras (`services/lyrics.ts` via LRCLIB) e normalização pura de metadados (`services/trackMetadata.ts`). |
 | [`App.tsx`](./App.tsx) | Interface principal do Sonary com navegação responsiva, atalhos globais de teclado, streaming instantâneo, auto-advance e integração total com SQLite. |
 | [`AUDITORIA_RESILIENCIA_UX.md`](./AUDITORIA_RESILIENCIA_UX.md) | Relatório técnico completo de auditoria de estresse operacional, resiliência de UX, lifecycles e matriz de gaps de I/O e concorrência. |
 
@@ -215,26 +216,22 @@ Em [`App.tsx`](./App.tsx) e [`services/player.ts`](./services/player.ts):
 - **Pré-Enfileiramento Contínuo (Auto-Advance em Background):** Ao iniciar uma faixa online da busca, a aplicação agenda o pré-carregamento assíncrono das 2 próximas faixas da lista de resultados via [`preloadAndQueueTrack`](./App.tsx#L125). As faixas são adicionadas nativamente à fila do `TrackPlayer` (`TrackPlayer.add`), garantindo transição ininterrupta de áudio (gapless playback) quando a música atual terminar.
 
 ### 3.8. Pipeline de Headers de Mídia do ExoPlayer & Resiliência contra HTTP 403 (Self-Healing)
-Em [`services/player.ts`](./services/player.ts), [`services/api.ts`](./services/api.ts) e [`service.js`](./service.js):
-- **O Desafio do CDN do YouTube (HTTP 403 Forbidden):** As URLs de stream direto (`googlevideo.com`) geradas via InnerTube exigem paridade entre o perfil de requisição e o cliente de reprodução. O Android ExoPlayer, por padrão, utilizava a identificação genérica `ExoPlayerLib/...` sem cabeçalhos de origem, fazendo o servidor de mídia rejeitar a conexão com `android-io-bad-http-status: Response code: 403`.
-- **Injeção Nativa de Headers no ExoPlayer:** Para solucionar o bloqueio sem intermediários ou proxies pesados, o [`services/player.ts`](./services/player.ts#L110-L136) foi calibrado para injetar automaticamente na estrutura do `Track`:
+Em [`services/player.ts`](./services/player.ts), [`services/mediaProvider.ts`](./services/mediaProvider.ts) e [`service.js`](./service.js):
+- **Paridade de Cabeçalhos de Stream (HTTP 403 Forbidden):** CDNs de mídia frequentemente exigem que os cabeçalhos HTTP e o `User-Agent` da reprodução correspondam ao perfil usado na resolução do stream. O ExoPlayer, por padrão, usa apenas `ExoPlayerLib/...`, podendo receber `Response code: 403` quando o stream requer cabeçalhos customizados.
+- **Repasse Dinâmico de Headers no ExoPlayer:** O [`services/player.ts`](./services/player.ts) é agnóstico de origem e repassa fielmente os campos `userAgent` e `headers` retornados pelo `MediaProvider` ativo diretamente para a estrutura do `Track`:
   ```typescript
   const track: Track = {
     id: params.id,
     url: params.url,
     title: params.title,
     artist: params.artist,
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6.0 Safari/605.1.15',
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6.0 Safari/605.1.15',
-      Referer: 'https://www.youtube.com/',
-      Origin: 'https://www.youtube.com',
-    },
-    contentType: 'audio/mp4',
+    userAgent: params.userAgent || DEFAULT_USER_AGENT,
+    headers: params.headers,
+    contentType: params.contentType || 'audio/mp4',
   };
   ```
-  Esses parâmetros são mapeados diretamente para a fábrica `DefaultHttpDataSource.Factory` do ExoPlayer nativo no Android, fazendo o stream progressivo ser aceito instantaneamente.
-- **Camada de Auto-Recuperação (Self-Healing Fallback):** Caso o provedor de internet ou a CDN aplique restrições adicionais em tempo real, o listener [`Event.PlaybackError`](./App.tsx#L170-L216) intercepta a falha na UI, baixa a faixa de forma transparente em background com [`downloadTrackFile`](./services/storage.ts#L30) (que já possui isolamento e headers validados) e retoma a reprodução localmente via `file://` sem congelar a experiência do usuário.
+  Esses parâmetros são mapeados diretamente para a fábrica `DefaultHttpDataSource.Factory` do ExoPlayer nativo no Android, preservando o contrato agnóstico do player.
+- **Camada de Auto-Recuperação (Self-Healing Fallback):** Caso uma URL de stream expire ou sofra restrição temporária em rede móvel, o listener `Event.PlaybackError` intercepta a falha na UI, re-resolve o stream via `MediaProvider` ou aciona o fallback local via `file://` sem congelar a experiência do usuário.
 
 ### 3.9. Modal Now Playing & Navegação Temporal (Scrubber Interativo)
 Em [`components/NowPlayingModal.tsx`](./components/NowPlayingModal.tsx):
@@ -444,7 +441,7 @@ npx expo start --clear
 | :--- | :---: | :--- |
 | **BLOCO 1:** Dependências e Android Manifest | ✅ Aprovado | `package.json` auditado, `app.json` com `POST_NOTIFICATIONS` e plugin local `withTrackPlayerFGS.js` com target SDK 34 (`android:exported="true"`). |
 | **BLOCO 2:** Ciclo de Vida do Player | ✅ Aprovado | `service.js` (RemoteDuck com contrato oficial do RNTP + listener de `PlaybackError`), `index.ts` (registro prematuro) e `services/player.ts` (`autoHandleInterruptions: true`). |
-| **BLOCO 3:** Resiliência de API | ✅ Aprovado | `services/api.ts` (motor primário InnerTube client-side sem bloqueio geográfico, fallback federado Piped + Invidious, timeout de 10s e classe `AllInstancesFailedError`). |
+| **BLOCO 3:** Camada de Provedor Agnóstica | ✅ Aprovado | `services/mediaProvider.ts` + `services/api.ts` (interface `MediaProvider` desacoplada, fachada agnóstica, letras via LRCLIB em `services/lyrics.ts` e erros tipados `MediaProviderUnavailableError`). |
 | **BLOCO 4:** Persistência SQLite & Player Offline | ✅ Aprovado | `services/database.ts` (SQLite v14 com queries em lote), `services/storage.ts` (Scoped Storage integrado) e `App.tsx` (reprodução local imediata + aba offline + `GestureHandlerRootView`). |
 | **BLOCO 5:** Resiliência de I/O e Auditoria de UX | ✅ Aprovado | Gravação atômica (`.part` ➔ `.m4a`), validação de `Content-Length`, checagem prévia de disco livre (mínimo 25 MB), permissão em runtime (`POST_NOTIFICATIONS`) e relatório [`AUDITORIA_RESILIENCIA_UX.md`](./AUDITORIA_RESILIENCIA_UX.md). |
 | **BLOCO 6:** Redesign Visual Dark OLED | ✅ Aprovado | Redesign completo do Sonary: Sidebar retrátil, Topbar com blur, Chips de humor/energia, Escolhas rápidas em grid 4xN, Mini-player persistente com barra vermelha (`#FF0000`), Modal "Tocando Agora" com 3 abas (A Seguir, Letras, Relacionados) e atalhos de teclado. Zero regressão na camada de áudio e SQLite. |

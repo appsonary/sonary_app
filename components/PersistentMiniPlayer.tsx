@@ -58,11 +58,11 @@ export interface PersistentMiniPlayerProps {
 }
 
 /**
- * Paleta curada de tons atmosféricos escuros do Spotify (Deep Dark Mode)
+ * Paleta curada de tons atmosféricos escuros (Deep Dark Mode)
  * Tons ricos, profundos e com contraste AAA (> 9.5:1) para texto branco.
  */
-export const SPOTIFY_DARK_PALETTES = [
-  '#132438', // Deep Midnight Navy (tom da screenshot do Bryson Tiller)
+export const AMBIENT_DARK_PALETTES = [
+  '#132438', // Deep Midnight Navy
   '#0e2d24', // Deep Forest Emerald
   '#2a1435', // Deep Velvet Violet
   '#351419', // Deep Wine Burgundy
@@ -77,7 +77,7 @@ export const SPOTIFY_DARK_PALETTES = [
 ];
 
 /**
- * Extrai deterministicamente uma cor predominante escura refinada do Spotify
+ * Extrai deterministicamente uma cor predominante escura refinada
  * baseada nos metadados ou na URL da capa da faixa.
  */
 export function getDominantTrackColor(artworkUrl?: string, trackId?: string, title?: string): string {
@@ -100,8 +100,8 @@ export function getDominantTrackColor(artworkUrl?: string, trackId?: string, tit
     hash ^= seed.charCodeAt(i);
     hash = Math.imul(hash, 16777619);
   }
-  const index = Math.abs(hash) % SPOTIFY_DARK_PALETTES.length;
-  return SPOTIFY_DARK_PALETTES[index];
+  const index = Math.abs(hash) % AMBIENT_DARK_PALETTES.length;
+  return AMBIENT_DARK_PALETTES[index];
 }
 
 export const PersistentMiniPlayer: React.FC<PersistentMiniPlayerProps> = ({
@@ -216,7 +216,7 @@ export const PersistentMiniPlayer: React.FC<PersistentMiniPlayerProps> = ({
         accessibilityLabel={`Tocando agora: ${activeTrack.title} por ${activeTrack.artist}. Toque para expandir player.`}
       >
       <View style={styles.contentRow}>
-        {/* Lado Esquerdo: Miniatura da Capa e Metadados estilo Spotify */}
+        {/* Lado Esquerdo: Miniatura da Capa e Metadados */}
         <View style={styles.leftInfoCluster}>
           <View style={styles.thumbnailWrapper}>
             {activeTrack.artwork && !imageError ? (
@@ -242,7 +242,7 @@ export const PersistentMiniPlayer: React.FC<PersistentMiniPlayerProps> = ({
           </View>
         </View>
 
-        {/* Lado Direito: Ações e Controles estilo Spotify */}
+        {/* Lado Direito: Ações e Controles */}
         <View style={styles.rightControls}>
           {/* Botão de Favorito / Adicionar */}
           {onToggleFavorite && (
@@ -281,7 +281,7 @@ export const PersistentMiniPlayer: React.FC<PersistentMiniPlayerProps> = ({
             <SkipBack color="#FFFFFF" size={18} fill="#FFFFFF" />
           </TouchableOpacity>
 
-          {/* Botão Tocar / Pausar (Ícone puro branco com preenchimento como no Spotify) */}
+          {/* Botão Tocar / Pausar */}
           <TouchableOpacity
             style={styles.playButton}
             onPress={(e) => {
@@ -389,7 +389,7 @@ export const PersistentMiniPlayer: React.FC<PersistentMiniPlayerProps> = ({
         </View>
       </View>
 
-      {/* Barra de Progresso Fina no Rodapé do Card (Padrão Spotify) */}
+      {/* Barra de Progresso Fina no Rodapé do Card */}
       <TouchableOpacity
         style={styles.progressBarWrapper}
         activeOpacity={1}

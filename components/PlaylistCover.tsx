@@ -8,6 +8,9 @@ import {
 } from 'react-native';
 import { ListMusic } from 'lucide-react-native';
 import { theme } from '../theme';
+import { hasLetterboxArtwork } from '../services/api';
+
+export { hasLetterboxArtwork };
 
 export interface PlaylistCoverProps {
   thumbnailUrl?: string | null;
@@ -20,10 +23,6 @@ export interface PlaylistCoverProps {
   placeholderBackgroundColor?: string;
   style?: StyleProp<ViewStyle>;
   testID?: string;
-}
-
-export function hasYouTubeLetterbox(uri?: string | null): boolean {
-  return Boolean(uri && /(?:hqdefault|sddefault)\.jpg/i.test(uri));
 }
 
 export const PlaylistCover: React.FC<PlaylistCoverProps> = ({
@@ -76,7 +75,7 @@ export const PlaylistCover: React.FC<PlaylistCoverProps> = ({
                 source={{ uri }}
                 style={[
                   styles.fullImage,
-                  hasYouTubeLetterbox(uri) && styles.letterboxCrop,
+                  hasLetterboxArtwork(uri) && styles.letterboxCrop,
                 ]}
                 resizeMode="cover"
               />
@@ -90,7 +89,7 @@ export const PlaylistCover: React.FC<PlaylistCoverProps> = ({
                 source={{ uri }}
                 style={[
                   styles.fullImage,
-                  hasYouTubeLetterbox(uri) && styles.letterboxCrop,
+                  hasLetterboxArtwork(uri) && styles.letterboxCrop,
                 ]}
                 resizeMode="cover"
               />
@@ -110,7 +109,7 @@ export const PlaylistCover: React.FC<PlaylistCoverProps> = ({
           source={{ uri: singleUri }}
           style={[
             styles.fullImage,
-            hasYouTubeLetterbox(singleUri) && styles.letterboxCrop,
+            hasLetterboxArtwork(singleUri) && styles.letterboxCrop,
           ]}
           resizeMode="cover"
         />

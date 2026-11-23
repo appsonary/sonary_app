@@ -235,7 +235,7 @@ export const TrackContextSheet: React.FC<TrackContextSheetProps> = ({
 
             <View style={styles.sheetDivider} />
 
-            {/* 3 Blocos de Ação Rápida no Topo (YouTube Music Tiles) */}
+            {/* 3 Blocos de Ação Rápida no Topo */}
             <View style={styles.quickTilesRow}>
               {onPlayNext && (
                 <TouchableOpacity

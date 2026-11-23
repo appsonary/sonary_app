@@ -33,12 +33,12 @@ export const NavigationTabBar: React.FC<NavigationTabBarProps> = ({
 }) => {
   return (
     <View style={styles.tabBar} accessibilityRole="tablist">
-      {/* Shader SVG contínuo estilo Spotify sem frestas subpixel em telas de alta densidade */}
+      {/* Shader SVG contínuo de transição sem frestas subpixel em telas de alta densidade */}
       <View
         pointerEvents="none"
         collapsable={false}
         style={styles.gradientContainer}
-        testID="spotify-nav-fade"
+        testID="bottom-nav-fade"
       >
         <Svg
           width="100%"
@@ -47,7 +47,7 @@ export const NavigationTabBar: React.FC<NavigationTabBarProps> = ({
           preserveAspectRatio="none"
         >
           <Defs>
-            <LinearGradient id="spotifyNavFade" x1="0" y1="0" x2="0" y2="1">
+            <LinearGradient id="bottomNavFade" x1="0" y1="0" x2="0" y2="1">
               {GRADIENT_STOPS.map((stop) => (
                 <Stop
                   key={stop.offset}
@@ -58,7 +58,7 @@ export const NavigationTabBar: React.FC<NavigationTabBarProps> = ({
               ))}
             </LinearGradient>
           </Defs>
-          <Rect x="0" y="0" width="1" height="96" fill="url(#spotifyNavFade)" />
+          <Rect x="0" y="0" width="1" height="96" fill="url(#bottomNavFade)" />
         </Svg>
       </View>
 

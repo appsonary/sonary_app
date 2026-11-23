@@ -23,7 +23,7 @@ import type { MainTab } from './NavigationTabBar';
 
 const SIDEBAR_BRAND_LOGO = require('../assets/brand-logo-header.png');
 
-export interface YouTubeMusicSidebarProps {
+export interface DesktopSidebarProps {
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   activeTab: MainTab;
@@ -34,7 +34,7 @@ export interface YouTubeMusicSidebarProps {
   onQuickCreatePlaylist?: () => void;
 }
 
-export const YouTubeMusicSidebar: React.FC<YouTubeMusicSidebarProps> = ({
+export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   isCollapsed,
   onToggleCollapse,
   activeTab,
@@ -468,5 +468,5 @@ const styles = StyleSheet.create({
   },
 });
 
-export default YouTubeMusicSidebar;
+export default DesktopSidebar;
 

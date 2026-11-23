@@ -15,7 +15,7 @@ test.beforeEach(async () => {
   resetAllMocks();
 });
 
-test('Visual Diff: DESIGN.md exists and theme.ts matches YouTube Music specifications', () => {
+test('Visual Diff: DESIGN.md exists and theme.ts matches Sonary dark design specifications', () => {
   const designMdPath = path.resolve(__dirname, '..', 'DESIGN.md');
   assert.ok(fs.existsSync(designMdPath), 'DESIGN.md must exist in project root');
 
@@ -36,7 +36,7 @@ test('Visual Diff: DESIGN.md exists and theme.ts matches YouTube Music specifica
   assert.strictEqual(theme.radii.circular, 9999);
 });
 
-test('Visual Diff: WCAG Contrast compliance for YouTube Music color tokens', () => {
+test('Visual Diff: WCAG Contrast compliance for Sonary dark color tokens', () => {
   // WCAG Relative Luminance calculation
   function getLuminance(hex) {
     const cleanHex = hex.replace('#', '');
@@ -83,7 +83,7 @@ test('Visual Diff & Responsive Viewport: Tree renders properly for Mobile (390x8
   const root = tree.root;
   assert.ok(root, 'App should render responsive view hierarchy');
 
-  // Verify YouTube Music Design System elements in the rendered tree
+  // Verify Sonary Design System elements in the rendered tree
   const allViews = root.findAllByType('View');
   const allTouchables = root.findAllByType('TouchableOpacity');
 

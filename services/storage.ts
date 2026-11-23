@@ -227,11 +227,6 @@ export interface LocalDownloadedTrack {
 }
 
 const MIN_FREE_DISK_BYTES = 25 * 1024 * 1024; // Mínimo de 25 MB livres para novo download
-const DEFAULT_STREAM_DOWNLOAD_HEADERS: Record<string, string> = {
-  'User-Agent': api.INNERTUBE_USER_AGENT,
-  Referer: 'https://www.youtube.com/',
-  Origin: 'https://www.youtube.com',
-};
 
 export class DownloadCancelledError extends Error {
   constructor(trackId?: string) {
@@ -286,18 +281,14 @@ export async function downloadTrackFile(
 
   let expectedTotalBytes = 0;
 
-  const requestHeaders = {
-    ...DEFAULT_STREAM_DOWNLOAD_HEADERS,
-    ...(headers || {}),
-  };
+  const requestHeaders =
+    headers && Object.keys(headers).length > 0 ? { ...headers } : undefined;
 
   // Download do arquivo de áudio gravando inicialmente no arquivo temporário .part
   const downloadResumable = FileSystem.createDownloadResumable(
     streamUrl,
     partAudioUri,
-    {
-      headers: requestHeaders,
-    },
+    requestHeaders ? { headers: requestHeaders } : {},
     (downloadProgress) => {
       if (downloadProgress.totalBytesExpectedToWrite > 0) {
         expectedTotalBytes = downloadProgress.totalBytesExpectedToWrite;
@@ -660,15 +651,79 @@ interface NativeBackgroundDownloaderSpec {
       artist: string;
       duration: number;
       thumbnailUrl: string;
+      streamUrl?: string | null;
+      headersJson?: string | null;
     }>
   ) => Promise<void>;
   getQueueSnapshot: () => Promise<NativePersistedQueueRow[]>;
   enqueueSync: () => Promise<void>;
+  updateTrackStream?: (
+    trackId: string,
+    streamUrl: string,
+    headersJson?: string | null
+  ) => Promise<void>;
+  provideResolvedStream?: (
+    requestId: string,
+    streamUrl: string | null,
+    headersJson: string | null,
+    error: string | null
+  ) => Promise<void>;
   cancelTrack: (trackId: string) => Promise<void>;
   cancelAll: () => Promise<void>;
   clearFinished: () => Promise<void>;
   clearCompleted: () => Promise<void>;
   isWorkerActive?: () => Promise<boolean>;
+}
+
+const NATIVE_PRE_RESOLVE_BATCH_SIZE = 5;
+const NATIVE_PRE_RESOLVE_CONCURRENCY = 2;
+const inFlightNativePreResolves = new Set<string>();
+
+function serializeStreamHeaders(stream: ResolvedDownloadStream): string | null {
+  const headers: Record<string, string> = stream.headers
+    ? { ...stream.headers }
+    : stream.userAgent
+      ? { 'User-Agent': stream.userAgent }
+      : {};
+  return Object.keys(headers).length > 0 ? JSON.stringify(headers) : null;
+}
+
+function preResolveNativeStreams(trackIds: string[]): void {
+  const nativeMod = getNativeDownloader();
+  if (!nativeMod || typeof nativeMod.updateTrackStream !== 'function') return;
+
+  const candidates = trackIds
+    .filter((id) => Boolean(id) && !inFlightNativePreResolves.has(id))
+    .slice(0, NATIVE_PRE_RESOLVE_BATCH_SIZE);
+  if (candidates.length === 0) return;
+
+  let cursor = 0;
+  const runWorker = async () => {
+    while (cursor < candidates.length) {
+      const trackId = candidates[cursor++];
+      if (!trackId || inFlightNativePreResolves.has(trackId)) continue;
+      inFlightNativePreResolves.add(trackId);
+      try {
+        const stream = await audioStreamResolver(trackId);
+        if (stream?.streamUrl) {
+          const headersJson = serializeStreamHeaders(stream);
+          await enqueuePersistenceOp(() =>
+            nativeMod.updateTrackStream!(trackId, stream.streamUrl, headersJson)
+          );
+        }
+      } catch {
+        // Worker solicitará sob demanda via needStream caso a pré-resolução falhe
+      } finally {
+        inFlightNativePreResolves.delete(trackId);
+      }
+    }
+  };
+
+  const workers = Array.from(
+    { length: Math.min(NATIVE_PRE_RESOLVE_CONCURRENCY, candidates.length) },
+    () => runWorker()
+  );
+  void Promise.all(workers).catch(() => {});
 }
 
 function enqueuePersistenceOp(task: () => Promise<void>): Promise<void> {
@@ -721,6 +776,43 @@ function attachNativeDownloadListeners(): void {
 
       if (type === 'sync') {
         void hydrateDownloadQueue();
+        return;
+      }
+
+      if (type === 'needStream') {
+        const requestId = typeof payload.requestId === 'string' ? payload.requestId : '';
+        const forceRefresh = Boolean(payload.forceRefresh);
+        if (!requestId || !trackId || typeof nativeMod.provideResolvedStream !== 'function') {
+          return;
+        }
+        void (async () => {
+          try {
+            if (forceRefresh) {
+              api.invalidateStreamCache(trackId);
+            }
+            const stream = await audioStreamResolver(trackId);
+            if (!stream?.streamUrl) {
+              await nativeMod.provideResolvedStream!(
+                requestId,
+                null,
+                null,
+                'URL de áudio indisponível no provedor'
+              );
+              return;
+            }
+            await nativeMod.provideResolvedStream!(
+              requestId,
+              stream.streamUrl,
+              serializeStreamHeaders(stream),
+              null
+            );
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            await nativeMod
+              .provideResolvedStream!(requestId, null, null, msg || 'Falha ao resolver stream')
+              .catch(() => {});
+          }
+        })();
         return;
       }
 
@@ -899,6 +991,9 @@ export async function hydrateDownloadQueue(): Promise<DownloadQueueItem[]> {
     notifyQueueListeners();
 
     if (downloadQueue.some((i) => i.status === 'pending')) {
+      preResolveNativeStreams(
+        downloadQueue.filter((i) => i.status === 'pending').map((i) => i.track.id)
+      );
       scheduleQueueExecution();
     }
     return getDownloadQueue();
@@ -1040,6 +1135,7 @@ export function enqueueDownload(track: TrackSummary): EnqueueResult {
         },
       ])
     );
+    preResolveNativeStreams([track.id]);
   } else {
     enqueuePersistenceOp(() =>
       upsertPersistedDownloadQueueItem({
@@ -1114,6 +1210,7 @@ export function enqueuePlaylistDownload(tracks: TrackSummary[]): EnqueuePlaylist
           }))
         )
       );
+      preResolveNativeStreams(persistedBatch.map((b) => b.trackId));
     } else {
       enqueuePersistenceOp(() => upsertPersistedDownloadQueueBatch(persistedBatch));
     }
@@ -1207,6 +1304,7 @@ export function retryDownload(videoId: string): boolean {
         },
       ])
     );
+    preResolveNativeStreams([existing.track.id]);
   } else {
     enqueuePersistenceOp(() =>
       upsertPersistedDownloadQueueItem({

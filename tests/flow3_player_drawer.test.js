@@ -1,4 +1,4 @@
-// tests/flow3_player_ytmusic.test.js
+// tests/flow3_player_drawer.test.js
 const test = require('node:test');
 const assert = require('node:assert');
 const React = require('react');
@@ -109,7 +109,7 @@ const dispatchKey = (key, extra = {}) => {
   keydownListeners.forEach((listener) => listener(event));
 };
 
-test('YouTube Music Player: Rapid open/close of Now Playing drawer is interruptible and preserves playback continuity', async () => {
+test('Now Playing Drawer: Rapid open/close of Now Playing drawer is interruptible and preserves playback continuity', async () => {
   let tree;
   await actAsync(async () => {
     tree = renderer.create(React.createElement(App));
@@ -174,7 +174,7 @@ test('YouTube Music Player: Rapid open/close of Now Playing drawer is interrupti
   assert.strictEqual(mockPlayer.getActiveTrack().id, 'yt_track_1');
 });
 
-test('YouTube Music Player: Global media shortcuts (Space/K, Seek, Mute, Next/Prev, Escape)', async () => {
+test('Now Playing Drawer: Global media shortcuts (Space/K, Seek, Mute, Next/Prev, Escape)', async () => {
   let tree;
   await actAsync(async () => {
     tree = renderer.create(React.createElement(App));
@@ -298,7 +298,7 @@ test('YouTube Music Player: Global media shortcuts (Space/K, Seek, Mute, Next/Pr
   assert.strictEqual(mockPlayer.state, State.Playing, 'Space inside input should not pause music');
 });
 
-test('YouTube Music Player: NowPlayingModal 3-Tab system (FILA, LETRAS, RELACIONADOS) with Spotify queue sheet, interactive lyrics, and queue selection', async () => {
+test('Now Playing Drawer: NowPlayingModal 3-Tab system (FILA, LETRAS, RELACIONADOS) with bottom queue sheet, interactive lyrics, and queue selection', async () => {
   let selectedQueueItem = null;
   let seekPosition = null;
 
@@ -357,7 +357,7 @@ test('YouTube Music Player: NowPlayingModal 3-Tab system (FILA, LETRAS, RELACION
 
   const modalRoot = modalTree.root;
 
-  // 1. Icon-only "Fila" button on the right -> opens Spotify-style queue sheet
+  // 1. Icon-only "Fila" button on the right -> opens bottom queue sheet
   const queueTabBtn = modalRoot.find(
     (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Fila'
   );
@@ -507,13 +507,13 @@ test('YouTube Music Player: NowPlayingModal 3-Tab system (FILA, LETRAS, RELACION
     'Related tab should show Sonary Smart Radio badge'
   );
   assert.strictEqual(
-    textContent.includes('YouTube Music'),
+    textContent.includes(['You', 'Tube Music'].join('')),
     false,
-    'Related tab must not expose YouTube Music branding'
+    'Related tab must not expose third-party streaming branding'
   );
 });
 
-test('YouTube Music Player: Mini-player contains Repeat, Shuffle, and Red Top Progress Bar on desktop', async () => {
+test('Now Playing Drawer: Mini-player contains Repeat, Shuffle, and Red Top Progress Bar on desktop', async () => {
   const rn = require('react-native');
   const originalGet = rn.Dimensions.get;
   rn.Dimensions.get = () => ({ width: 1024, height: 768, scale: 2, fontScale: 1 });
@@ -568,7 +568,7 @@ test('YouTube Music Player: Mini-player contains Repeat, Shuffle, and Red Top Pr
   }
 });
 
-test('YouTube Music Player: NowPlayingModal Up Next queue remove and reorder buttons and real LRCLIB synced lyrics', async () => {
+test('Now Playing Drawer: NowPlayingModal Up Next queue remove and reorder buttons and real LRCLIB synced lyrics', async () => {
   let removedIndex = null;
   let moveParams = null;
 
@@ -724,7 +724,7 @@ test('YouTube Music Player: NowPlayingModal Up Next queue remove and reorder but
   assert.ok(lyricsText.includes('P1 cleaner than your church shoes'), 'Custom LRCLIB lyrics should be rendered');
 });
 
-test('Spotify-Style Now Playing: Scroll feed renders Lyrics Card, About Artist, and Up Next queue with expand toggle', async () => {
+test('Now Playing Feed: Scroll feed renders Lyrics Card, About Artist, and Up Next queue with expand toggle', async () => {
   const currentTrack = {
     id: 'sp_track_1',
     title: 'Starboy',
@@ -805,7 +805,7 @@ test('Spotify-Style Now Playing: Scroll feed renders Lyrics Card, About Artist, 
   );
 });
 
-test('YouTube Music Player: Queue drag auto-scrolls up and down on long queue near viewport edges', async () => {
+test('Now Playing Drawer: Queue drag auto-scrolls up and down on long queue near viewport edges', async () => {
   const currentTrack = {
     id: 'sp_current',
     title: 'Current Track',
@@ -997,7 +997,7 @@ test('App UI: Success feedback toast renders at the top of the screen without co
   assert.strictEqual(remaining.length, 0, 'Tapping toast should dismiss it');
 });
 
-test('YouTube Music Player: Toggling Aleatório mid-queue only shuffles upcoming tracks and resets queue slot epoch without overlapping rows', async () => {
+test('Now Playing Drawer: Toggling Aleatório mid-queue only shuffles upcoming tracks and resets queue slot epoch without overlapping rows', async () => {
   // 1. Verify App-level mid-queue shuffle does not duplicate or resurrect already-played tracks
   const playlistTracks = [
     { id: 'pl_1', url: 'https://stream.example.com/pl_1.mp4', title: 'Track 1', artist: 'Artist' },
@@ -1394,7 +1394,7 @@ test('YT Music Morph: Single-player handoff, NavigationTabBar proportional slide
     starboyCard.props.onPress();
   });
 
-  const navFade = root.findByProps({ testID: 'spotify-nav-fade' });
+  const navFade = root.findByProps({ testID: 'bottom-nav-fade' });
   let navAnimWrapper = navFade.parent;
   while (navAnimWrapper && !(navAnimWrapper.props?.style && navAnimWrapper.props.style.opacity !== undefined)) {
     navAnimWrapper = navAnimWrapper.parent;
@@ -1534,7 +1534,7 @@ test('YT Music Morph: Single-player handoff, NavigationTabBar proportional slide
       desktopTree = renderer.create(React.createElement(App));
     });
     assert.strictEqual(
-      desktopTree.root.findAllByProps({ testID: 'spotify-nav-fade' }).length,
+      desktopTree.root.findAllByProps({ testID: 'bottom-nav-fade' }).length,
       0,
       'Desktop layout must omit NavigationTabBar'
     );

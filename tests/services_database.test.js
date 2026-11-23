@@ -758,8 +758,8 @@ test('Storage: processQueue forwards stream headers, retries once on transient f
         streamUrl: `https://mock.example.com/${id}_expired.m4a`,
         headers: {
           'User-Agent': 'CustomTestUA/1.0',
-          Referer: 'https://www.youtube.com/',
-          Origin: 'https://www.youtube.com',
+          Referer: 'https://media.example.com/',
+          Origin: 'https://media.example.com',
         },
       };
     }
@@ -767,8 +767,8 @@ test('Storage: processQueue forwards stream headers, retries once on transient f
       streamUrl: `https://mock.example.com/${id}_fresh.m4a`,
       headers: {
         'User-Agent': 'CustomTestUA/1.0',
-        Referer: 'https://www.youtube.com/',
-        Origin: 'https://www.youtube.com',
+        Referer: 'https://media.example.com/',
+        Origin: 'https://media.example.com',
       },
     };
   });
@@ -787,8 +787,8 @@ test('Storage: processQueue forwards stream headers, retries once on transient f
     await new Promise((resolve) => setTimeout(resolve, 40));
 
     assert.strictEqual(resolverCalls, 2, 'Should retry once after 403 on first stream URL');
-    assert.strictEqual(capturedHeaders?.Referer, 'https://www.youtube.com/');
-    assert.strictEqual(capturedHeaders?.Origin, 'https://www.youtube.com');
+    assert.strictEqual(capturedHeaders?.Referer, 'https://media.example.com/');
+    assert.strictEqual(capturedHeaders?.Origin, 'https://media.example.com');
     assert.strictEqual(capturedHeaders?.['User-Agent'], 'CustomTestUA/1.0');
 
     const saved = await getDownloadedTrackById('dl_retry_1');
@@ -1171,5 +1171,119 @@ test('PlaylistDetailModal displays retry state instead of empty message when get
         tree.unmount();
       });
     }
+  }
+});
+
+test('Storage Native Bridge: pre-resolves initial batch via updateTrackStream and fulfills on-demand needStream requests', async () => {
+  const { NativeModules, Platform } = require('react-native');
+  const { getMediaProvider, registerMediaProvider } = require('../services/mediaProvider');
+  const prevProvider = getMediaProvider();
+  const originalOS = Platform.OS;
+  const originalNativeMod = NativeModules.SonaryBackgroundDownloader;
+
+  const updatedStreams = [];
+  const providedStreams = [];
+  const invalidatedIds = [];
+  let capturedListener = null;
+
+  const mockNativeMod = {
+    addListener: () => {},
+    removeListeners: () => {},
+    enqueueItems: async () => {},
+    enqueueSync: async () => {},
+    getQueueSnapshot: async () => [],
+    updateTrackStream: async (trackId, streamUrl, headersJson) => {
+      updatedStreams.push({ trackId, streamUrl, headersJson });
+    },
+    provideResolvedStream: async (requestId, streamUrl, headersJson, error) => {
+      providedStreams.push({ requestId, streamUrl, headersJson, error });
+    },
+    cancelTrack: async () => {},
+    cancelAll: async () => {},
+    clearFinished: async () => {},
+    clearCompleted: async () => {},
+    isWorkerActive: async () => false,
+  };
+
+  const rn = require('react-native');
+  const OrigEmitter = rn.NativeEventEmitter;
+  rn.NativeEventEmitter = class MockNativeEventEmitter {
+    addListener(eventName, cb) {
+      if (eventName === 'SonaryDownloadQueueChanged') {
+        capturedListener = cb;
+      }
+      return { remove: () => {} };
+    }
+  };
+
+  registerMediaProvider({
+    ...prevProvider,
+    invalidateStreamCache: (id) => invalidatedIds.push(id),
+    getAudioStream: async (id) => ({
+      videoId: id,
+      title: `Track ${id}`,
+      artist: 'Provider Artist',
+      duration: 180,
+      thumbnailUrl: 'https://cdn.example.com/art.jpg',
+      streamUrl: `https://cdn.example.com/audio/${id}.m4a`,
+      mimeType: 'audio/mp4',
+      format: 'm4a',
+      bitrate: 128000,
+      headers: {
+        'User-Agent': 'ProviderUA/1.0',
+        'X-Custom-Auth': `tok_${id}`,
+      },
+    }),
+  });
+
+  Platform.OS = 'android';
+  NativeModules.SonaryBackgroundDownloader = mockNativeMod;
+  setAudioStreamResolver(undefined);
+
+  try {
+    enqueueDownload({
+      id: 'native_bridge_1',
+      title: 'Native Track 1',
+      artist: 'Provider Artist',
+      duration: 180,
+      formattedDuration: '3:00',
+      thumbnailUrl: 'https://cdn.example.com/art.jpg',
+    });
+
+    await new Promise((r) => setTimeout(r, 40));
+
+    assert.strictEqual(updatedStreams.length, 1, 'Should pre-resolve initial enqueued track');
+    assert.strictEqual(updatedStreams[0].trackId, 'native_bridge_1');
+    assert.strictEqual(updatedStreams[0].streamUrl, 'https://cdn.example.com/audio/native_bridge_1.m4a');
+    assert.deepStrictEqual(JSON.parse(updatedStreams[0].headersJson), {
+      'User-Agent': 'ProviderUA/1.0',
+      'X-Custom-Auth': 'tok_native_bridge_1',
+    });
+
+    assert.ok(capturedListener, 'Must register SonaryDownloadQueueChanged listener');
+    capturedListener({
+      type: 'needStream',
+      requestId: 'req_42',
+      trackId: 'native_bridge_2',
+      forceRefresh: true,
+    });
+
+    await new Promise((r) => setTimeout(r, 40));
+
+    assert.ok(invalidatedIds.includes('native_bridge_2'), 'forceRefresh must invalidate stream cache before re-resolving');
+    assert.strictEqual(providedStreams.length, 1, 'Must answer needStream via provideResolvedStream');
+    assert.strictEqual(providedStreams[0].requestId, 'req_42');
+    assert.strictEqual(providedStreams[0].streamUrl, 'https://cdn.example.com/audio/native_bridge_2.m4a');
+    assert.strictEqual(providedStreams[0].error, null);
+  } finally {
+    await cancelAllDownloads();
+    rn.NativeEventEmitter = OrigEmitter;
+    Platform.OS = originalOS;
+    if (originalNativeMod === undefined) {
+      delete NativeModules.SonaryBackgroundDownloader;
+    } else {
+      NativeModules.SonaryBackgroundDownloader = originalNativeMod;
+    }
+    registerMediaProvider(prevProvider);
   }
 });

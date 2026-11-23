@@ -15,6 +15,7 @@ import {
   vec,
 } from '@shopify/react-native-skia';
 import { runOnJS, useSharedValue, withTiming } from 'react-native-reanimated';
+import { hasLetterboxArtwork } from '../services/api';
 
 interface AmbientGlowBackgroundProps {
   artworkUri?: string | null;
@@ -427,9 +428,7 @@ function extractPaletteFromSkImage(image: SkImage, artworkUri?: string | null): 
   let nonTexImg: SkImage | null = null;
   try {
     paint = Skia.Paint();
-    const isLetterboxedThumb = Boolean(
-      artworkUri && /(?:hqdefault|sddefault)\.jpg/i.test(artworkUri)
-    );
+    const isLetterboxedThumb = hasLetterboxArtwork(artworkUri);
     const cropY = isLetterboxedThumb ? Math.round(imgH * 0.13) : 0;
     const srcRect = Skia.XYWHRect(0, cropY, imgW, Math.max(1, imgH - cropY * 2));
     const destRect = Skia.XYWHRect(0, 0, SAMPLE_SIZE, SAMPLE_SIZE);

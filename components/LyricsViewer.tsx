@@ -356,7 +356,7 @@ export const LyricsViewer = React.memo(function LyricsViewer({
             )}
         </View>
 
-        {/* Rodapé fixo estilo Spotify: Scrubber + Play/Pause */}
+        {/* Rodapé fixo: Scrubber + Play/Pause */}
         <View style={styles.fullscreenFooter}>
           {scrubberSlot ? <View style={styles.fullscreenScrubberSlot}>{scrubberSlot}</View> : null}
 
@@ -391,7 +391,7 @@ export const LyricsViewer = React.memo(function LyricsViewer({
 
   return (
     <View
-      style={[styles.spotifyLyricsCard, { backgroundColor: ambientColor }]}
+      style={[styles.embeddedLyricsCard, { backgroundColor: ambientColor }]}
       onLayout={(e) => {
         const y = e?.nativeEvent?.layout?.y;
         if (typeof y === 'number') {
@@ -401,15 +401,15 @@ export const LyricsViewer = React.memo(function LyricsViewer({
     >
       {/* Header do Card Compacto de Letras */}
       <TouchableOpacity
-        style={styles.spotifyCardHeader}
+        style={styles.embeddedCardHeader}
         onPress={hasRealLyrics ? onToggleExpand : onHeaderPress}
         activeOpacity={0.9}
       >
-        <View style={styles.spotifyCardHeaderLeft}>
+        <View style={styles.embeddedCardHeaderLeft}>
           <ChevronUp color="#FFFFFF" size={18} />
-          <View style={styles.spotifyCardTitleBlock}>
-            <Text style={styles.spotifyCardTitle}>Letras</Text>
-            <Text style={styles.spotifyCardSubtitle}>
+          <View style={styles.embeddedCardTitleBlock}>
+            <Text style={styles.embeddedCardTitle}>Letras</Text>
+            <Text style={styles.embeddedCardSubtitle}>
               Arraste para cima para ver a letra
             </Text>
           </View>
@@ -417,7 +417,7 @@ export const LyricsViewer = React.memo(function LyricsViewer({
 
         <View style={styles.headerActionsRow}>
           <TouchableOpacity
-            style={styles.spotifyLyricsExpandBtn}
+            style={styles.embeddedLyricsExpandBtn}
             onPress={(e) => {
               e?.stopPropagation?.();
               onToggleExpand();
@@ -426,7 +426,7 @@ export const LyricsViewer = React.memo(function LyricsViewer({
             accessibilityLabel="Expandir letras"
           >
             <Maximize2 color="#FFFFFF" size={15} />
-            <Text style={styles.spotifyLyricsExpandText}>EXPANDIR</Text>
+            <Text style={styles.embeddedLyricsExpandText}>EXPANDIR</Text>
           </TouchableOpacity>
         </View>
       </TouchableOpacity>
@@ -434,8 +434,8 @@ export const LyricsViewer = React.memo(function LyricsViewer({
       {/* Corpo compacto das letras (somente leitura; tocar no card com letra abre tela cheia) */}
       <ScrollView
         ref={lyricsScrollRef}
-        style={styles.spotifyLyricsScroll}
-        contentContainerStyle={styles.spotifyLyricsContent}
+        style={styles.embeddedLyricsScroll}
+        contentContainerStyle={styles.embeddedLyricsContent}
         nestedScrollEnabled={true}
         showsVerticalScrollIndicator={false}
         onScrollBeginDrag={handleUserScrollInteraction}
@@ -458,7 +458,7 @@ export const LyricsViewer = React.memo(function LyricsViewer({
 });
 
 const styles = StyleSheet.create({
-  spotifyLyricsCard: {
+  embeddedLyricsCard: {
     borderRadius: 24,
     padding: 16,
     marginTop: 8,
@@ -466,7 +466,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
   },
-  spotifyCardHeader: {
+  embeddedCardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -474,26 +474,26 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     marginBottom: 10,
   },
-  spotifyCardHeaderLeft: {
+  embeddedCardHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     flex: 1,
     minWidth: 0,
   },
-  spotifyCardTitleBlock: {
+  embeddedCardTitleBlock: {
     flex: 1,
     flexShrink: 1,
     minWidth: 0,
     justifyContent: 'center',
   },
-  spotifyCardTitle: {
+  embeddedCardTitle: {
     fontSize: 16,
     fontWeight: '700',
     color: '#FFFFFF',
     letterSpacing: -0.2,
   },
-  spotifyCardSubtitle: {
+  embeddedCardSubtitle: {
     fontSize: 11,
     color: 'rgba(255, 255, 255, 0.75)',
     fontWeight: '500',
@@ -523,7 +523,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.5,
   },
-  spotifyLyricsExpandBtn: {
+  embeddedLyricsExpandBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -532,16 +532,16 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 14,
   },
-  spotifyLyricsExpandText: {
+  embeddedLyricsExpandText: {
     color: '#FFFFFF',
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 0.5,
   },
-  spotifyLyricsScroll: {
+  embeddedLyricsScroll: {
     height: 220,
   },
-  spotifyLyricsContent: {
+  embeddedLyricsContent: {
     paddingVertical: 6,
   },
   lyricLineRow: {
@@ -614,7 +614,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  // Fullscreen Spotify-style Lyrics View
+  // Fullscreen Lyrics View
   fullscreenRoot: {
     flex: 1,
     paddingTop: Platform.OS === 'android' ? ANDROID_STATUS_BAR_HEIGHT + 8 : 52,
