@@ -145,9 +145,12 @@ export function extractTrackMetadata(
 /**
  * Filtra clipes muito curtos (< 45s), gravações excessivamente longas (> 2h) e conteúdos não-musicais.
  */
-export function isValidMusicTrack(track: TrackLike): boolean {
+export function isValidMusicTrack(
+  track: TrackLike,
+  options?: { allowShort?: boolean }
+): boolean {
   if (!track || !track.id) return false;
-  if (track.duration > 0 && track.duration < 45) return false;
+  if (!options?.allowShort && track.duration > 0 && track.duration < 45) return false;
   if (track.duration > 7200) return false;
 
   const title = (track.title || '').trim();

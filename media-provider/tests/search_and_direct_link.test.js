@@ -1,10 +1,10 @@
-// providers/default-media-provider/tests/search_and_direct_link.test.js
+// media-provider/tests/search_and_direct_link.test.js
 const test = require('node:test');
 const assert = require('node:assert');
-const api = require('../../../services/api');
+const api = require('../../services/api');
 const provider = require('../index');
-const { resetAllMocks } = require('../../../tests/helpers/testUtils');
-const { initDatabase } = require('../../../services/database');
+const { resetAllMocks } = require('../../tests/helpers/testUtils');
+const { initDatabase } = require('../../services/database');
 
 const originalSearchTracks = api.searchTracks;
 const originalSearchTracksPage = api.searchTracksPage;
@@ -1210,7 +1210,7 @@ test('Flow 2: Direct link combines primary artist(s) + top related track artists
 test('Provider: getAudioStream Invidious fallback returns complete userAgent and headers and omits cookies', async () => {
   const originalFetch = global.fetch;
   const capturedCredentials = [];
-  provider.invalidateStreamCache('fallback123');
+  api.invalidateStreamCache('fallback123');
   try {
     global.fetch = async (url, init) => {
       capturedCredentials.push(init?.credentials);
@@ -1248,7 +1248,7 @@ test('Provider: getAudioStream Invidious fallback returns complete userAgent and
     assert.strictEqual(result.headers?.Origin, 'https://www.youtube.com');
     assert.ok(capturedCredentials.length > 0 && capturedCredentials.every((c) => c === 'omit'), 'All provider fetch calls must omit cookies');
   } finally {
-    provider.invalidateStreamCache('fallback123');
+    api.invalidateStreamCache('fallback123');
     global.fetch = originalFetch;
   }
 });

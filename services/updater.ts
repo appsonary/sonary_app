@@ -8,6 +8,7 @@ const appJson = require('../app.json') as {
 };
 
 export const GITHUB_REPO = 'appsonary/sonary_app';
+export const FALLBACK_MANIFEST_URL = 'https://appsonary.com/releases/latest.json';
 export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const UPDATER_DOWNLOAD_EVENT = 'SonaryUpdaterDownloadChanged';
 const UPDATER_LAST_CHECK_KEY = 'updater_last_check_at';
@@ -149,7 +150,7 @@ export function isNewerRelease(
   return compareSemver(remote.versionName, installed.versionName) > 0;
 }
 
-export function isTrustedGitHubUrl(rawUrl: string): boolean {
+export function isTrustedUpdateUrl(rawUrl: string): boolean {
   try {
     const parsed = new URL(rawUrl);
     if (parsed.protocol !== 'https:') return false;
@@ -157,12 +158,16 @@ export function isTrustedGitHubUrl(rawUrl: string): boolean {
     return (
       host === 'github.com' ||
       host === 'githubusercontent.com' ||
-      host.endsWith('.githubusercontent.com')
+      host.endsWith('.githubusercontent.com') ||
+      host === 'appsonary.com' ||
+      host.endsWith('.appsonary.com')
     );
   } catch {
     return false;
   }
 }
+
+export const isTrustedGitHubUrl = isTrustedUpdateUrl;
 
 export async function getInstalledAppVersion(): Promise<InstalledAppVersion> {
   const fallback: InstalledAppVersion = {
@@ -288,6 +293,7 @@ function parseGitHubApiRelease(raw: unknown, repo: string): RemoteReleaseInfo | 
 export interface CheckForUpdateOptions {
   force?: boolean;
   repo?: string;
+  fallbackManifestUrl?: string | null;
   fetchImpl?: typeof fetch;
   nowMs?: number;
 }
@@ -296,6 +302,10 @@ export async function checkForAppUpdate(
   options: CheckForUpdateOptions = {}
 ): Promise<UpdateCheckResult> {
   const repo = options.repo || GITHUB_REPO;
+  const fallbackManifestUrl =
+    options.fallbackManifestUrl === undefined
+      ? FALLBACK_MANIFEST_URL
+      : options.fallbackManifestUrl;
   const fetchImpl = options.fetchImpl || fetch;
   const nowMs = options.nowMs ?? Date.now();
   const installed = await getInstalledAppVersion();
@@ -314,6 +324,7 @@ export async function checkForAppUpdate(
 
   try {
     let release: RemoteReleaseInfo | null = null;
+    let lastErrorMessage: string | null = null;
 
     const manifestUrl = `https://github.com/${repo}/releases/latest/download/latest.json`;
     const manifestRes = await fetchJsonWithTimeout(manifestUrl, fetchImpl).catch(() => null);
@@ -325,15 +336,38 @@ export async function checkForAppUpdate(
       const apiUrl = `https://api.github.com/repos/${repo}/releases/latest`;
       const apiRes = await fetchJsonWithTimeout(apiUrl, fetchImpl, 8000, {
         Accept: 'application/vnd.github+json',
+      }).catch((err: unknown) => {
+        lastErrorMessage = err instanceof Error ? err.message : 'Falha ao consultar GitHub.';
+        return null;
       });
-      if (!apiRes.ok) {
-        return {
-          status: 'error',
-          installed,
-          error: `Servidor de atualizações retornou HTTP ${apiRes.status}.`,
-        };
+      if (apiRes?.ok) {
+        release = parseGitHubApiRelease(apiRes.data, repo);
+      } else if (apiRes) {
+        lastErrorMessage = `Servidor de atualizações retornou HTTP ${apiRes.status}.`;
       }
-      release = parseGitHubApiRelease(apiRes.data, repo);
+    }
+
+    if (!release && fallbackManifestUrl && isTrustedUpdateUrl(fallbackManifestUrl)) {
+      const backupRes = await fetchJsonWithTimeout(fallbackManifestUrl, fetchImpl).catch(
+        (err: unknown) => {
+          if (!lastErrorMessage) {
+            lastErrorMessage = err instanceof Error ? err.message : 'Falha ao consultar servidor de backup.';
+          }
+          return null;
+        }
+      );
+      if (backupRes?.ok) {
+        release = parseLatestManifest(backupRes.data, repo);
+        lastErrorMessage = null;
+      }
+    }
+
+    if (!release && lastErrorMessage) {
+      return {
+        status: 'error',
+        installed,
+        error: lastErrorMessage,
+      };
     }
 
     await setAppSetting(UPDATER_LAST_CHECK_KEY, String(nowMs)).catch(() => {});

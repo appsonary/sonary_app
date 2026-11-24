@@ -1379,3 +1379,78 @@ test('Updater App: cold start abre UpdateModal automaticamente quando a checagem
     }
   }
 });
+
+test('Updater: fallback de backup em appsonary.com funciona quando GitHub falha e mantém allowlist sincronizada com Android nativo', async () => {
+  const { isTrustedUpdateUrl, FALLBACK_MANIFEST_URL } = require('../services/updater');
+  const { generateReleaseArtifacts } = require('../scripts/generate-release-manifest');
+
+  assert.strictEqual(FALLBACK_MANIFEST_URL, 'https://appsonary.com/releases/latest.json');
+  assert.strictEqual(isTrustedUpdateUrl('https://appsonary.com/releases/sonary-pro-v1.5.0.apk'), true);
+  assert.strictEqual(isTrustedUpdateUrl('https://releases.appsonary.com/sonary-pro-v1.5.0.apk'), true);
+  assert.strictEqual(isTrustedUpdateUrl('http://appsonary.com/releases/sonary-pro-v1.5.0.apk'), false);
+  assert.strictEqual(isTrustedUpdateUrl('https://fakeappsonary.com/sonary-pro-v1.5.0.apk'), false);
+
+  // Garante paridade da allowlist no plugin nativo Android (SonaryUpdaterWorker.kt)
+  const pluginSrc = fs.readFileSync(
+    path.join(__dirname, '..', 'plugins', 'withAppUpdater.js'),
+    'utf8'
+  );
+  assert.ok(pluginSrc.includes('host == "appsonary.com"'));
+  assert.ok(pluginSrc.includes('host.endsWith(".appsonary.com")'));
+
+  NativeModules.SonaryAppUpdater = {
+    getInstalledVersion: async () => ({ versionName: '1.0.12', versionCode: 14 }),
+  };
+
+  const requestedUrls = [];
+  const fetchMock = async (url) => {
+    requestedUrls.push(String(url));
+    if (String(url).includes('github.com')) {
+      return { ok: false, status: 451, json: async () => ({}) };
+    }
+    if (String(url) === FALLBACK_MANIFEST_URL) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          versionName: '1.0.13',
+          versionCode: 15,
+          apkName: 'sonary-pro-v1.0.13.apk',
+          apkUrl: 'https://releases.appsonary.com/sonary-pro-v1.0.13.apk',
+          releaseUrl: 'https://appsonary.com/releases/',
+          sha256: 'd'.repeat(64),
+          sizeBytes: 48000000,
+          releaseNotes: 'Atualização via servidor de backup.',
+        }),
+      };
+    }
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+
+  const result = await checkForAppUpdate({ force: true, fetchImpl: fetchMock });
+  assert.strictEqual(result.status, 'update_available');
+  assert.strictEqual(result.release.versionName, '1.0.13');
+  assert.strictEqual(result.release.apkUrl, 'https://releases.appsonary.com/sonary-pro-v1.0.13.apk');
+  assert.strictEqual(requestedUrls.length, 3);
+  assert.strictEqual(requestedUrls[2], FALLBACK_MANIFEST_URL);
+
+  const cached = await getCachedAvailableUpdate();
+  assert.strictEqual(cached?.versionName, '1.0.13');
+  assert.strictEqual(cached?.apkUrl, 'https://releases.appsonary.com/sonary-pro-v1.0.13.apk');
+
+  // Valida geração de manifest apontando para domínio de backup
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sonary-manifest-'));
+  const fakeApk = path.join(tmpDir, 'app-release.apk');
+  fs.writeFileSync(fakeApk, Buffer.from('fake-apk-content'));
+  try {
+    const generated = generateReleaseArtifacts({
+      apkPath: fakeApk,
+      outDir: path.join(tmpDir, 'out'),
+      releaseBaseUrl: 'https://releases.appsonary.com',
+    });
+    assert.ok(generated.manifest.apkUrl.startsWith('https://releases.appsonary.com/'));
+    assert.strictEqual(generated.manifest.releaseUrl, 'https://releases.appsonary.com/');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

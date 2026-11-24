@@ -10,7 +10,7 @@ import {
   registerMediaProvider,
   setMediaProviderBootstrap,
 } from './mediaProvider';
-import { createDefaultMediaProvider } from '../providers/default-media-provider';
+import { createDefaultMediaProvider } from '../media-provider';
 
 export function ensureDefaultMediaProviderRegistered(): void {
   if (!hasRegisteredMediaProvider()) {

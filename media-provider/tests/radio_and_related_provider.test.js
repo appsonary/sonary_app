@@ -1,11 +1,11 @@
-// providers/default-media-provider/tests/radio_and_related_provider.test.js
+// media-provider/tests/radio_and_related_provider.test.js
 const test = require('node:test');
 const assert = require('node:assert');
-const api = require('../../../services/api');
-const player = require('../../../services/player');
-const db = require('../../../services/database');
-const { resetAllMocks } = require('../../../tests/helpers/testUtils');
-const { mockPlayer } = require('../../../tests/mocks/trackPlayerMock');
+const api = require('../../services/api');
+const player = require('../../services/player');
+const db = require('../../services/database');
+const { resetAllMocks } = require('../../tests/helpers/testUtils');
+const { mockPlayer } = require('../../tests/mocks/trackPlayerMock');
 
 const originalFetch = global.fetch;
 

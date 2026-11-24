@@ -604,7 +604,9 @@ class SonaryUpdaterWorker(
         val host = uri.host?.lowercase() ?: return false
         host == "github.com" ||
           host == "githubusercontent.com" ||
-          host.endsWith(".githubusercontent.com")
+          host.endsWith(".githubusercontent.com") ||
+          host == "appsonary.com" ||
+          host.endsWith(".appsonary.com")
       } catch (_: Throwable) {
         false
       }

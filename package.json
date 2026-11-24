@@ -4,9 +4,9 @@
   "license": "GPL-3.0",
   "main": "index.ts",
   "scripts": {
-    "test": "node --test --test-concurrency=1 --require ./tests/setup.js \"tests/*.test.js\" \"providers/default-media-provider/tests/*.test.js\"",
+    "test": "node --test --test-concurrency=1 --require ./tests/setup.js \"tests/*.test.js\" \"media-provider/tests/*.test.js\"",
     "test:core": "node --test --test-concurrency=1 --require ./tests/setup.js \"tests/*.test.js\"",
-    "test:provider": "node --test --test-concurrency=1 --require ./tests/setup.js \"providers/default-media-provider/tests/*.test.js\"",
+    "test:provider": "node --test --test-concurrency=1 --require ./tests/setup.js \"media-provider/tests/*.test.js\"",
     "clean": "node scripts/clean.js",
     "clean:all": "node scripts/clean.js",
     "setup": "node scripts/setup.js",

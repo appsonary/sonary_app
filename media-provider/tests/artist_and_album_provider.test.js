@@ -1,9 +1,9 @@
-// providers/default-media-provider/tests/artist_and_album_provider.test.js
+// media-provider/tests/artist_and_album_provider.test.js
 const test = require('node:test');
 const assert = require('node:assert');
-const api = require('../../../services/api');
-const { initDatabase } = require('../../../services/database');
-const { resetAllMocks } = require('../../../tests/helpers/testUtils');
+const api = require('../../services/api');
+const { initDatabase } = require('../../services/database');
+const { resetAllMocks } = require('../../tests/helpers/testUtils');
 
 test.beforeEach(async () => {
   resetAllMocks();

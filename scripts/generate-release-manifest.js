@@ -33,6 +33,7 @@ function generateReleaseArtifacts({
   apkPath = DEFAULT_APK_PATH,
   outDir = DEFAULT_OUT_DIR,
   repo = process.env.GITHUB_REPOSITORY || 'appsonary/sonary_app',
+  releaseBaseUrl = process.env.RELEASE_BASE_URL || '',
   releaseNotes = process.env.RELEASE_NOTES || '',
 } = {}) {
   if (!fs.existsSync(apkPath)) {
@@ -54,12 +55,17 @@ function generateReleaseArtifacts({
   const sizeBytes = fs.statSync(targetApkPath).size;
   const tag = `v${versionName}`;
 
+  const cleanBaseUrl = String(releaseBaseUrl || '').trim().replace(/\/+$/, '');
   const manifest = {
     versionName,
     versionCode,
     apkName,
-    apkUrl: `https://github.com/${repo}/releases/download/${tag}/${apkName}`,
-    releaseUrl: `https://github.com/${repo}/releases/tag/${tag}`,
+    apkUrl: cleanBaseUrl
+      ? `${cleanBaseUrl}/${apkName}`
+      : `https://github.com/${repo}/releases/download/${tag}/${apkName}`,
+    releaseUrl: cleanBaseUrl
+      ? `${cleanBaseUrl}/`
+      : `https://github.com/${repo}/releases/tag/${tag}`,
     sha256,
     sizeBytes,
     releaseNotes: releaseNotes.trim(),
