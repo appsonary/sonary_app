@@ -10,6 +10,7 @@ const {
 
 const WORK_MANAGER_DEP = 'implementation("androidx.work:work-runtime-ktx:2.9.0")';
 const FGS_DATA_SYNC_PERM = 'android.permission.FOREGROUND_SERVICE_DATA_SYNC';
+const ACCESS_NETWORK_STATE_PERM = 'android.permission.ACCESS_NETWORK_STATE';
 const WORK_FGS_SERVICE = 'androidx.work.impl.foreground.SystemForegroundService';
 const CANCEL_RECEIVER = 'com.sonarypro.app.downloads.SonaryDownloadCancelReceiver';
 const PACKAGE_IMPORT = 'import com.sonarypro.app.downloads.SonaryDownloadPackage';
@@ -554,6 +555,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
@@ -565,12 +568,18 @@ import androidx.work.WorkerParameters
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.net.ConnectException
 import java.net.HttpURLConnection
+import java.net.NoRouteToHostException
+import java.net.SocketException
+import java.net.SocketTimeoutException
 import java.net.URL
+import java.net.UnknownHostException
 
 class SonaryDownloadWorker(
   appContext: Context,
@@ -579,6 +588,8 @@ class SonaryDownloadWorker(
 
   private class DownloadAbortedException : RuntimeException("Download cancelado")
   private class StreamPendingJsException : RuntimeException("Aguardando sessão do app para resolver stream")
+  private class InsufficientDiskSpaceException(message: String) : RuntimeException(message)
+  private class NetworkUnavailableException(message: String) : RuntimeException(message)
 
   private val db = SonaryDownloadDb.getInstance(appContext)
   private val notificationManager =
@@ -612,6 +623,7 @@ class SonaryDownloadWorker(
 
     try {
       ensureNotificationChannel()
+      notificationManager.cancel(PAUSED_NOTIFICATION_ID)
       db.resetInterruptedToPending()
 
       val tracksDir = File(applicationContext.filesDir, "tracks").apply { mkdirs() }
@@ -619,6 +631,9 @@ class SonaryDownloadWorker(
 
       var processedCount = 0
       var pausedForJs = false
+      var pausedForDisk = false
+      var pausedForNetwork = false
+      var diskErrorMsg: String? = null
 
       do {
         SonaryDownloadEvents.isWorkerRunning = true
@@ -628,6 +643,11 @@ class SonaryDownloadWorker(
           val item = db.nextPendingItem(requireStreamUrl = !SonaryDownloadEvents.hasActiveJsRuntime()) ?: break
           val remaining = db.countActiveAndPending()
           val totalBatch = processedCount + remaining
+
+          if (processedCount > 0) {
+            delay(INTER_TRACK_DELAY_MS)
+            wakeLock.acquire(30 * 60 * 1000L)
+          }
 
           if (SonaryDownloadEvents.isTrackCancelled(item.trackId)) {
             SonaryDownloadEvents.clearTrackCancelled(item.trackId)
@@ -718,9 +738,26 @@ class SonaryDownloadWorker(
             SonaryDownloadEvents.emitSync()
             pausedForJs = true
             break
+          } catch (diskErr: InsufficientDiskSpaceException) {
+            db.updateQueueState(item.trackId, "pending", 0.0, null)
+            SonaryDownloadEvents.emitSync()
+            pausedForDisk = true
+            diskErrorMsg = diskErr.message
+            break
+          } catch (_: NetworkUnavailableException) {
+            db.updateQueueState(item.trackId, "pending", 0.0, null)
+            SonaryDownloadEvents.emitSync()
+            pausedForNetwork = true
+            break
           } catch (ce: CancellationException) {
             throw ce
           } catch (err: Throwable) {
+            if (isNetworkFailure(err)) {
+              db.updateQueueState(item.trackId, "pending", 0.0, null)
+              SonaryDownloadEvents.emitSync()
+              pausedForNetwork = true
+              break
+            }
             partAudioFile.delete()
             partThumbFile.delete()
             val msg = err.message ?: "Falha no download"
@@ -733,6 +770,8 @@ class SonaryDownloadWorker(
         SonaryDownloadEvents.isWorkerRunning = false
       } while (
         !pausedForJs &&
+        !pausedForDisk &&
+        !pausedForNetwork &&
         !isStopped &&
         !SonaryDownloadEvents.cancelAllRequested &&
         db.nextPendingItem(requireStreamUrl = !SonaryDownloadEvents.hasActiveJsRuntime()) != null
@@ -743,11 +782,27 @@ class SonaryDownloadWorker(
         SonaryDownloadEvents.clearAllCancellations()
         SonaryDownloadEvents.emitSync()
         Result.success()
+      } else if (pausedForDisk) {
+        notifyPausedState(
+          title = "Downloads pausados",
+          subtitle = diskErrorMsg ?: "Espaço insuficiente no celular. Libere espaço para continuar.",
+        )
+        Result.success()
+      } else if (pausedForNetwork) {
+        Result.retry()
       } else if (isStopped) {
         db.resetInterruptedToPending()
         SonaryDownloadEvents.emitSync()
         Result.retry()
       } else {
+        val pendingRemaining = db.countActiveAndPending()
+        if (pendingRemaining > 0 && (pausedForJs || !SonaryDownloadEvents.hasActiveJsRuntime())) {
+          val label = if (pendingRemaining == 1) "1 música" else "\$pendingRemaining músicas"
+          notifyPausedState(
+            title = "Downloads pausados",
+            subtitle = "Abra o Sonary para continuar \$label na fila.",
+          )
+        }
         Result.success()
       }
     } catch (_: CancellationException) {
@@ -775,7 +830,60 @@ class SonaryDownloadWorker(
     val freeBytes = stat.availableBytes
     if (freeBytes < MIN_FREE_DISK_BYTES) {
       val freeMb = (freeBytes / (1024L * 1024L)).toInt()
-      throw RuntimeException("Espaço em disco insuficiente (\$freeMb MB disponíveis).")
+      throw InsufficientDiskSpaceException("Espaço em disco insuficiente (\$freeMb MB disponíveis).")
+    }
+  }
+
+  private fun isNetworkAvailable(): Boolean {
+    return try {
+      val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        ?: return true
+      val network = cm.activeNetwork ?: return false
+      val caps = cm.getNetworkCapabilities(network) ?: return false
+      caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    } catch (_: Throwable) {
+      true
+    }
+  }
+
+  private fun isNetworkFailure(err: Throwable): Boolean {
+    if (
+      err is UnknownHostException ||
+      err is ConnectException ||
+      err is SocketTimeoutException ||
+      err is NoRouteToHostException ||
+      err is SocketException
+    ) {
+      return true
+    }
+    return !isNetworkAvailable()
+  }
+
+  private fun notifyPausedState(title: String, subtitle: String) {
+    try {
+      ensureNotificationChannel()
+      val openIntent = applicationContext.packageManager
+        .getLaunchIntentForPackage(applicationContext.packageName)
+        ?.let { intent ->
+          PendingIntent.getActivity(
+            applicationContext,
+            2,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+          )
+        }
+      val notif = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+        .setSmallIcon(android.R.drawable.stat_sys_download_done)
+        .setContentTitle(title)
+        .setContentText(subtitle)
+        .setAutoCancel(true)
+        .setSilent(true)
+        .apply {
+          if (openIntent != null) setContentIntent(openIntent)
+        }
+        .build()
+      notificationManager.notify(PAUSED_NOTIFICATION_ID, notif)
+    } catch (_: Throwable) {
     }
   }
 
@@ -809,17 +917,24 @@ class SonaryDownloadWorker(
       )
     }
 
+    if (!isNetworkAvailable()) {
+      throw NetworkUnavailableException("Sem conexão com a internet")
+    }
+
     val response = SonaryDownloadEvents.requestStreamFromJs(
       trackId = item.trackId,
       forceRefresh = forceRefresh,
     )
     if (response == null) {
-      if (!forceRefresh) {
+      if (!forceRefresh || !SonaryDownloadEvents.hasActiveJsRuntime()) {
         throw StreamPendingJsException()
       }
-      throw RuntimeException("Link temporário expirado em segundo plano. Abra o app para retomar.")
+      throw RuntimeException("Tempo esgotado ao atualizar link temporário de áudio.")
     }
     if (!response.error.isNullOrBlank() || response.streamUrl.isNullOrBlank()) {
+      if (!isNetworkAvailable()) {
+        throw NetworkUnavailableException(response.error ?: "Sem conexão com a internet")
+      }
       throw RuntimeException(response.error ?: "Falha ao resolver stream de áudio")
     }
 
@@ -845,16 +960,36 @@ class SonaryDownloadWorker(
       if (
         firstErr is DownloadAbortedException ||
         firstErr is StreamPendingJsException ||
+        firstErr is InsufficientDiskSpaceException ||
+        firstErr is NetworkUnavailableException ||
         isStopped ||
         SonaryDownloadEvents.isTrackCancelled(item.trackId)
       ) {
         throw firstErr
       }
+      if (isNetworkFailure(firstErr)) {
+        throw NetworkUnavailableException(firstErr.message ?: "Sem conexão com a internet")
+      }
       // Remove .part potencialmente expirado, invalida stream persistido e solicita novo stream ao provedor JS
       partAudioFile.delete()
       db.clearStreamInfo(item.trackId)
       val freshStream = resolveStreamForItem(item, forceRefresh = true)
-      executeHttpDownload(item, freshStream, partAudioFile, finalAudioFile, currentIndex, totalBatch)
+      try {
+        executeHttpDownload(item, freshStream, partAudioFile, finalAudioFile, currentIndex, totalBatch)
+      } catch (retryErr: Throwable) {
+        if (
+          retryErr is DownloadAbortedException ||
+          retryErr is CancellationException ||
+          isStopped ||
+          SonaryDownloadEvents.isTrackCancelled(item.trackId)
+        ) {
+          throw retryErr
+        }
+        if (isNetworkFailure(retryErr)) {
+          throw NetworkUnavailableException(retryErr.message ?: "Sem conexão com a internet")
+        }
+        throw retryErr
+      }
     }
   }
 
@@ -1074,8 +1209,10 @@ class SonaryDownloadWorker(
     const val UNIQUE_WORK_NAME = "sonary_download_queue"
     private const val CHANNEL_ID = "sonary_background_downloads"
     private const val NOTIFICATION_ID = 4201
+    private const val PAUSED_NOTIFICATION_ID = 4202
     private const val MIN_AUDIO_BYTES = 10240L
     private const val MIN_FREE_DISK_BYTES = 25L * 1024L * 1024L
+    private const val INTER_TRACK_DELAY_MS = 250L
   }
 }
 `,
@@ -1402,6 +1539,12 @@ function patchAndroidManifestString(contents) {
       `$1\n  <uses-permission android:name="${FGS_DATA_SYNC_PERM}"/>`
     );
   }
+  if (!next.includes(ACCESS_NETWORK_STATE_PERM)) {
+    next = next.replace(
+      /(<manifest[^>]*>)/,
+      `$1\n  <uses-permission android:name="${ACCESS_NETWORK_STATE_PERM}"/>`
+    );
+  }
   if (!next.includes(WORK_FGS_SERVICE)) {
     const serviceTag = `    <service android:name="${WORK_FGS_SERVICE}" android:foregroundServiceType="dataSync" tools:node="merge"/>\n`;
     next = next.replace(/(<application[^>]*>)/, `$1\n${serviceTag}`);
@@ -1473,13 +1616,15 @@ const withBackgroundDownloads = (config) => {
       manifest.manifest.$['xmlns:tools'] || 'http://schemas.android.com/tools';
 
     manifest.manifest['uses-permission'] = manifest.manifest['uses-permission'] || [];
-    const hasPerm = manifest.manifest['uses-permission'].some(
-      (p) => p.$ && p.$['android:name'] === FGS_DATA_SYNC_PERM
-    );
-    if (!hasPerm) {
-      manifest.manifest['uses-permission'].push({
-        $: { 'android:name': FGS_DATA_SYNC_PERM },
-      });
+    for (const perm of [FGS_DATA_SYNC_PERM, ACCESS_NETWORK_STATE_PERM]) {
+      const hasPerm = manifest.manifest['uses-permission'].some(
+        (p) => p.$ && p.$['android:name'] === perm
+      );
+      if (!hasPerm) {
+        manifest.manifest['uses-permission'].push({
+          $: { 'android:name': perm },
+        });
+      }
     }
 
     const mainApplication = AndroidConfig.Manifest.getMainApplicationOrThrow(manifest);

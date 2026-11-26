@@ -146,6 +146,26 @@ Module._load = function (request, parent, isMain) {
   if (request === 'expo-notifications') {
     return require('./mocks/notificationsMock');
   }
+  if (request === 'expo-document-picker') {
+    return {
+      getDocumentAsync: (...args) =>
+        global.__documentPickerMock?.getDocumentAsync
+          ? global.__documentPickerMock.getDocumentAsync(...args)
+          : Promise.resolve({ canceled: true, assets: null }),
+    };
+  }
+  if (request === 'expo-sharing') {
+    return {
+      isAvailableAsync: (...args) =>
+        global.__sharingMock?.isAvailableAsync
+          ? global.__sharingMock.isAvailableAsync(...args)
+          : Promise.resolve(true),
+      shareAsync: (...args) =>
+        global.__sharingMock?.shareAsync
+          ? global.__sharingMock.shareAsync(...args)
+          : Promise.resolve(),
+    };
+  }
   if (request === 'react-native-gesture-handler') {
     const createMockPanGesture = () => {
       const state = {

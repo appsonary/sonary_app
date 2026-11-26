@@ -1,19 +1,30 @@
 // tests/mocks/fileSystemMock.js
 
 const documentDirectory = 'file:///data/user/0/com.sonarypro/files/';
+const cacheDirectory = 'file:///data/user/0/com.sonarypro/cache/';
+const EncodingType = {
+  UTF8: 'utf8',
+  Base64: 'base64',
+};
 
 const files = new Map();
 let _generation = 0;
 let customCreateDownloadResumable = null;
+let freeDiskStorageBytes = 1024 * 1024 * 1024; // 1GB
 
 function resetFileSystem() {
   _generation += 1;
   files.clear();
   customCreateDownloadResumable = null;
+  freeDiskStorageBytes = 1024 * 1024 * 1024;
 }
 
 function setCreateDownloadResumable(fn) {
   customCreateDownloadResumable = typeof fn === 'function' ? fn : null;
+}
+
+function setFreeDiskStorageBytes(bytes) {
+  freeDiskStorageBytes = typeof bytes === 'number' ? bytes : 1024 * 1024 * 1024;
 }
 
 function getFileSystemGeneration() {
@@ -21,14 +32,39 @@ function getFileSystemGeneration() {
 }
 
 async function getInfoAsync(fileUri) {
-  const exists = files.has(fileUri) || fileUri.endsWith('/');
+  const entry = files.get(fileUri);
+  const exists = Boolean(entry) || fileUri.endsWith('/');
+  const size =
+    entry && typeof entry.content === 'string'
+      ? entry.content.length
+      : exists
+        ? 1024 * 1024 * 3
+        : 0;
   return {
     exists,
     isDirectory: fileUri.endsWith('/'),
-    size: exists ? 1024 * 1024 * 3 : 0, // 3MB
+    size,
     uri: fileUri,
     modificationTime: Date.now(),
   };
+}
+
+async function writeAsStringAsync(fileUri, content, options = {}) {
+  const str = String(content ?? '');
+  files.set(fileUri, {
+    isDirectory: false,
+    content: str,
+    encoding: options.encoding || EncodingType.UTF8,
+    size: str.length,
+  });
+}
+
+async function readAsStringAsync(fileUri) {
+  const entry = files.get(fileUri);
+  if (!entry || typeof entry.content !== 'string') {
+    throw new Error(`File not found: ${fileUri}`);
+  }
+  return entry.content;
 }
 
 async function makeDirectoryAsync(dirUri, options) {
@@ -55,7 +91,7 @@ async function downloadAsync(url, fileUri) {
 }
 
 async function getFreeDiskStorageAsync() {
-  return 1024 * 1024 * 1024; // 1GB
+  return freeDiskStorageBytes;
 }
 
 function createDownloadResumable(url, fileUri, options, callback) {
@@ -84,17 +120,34 @@ async function readDirectoryAsync(dirUri) {
   return result;
 }
 
+const StorageAccessFramework = {
+  requestDirectoryPermissionsAsync: (...args) =>
+    global.__safMock?.requestDirectoryPermissionsAsync
+      ? global.__safMock.requestDirectoryPermissionsAsync(...args)
+      : Promise.resolve({ granted: false }),
+  createFileAsync: (...args) =>
+    global.__safMock?.createFileAsync
+      ? global.__safMock.createFileAsync(...args)
+      : Promise.reject(new Error('SAF mock not configured')),
+};
+
 module.exports = {
   documentDirectory,
+  cacheDirectory,
+  EncodingType,
+  StorageAccessFramework,
   files,
   resetFileSystem,
   getFileSystemGeneration,
   getInfoAsync,
+  writeAsStringAsync,
+  readAsStringAsync,
   makeDirectoryAsync,
   deleteAsync,
   moveAsync,
   downloadAsync,
   getFreeDiskStorageAsync,
+  setFreeDiskStorageBytes,
   createDownloadResumable,
   setCreateDownloadResumable,
   readDirectoryAsync,

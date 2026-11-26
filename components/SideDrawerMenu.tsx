@@ -20,6 +20,7 @@ import {
   ArrowUpRight,
   BarChart2,
   Code2,
+  HardDriveDownload,
   Heart,
   History,
   RefreshCw,
@@ -66,6 +67,7 @@ export interface SideDrawerMenuProps {
   onOpenRecentHistory: () => void;
   onOpenStats: () => void;
   onOpenUpdates: () => void;
+  onOpenBackup?: () => void;
   onOpenSettings: () => void;
   onOpenDevMenu?: () => void;
   onOpenSupport: () => void;
@@ -85,6 +87,7 @@ export const SideDrawerMenu: React.FC<SideDrawerMenuProps> = ({
   onOpenRecentHistory,
   onOpenStats,
   onOpenUpdates,
+  onOpenBackup,
   onOpenSettings,
   onOpenDevMenu,
   onOpenSupport,
@@ -318,6 +321,16 @@ export const SideDrawerMenu: React.FC<SideDrawerMenuProps> = ({
       icon: <BarChart2 color="#D4D4D8" size={20} strokeWidth={1.6} />,
       onPress: () => dismissDrawer(onOpenStats),
     },
+    ...(typeof onOpenBackup === 'function'
+      ? [
+          {
+            id: 'backup',
+            label: 'Backup e dados',
+            icon: <HardDriveDownload color="#D4D4D8" size={20} strokeWidth={1.6} />,
+            onPress: () => dismissDrawer(onOpenBackup),
+          },
+        ]
+      : []),
     {
       id: 'settings',
       label: 'Configurações',

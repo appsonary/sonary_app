@@ -33,7 +33,21 @@ class InMemorySQLiteDatabase {
   }
 
   async withTransactionAsync(fn) {
-    return await fn();
+    const snapPlaylists = new Map(
+      Array.from(this.playlists.entries()).map(([k, v]) => [k, { ...v }])
+    );
+    const snapPlaylistTracks = this.playlistTracks.map((t) => ({ ...t }));
+    const snapHistory = this.playbackHistory.map((h) => ({ ...h }));
+    const snapSettings = new Map(this.appSettings.entries());
+    try {
+      return await fn();
+    } catch (err) {
+      this.playlists = snapPlaylists;
+      this.playlistTracks = snapPlaylistTracks;
+      this.playbackHistory = snapHistory;
+      this.appSettings = snapSettings;
+      throw err;
+    }
   }
 
   async runAsync(sql, params = []) {
@@ -145,6 +159,23 @@ class InMemorySQLiteDatabase {
       return { lastInsertRowId: 0, changes: prevLen - this.playlistTracks.length };
     }
 
+    if (cleanSql === 'DELETE FROM playlist_tracks;' || cleanSql === 'DELETE FROM playlist_tracks') {
+      const prevLen = this.playlistTracks.length;
+      this.playlistTracks = [];
+      return { lastInsertRowId: 0, changes: prevLen };
+    }
+
+    if (cleanSql.includes('DELETE FROM playlists WHERE isSystem = 0')) {
+      let removed = 0;
+      for (const [id, pl] of Array.from(this.playlists.entries())) {
+        if (!pl.isSystem) {
+          this.playlists.delete(id);
+          removed += 1;
+        }
+      }
+      return { lastInsertRowId: 0, changes: removed };
+    }
+
     if (cleanSql.includes('DELETE FROM playlists WHERE id = ?')) {
       const [id] = params;
       const deleted = this.playlists.delete(id);
@@ -201,10 +232,13 @@ class InMemorySQLiteDatabase {
       return { lastInsertRowId: 0, changes: item ? 1 : 0 };
     }
 
-    // 9. Insert into playback_history
-    if (cleanSql.includes('INSERT INTO playback_history')) {
+    // 9. Insert (or replace) into playback_history
+    if (
+      cleanSql.includes('INSERT INTO playback_history') ||
+      cleanSql.includes('INSERT OR REPLACE INTO playback_history')
+    ) {
       const [id, trackId, title, artist, duration, thumbnailUrl, playedAt] = params;
-      this.playbackHistory.push({
+      const entry = {
         id,
         trackId,
         title,
@@ -212,7 +246,13 @@ class InMemorySQLiteDatabase {
         duration,
         thumbnailUrl,
         playedAt,
-      });
+      };
+      const existingIdx = this.playbackHistory.findIndex((h) => h.id === id);
+      if (existingIdx >= 0) {
+        this.playbackHistory[existingIdx] = entry;
+      } else {
+        this.playbackHistory.push(entry);
+      }
       return { lastInsertRowId: 1, changes: 1 };
     }
 

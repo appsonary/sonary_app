@@ -32,6 +32,7 @@ import { AddToPlaylistModal } from './components/AddToPlaylistModal';
 import { PlaylistDetailModal } from './components/PlaylistDetailModal';
 import { BrandHeader } from './components/BrandHeader';
 import { DevMenuModal, isDevMenuEnabled } from './components/DevMenuModal';
+import { BackupModal } from './components/BackupModal';
 import { DownloadQueueModal } from './components/DownloadQueueModal';
 import { MainTab, NavigationTabBar } from './components/NavigationTabBar';
 import { SearchBarSection, SearchPillInput } from './components/SearchBarSection';
@@ -140,6 +141,7 @@ import {
   cancelDownload,
   cancelAllDownloads,
   retryDownload,
+  retryAllFailedDownloads,
   clearFinishedDownloads,
   hydrateDownloadQueue,
   DownloadQueueItem,
@@ -238,6 +240,7 @@ export default function App() {
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [downloadQueue, setDownloadQueue] = useState<DownloadQueueItem[]>([]);
   const [isDownloadQueueVisible, setIsDownloadQueueVisible] = useState(false);
+  const [isBackupModalVisible, setIsBackupModalVisible] = useState(false);
   const [isDrawerVisible, setIsDrawerVisible] = useState(false);
   const drawerProgress = useRef(new Animated.Value(0)).current;
   const shellDrawerTranslateX = React.useMemo(
@@ -2574,9 +2577,23 @@ export default function App() {
 
   // Sincroniza a fila de downloads com a UI, lista offline e erros
   useEffect(() => {
+    let offlineRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let batchCompletedCount = 0;
+
+    const scheduleOfflineRefresh = () => {
+      if (offlineRefreshTimer) return;
+      offlineRefreshTimer = setTimeout(() => {
+        offlineRefreshTimer = null;
+        void loadOfflineTracks();
+      }, 400);
+    };
+
     const unsubscribe = subscribeDownloadQueue((queue) => {
       setDownloadQueue(queue);
       const active = queue.find((i) => i.status === 'downloading');
+      const activeOrPendingCount = queue.filter(
+        (i) => i.status === 'downloading' || i.status === 'pending'
+      ).length;
       if (active) {
         setDownloadingId(active.track.id);
         setDownloadProgress(Math.round(active.progress * 100));
@@ -2599,12 +2616,40 @@ export default function App() {
       );
       syncedCompletedIdsRef.current = new Set(completedIds);
       if (newlyCompleted.length > 0) {
-        void loadOfflineTracks();
-        if (hasHydratedQueueRef.current) {
-          const lastCompleted = newlyCompleted[newlyCompleted.length - 1];
-          if (lastCompleted?.track?.title) {
-            showToast(`"${lastCompleted.track.title}" salva em Baixadas`, 'success');
+        if (activeOrPendingCount > 0) {
+          scheduleOfflineRefresh();
+          if (hasHydratedQueueRef.current) {
+            batchCompletedCount += newlyCompleted.length;
           }
+        } else {
+          if (offlineRefreshTimer) {
+            clearTimeout(offlineRefreshTimer);
+            offlineRefreshTimer = null;
+          }
+          void loadOfflineTracks();
+          if (hasHydratedQueueRef.current) {
+            const totalBatchCompleted = batchCompletedCount + newlyCompleted.length;
+            batchCompletedCount = 0;
+            if (totalBatchCompleted > 1) {
+              showToast(`${totalBatchCompleted} músicas salvas em Baixadas`, 'success');
+            } else {
+              const lastCompleted = newlyCompleted[newlyCompleted.length - 1];
+              if (lastCompleted?.track?.title) {
+                showToast(`"${lastCompleted.track.title}" salva em Baixadas`, 'success');
+              }
+            }
+          }
+        }
+      } else if (activeOrPendingCount === 0 && batchCompletedCount > 0) {
+        const totalBatchCompleted = batchCompletedCount;
+        batchCompletedCount = 0;
+        if (hasHydratedQueueRef.current) {
+          showToast(
+            totalBatchCompleted > 1
+              ? `${totalBatchCompleted} músicas salvas em Baixadas`
+              : '1 música salva em Baixadas',
+            'success'
+          );
         }
       }
 
@@ -2627,12 +2672,16 @@ export default function App() {
           const reason = failedItem.error || 'Não foi possível concluir o download.';
           reportedDownloadErrorMapRef.current.set(failedItem.track.id, reason);
           const friendlyMsg = `Falha ao baixar "${failedItem.track.title}": ${reason}`;
-          setErrorMessage(friendlyMsg);
           showToast(friendlyMsg, 'error');
         }
       }
     });
-    return () => unsubscribe();
+    return () => {
+      if (offlineRefreshTimer) {
+        clearTimeout(offlineRefreshTimer);
+      }
+      unsubscribe();
+    };
   }, [showToast]);
 
   const handleDownload = (track: TrackSummary) => {
@@ -3466,9 +3515,40 @@ export default function App() {
           onOpenRecentHistory={() => showToast('Em breve no Sonary', 'info')}
           onOpenStats={() => showToast('Em breve no Sonary', 'info')}
           onOpenUpdates={() => void handleCheckUpdates(true)}
+          onOpenBackup={() => setIsBackupModalVisible(true)}
           onOpenSettings={() => showToast('Em breve no Sonary', 'info')}
           onOpenDevMenu={isDevMode ? () => setIsDevMenuVisible(true) : undefined}
           onOpenSupport={() => handleTabChange('support')}
+        />
+
+        {/* Modal de Backup e Restauração JSON */}
+        <BackupModal
+          visible={isBackupModalVisible}
+          onClose={() => setIsBackupModalVisible(false)}
+          onBackupExported={(fileName) => {
+            showToast(`Backup ${fileName} salvo`, 'success');
+          }}
+          onBackupRestored={(result) => {
+            void (async () => {
+              await loadPlaylists();
+              await loadOfflineTracks();
+              const refreshedSearch = await getSearchHistory().catch(() => []);
+              setRecentSearchQueries(refreshedSearch);
+              const favDetail = await getPlaylistById(FAVORITES_PLAYLIST_ID).catch(() => null);
+              const nextFavIds = new Set<string>(
+                favDetail ? favDetail.tracks.map((t) => t.trackId) : []
+              );
+              setFavoriteTrackIds(nextFavIds);
+              if (activeTrack?.id) {
+                setIsCurrentFavorite(nextFavIds.has(activeTrack.id));
+              }
+            })();
+            const extra =
+              result.enqueuedOfflineCount > 0
+                ? ` • ${result.enqueuedOfflineCount} offline na fila`
+                : '';
+            showToast(`Backup restaurado com sucesso${extra}`, 'success');
+          }}
         />
 
         {/* Modal de Fila de Downloads */}
@@ -3481,6 +3561,9 @@ export default function App() {
           }}
           onRetryItem={(trackId) => {
             retryDownload(trackId);
+          }}
+          onRetryAllFailed={() => {
+            retryAllFailedDownloads();
           }}
           onCancelAll={() => {
             void cancelAllDownloads();

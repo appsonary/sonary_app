@@ -1639,3 +1639,345 @@ export async function setAppSetting(key: string, value: string): Promise<void> {
     [key, value]
   );
 }
+
+/* ==========================================================================
+   BACKUP SNAPSHOT EXPORT & ATOMIC IMPORT (SUPER SEED)
+   ========================================================================== */
+
+export interface DatabaseBackupTrack {
+  trackId: string;
+  title: string;
+  artist: string;
+  duration: number;
+  thumbnailUrl: string;
+  position: number;
+  addedAt: number;
+}
+
+export interface DatabaseBackupPlaylist {
+  id: string;
+  name: string;
+  description: string | null;
+  isSystem: boolean;
+  customCoverUri: string | null;
+  createdAt: number;
+  updatedAt: number;
+  tracks: DatabaseBackupTrack[];
+}
+
+export interface DatabaseBackupHistoryItem {
+  trackId: string;
+  title: string;
+  artist: string;
+  duration: number;
+  thumbnailUrl: string;
+  playedAt: number;
+}
+
+export interface DatabaseBackupOfflineRef {
+  id: string;
+  title: string;
+  artist: string;
+  duration: number;
+  thumbnailUrl: string;
+}
+
+export interface DatabaseUserSnapshot {
+  playlists: DatabaseBackupPlaylist[];
+  playbackHistory: DatabaseBackupHistoryItem[];
+  searchHistory: string[];
+  offlineTrackRefs: DatabaseBackupOfflineRef[];
+}
+
+export interface ImportSnapshotStats {
+  playlistsImported: number;
+  playlistsUpdated: number;
+  tracksImported: number;
+  favoritesImported: number;
+  historyImported: number;
+  searchHistoryImported: number;
+  removedCustomCoverUris: string[];
+  unusedCustomCoverUris: string[];
+}
+
+/**
+ * Coleta um snapshot consistente de todos os dados de usuário persistidos no SQLite
+ * (playlists, Músicas Curtidas, históricos e referências leves de faixas offline).
+ */
+export async function exportUserDatabaseSnapshot(): Promise<DatabaseUserSnapshot> {
+  await initDatabase();
+  const summaries = await getPlaylists();
+  const playlists: DatabaseBackupPlaylist[] = [];
+
+  for (const summary of summaries) {
+    const detail = await getPlaylistById(summary.id);
+    if (!detail) continue;
+    playlists.push({
+      id: detail.id,
+      name: detail.name,
+      description: detail.description ?? null,
+      isSystem: detail.isSystem,
+      customCoverUri: !detail.isSystem && detail.hasCustomCover ? detail.thumbnailUrl : null,
+      createdAt: detail.createdAt,
+      updatedAt: detail.updatedAt,
+      tracks: detail.tracks.map((t, index) => ({
+        trackId: t.trackId,
+        title: t.title,
+        artist: t.artist,
+        duration: t.duration,
+        thumbnailUrl: t.thumbnailUrl || '',
+        position: typeof t.position === 'number' ? t.position : index,
+        addedAt: t.addedAt,
+      })),
+    });
+  }
+
+  const historyRows = await getPlaybackHistory(500);
+  const playbackHistory: DatabaseBackupHistoryItem[] = historyRows.map((h) => ({
+    trackId: h.trackId,
+    title: h.title,
+    artist: h.artist,
+    duration: h.duration,
+    thumbnailUrl: h.thumbnailUrl || '',
+    playedAt: h.playedAt,
+  }));
+
+  const searchHistory = await getSearchHistory(MAX_SEARCH_HISTORY);
+  const downloaded = await getDownloadedTracks();
+  const offlineTrackRefs: DatabaseBackupOfflineRef[] = downloaded.map((d) => ({
+    id: d.id,
+    title: d.title,
+    artist: d.artist,
+    duration: d.duration,
+    thumbnailUrl: d.thumbnailUrl || '',
+  }));
+
+  return {
+    playlists,
+    playbackHistory,
+    searchHistory,
+    offlineTrackRefs,
+  };
+}
+
+/**
+ * Restaura um snapshot de usuário no SQLite em transação atômica.
+ * - `merge`: preserva dados locais e mescla playlists, curtidas e históricos sem duplicar.
+ * - `replace`: limpa playlists de usuário, curtidas e históricos locais antes de restaurar (mantém `downloaded_tracks`).
+ */
+export async function importUserDatabaseSnapshot(
+  snapshot: DatabaseUserSnapshot,
+  mode: 'merge' | 'replace' = 'merge'
+): Promise<ImportSnapshotStats> {
+  await initDatabase();
+  const db = await getDatabase();
+
+  const existingSummaries = await getPlaylists();
+  const existingHistory = await getPlaybackHistory(500);
+  const existingSearch = await getSearchHistory(MAX_SEARCH_HISTORY);
+
+  const removedCustomCoverUris: string[] = [];
+  const unusedCustomCoverUris: string[] = [];
+  if (mode === 'replace') {
+    for (const pl of existingSummaries) {
+      if (!pl.isSystem && pl.hasCustomCover && pl.thumbnailUrl) {
+        removedCustomCoverUris.push(pl.thumbnailUrl);
+      }
+    }
+  }
+
+  const stats: ImportSnapshotStats = {
+    playlistsImported: 0,
+    playlistsUpdated: 0,
+    tracksImported: 0,
+    favoritesImported: 0,
+    historyImported: 0,
+    searchHistoryImported: 0,
+    removedCustomCoverUris,
+    unusedCustomCoverUris,
+  };
+
+  const runImport = async () => {
+    if (mode === 'replace') {
+      await db.runAsync(`DELETE FROM playlist_tracks;`);
+      await db.runAsync(`DELETE FROM playlists WHERE isSystem = 0;`);
+      await db.runAsync(`DELETE FROM playback_history;`);
+      await db.runAsync(
+        `INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?);`,
+        [SEARCH_HISTORY_KEY, '[]']
+      );
+    }
+
+    for (const pl of snapshot.playlists) {
+      const isFavorites = pl.id === FAVORITES_PLAYLIST_ID;
+      const existingPl = await db.getFirstAsync<{
+        id: string;
+        name: string;
+        description: string | null;
+        thumbnailUrl: string | null;
+        updatedAt: number;
+      }>(
+        `SELECT id, name, description, thumbnailUrl, isSystem, createdAt, updatedAt FROM playlists WHERE id = ?;`,
+        [pl.id]
+      );
+
+      if (isFavorites) {
+        if (pl.description !== null && pl.description !== undefined) {
+          await db.runAsync(
+            `UPDATE playlists SET description = ?, updatedAt = ? WHERE id = ?;`,
+            [pl.description, pl.updatedAt || Date.now(), FAVORITES_PLAYLIST_ID]
+          );
+        }
+      } else if (!existingPl) {
+        await db.runAsync(
+          `INSERT INTO playlists (
+            id, name, description, thumbnailUrl, isSystem, createdAt, updatedAt
+          ) VALUES (?, ?, ?, ?, 0, ?, ?);`,
+          [
+            pl.id,
+            pl.name,
+            pl.description,
+            pl.customCoverUri || null,
+            pl.createdAt || Date.now(),
+            pl.updatedAt || Date.now(),
+          ]
+        );
+        stats.playlistsImported += 1;
+      } else if (mode === 'merge') {
+        const shouldUpdateMeta = (pl.updatedAt || 0) > (existingPl.updatedAt || 0);
+        const shouldAdoptCover = Boolean(
+          pl.customCoverUri && (shouldUpdateMeta || !existingPl.thumbnailUrl)
+        );
+        const nextCover = shouldAdoptCover
+          ? pl.customCoverUri
+          : (existingPl.thumbnailUrl ?? null);
+
+        if (shouldUpdateMeta || shouldAdoptCover) {
+          if (shouldAdoptCover && existingPl.thumbnailUrl && existingPl.thumbnailUrl !== pl.customCoverUri) {
+            removedCustomCoverUris.push(existingPl.thumbnailUrl);
+          }
+          await db.runAsync(
+            `UPDATE playlists SET name = ?, description = ?, thumbnailUrl = ?, updatedAt = ? WHERE id = ?;`,
+            [
+              shouldUpdateMeta ? pl.name : existingPl.name,
+              shouldUpdateMeta ? pl.description : existingPl.description,
+              nextCover,
+              Math.max(pl.updatedAt || 0, existingPl.updatedAt || 0, Date.now()),
+              pl.id,
+            ]
+          );
+          stats.playlistsUpdated += 1;
+        } else if (pl.customCoverUri) {
+          unusedCustomCoverUris.push(pl.customCoverUri);
+        }
+      }
+
+      const maxPosRow = await db.getFirstAsync<{ nextPos: number }>(
+        `SELECT COALESCE(MAX(position), -1) + 1 AS nextPos FROM playlist_tracks WHERE playlistId = ?;`,
+        [pl.id]
+      );
+      let nextPos = maxPosRow ? maxPosRow.nextPos : 0;
+
+      const orderedTracks = [...pl.tracks].sort((a, b) => a.position - b.position);
+      for (const track of orderedTracks) {
+        if (mode === 'merge') {
+          const alreadyExists = await db.getFirstAsync<{ trackId: string }>(
+            `SELECT trackId FROM playlist_tracks WHERE playlistId = ? AND trackId = ? LIMIT 1;`,
+            [pl.id, track.trackId]
+          );
+          if (alreadyExists) continue;
+        }
+
+        const position = mode === 'replace' ? track.position : nextPos++;
+        await db.runAsync(
+          `INSERT OR REPLACE INTO playlist_tracks (
+            playlistId, trackId, title, artist, duration, thumbnailUrl, position, addedAt
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+          [
+            pl.id,
+            track.trackId,
+            track.title,
+            track.artist,
+            track.duration,
+            track.thumbnailUrl || '',
+            position,
+            track.addedAt || Date.now(),
+          ]
+        );
+        stats.tracksImported += 1;
+        if (isFavorites) {
+          stats.favoritesImported += 1;
+        }
+      }
+    }
+
+    // Histórico de reprodução
+    const existingHistoryByTrack = new Map<string, HistoryTrackItem>();
+    if (mode === 'merge') {
+      for (const item of existingHistory) {
+        existingHistoryByTrack.set(item.trackId, item);
+      }
+    }
+
+    for (const h of snapshot.playbackHistory) {
+      const existing = existingHistoryByTrack.get(h.trackId);
+      if (existing) {
+        if (h.playedAt > existing.playedAt) {
+          await db.runAsync(
+            `UPDATE playback_history SET title = ?, artist = ?, duration = ?, thumbnailUrl = ?, playedAt = ? WHERE id = ?;`,
+            [h.title, h.artist, h.duration, h.thumbnailUrl || '', h.playedAt, existing.id]
+          );
+          stats.historyImported += 1;
+        }
+      } else {
+        const histId = `hist_${h.trackId}_${h.playedAt}`;
+        await db.runAsync(
+          `INSERT OR REPLACE INTO playback_history (id, trackId, title, artist, duration, thumbnailUrl, playedAt) VALUES (?, ?, ?, ?, ?, ?, ?);`,
+          [histId, h.trackId, h.title, h.artist, h.duration, h.thumbnailUrl || '', h.playedAt]
+        );
+        stats.historyImported += 1;
+      }
+    }
+
+    await db.runAsync(
+      `DELETE FROM playback_history WHERE id NOT IN (SELECT id FROM playback_history ORDER BY playedAt DESC LIMIT 500);`
+    );
+
+    // Histórico de buscas
+    const mergedSearch: string[] = [];
+    const seenSearch = new Set<string>();
+    const searchCandidates =
+      mode === 'replace'
+        ? snapshot.searchHistory
+        : [...existingSearch, ...snapshot.searchHistory];
+    for (const rawTerm of searchCandidates) {
+      const trimmed = rawTerm.trim();
+      const key = trimmed.toLowerCase();
+      if (!trimmed || seenSearch.has(key)) continue;
+      seenSearch.add(key);
+      mergedSearch.push(trimmed);
+      if (mergedSearch.length >= MAX_SEARCH_HISTORY) break;
+    }
+
+    await db.runAsync(
+      `INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?);`,
+      [SEARCH_HISTORY_KEY, JSON.stringify(mergedSearch)]
+    );
+    stats.searchHistoryImported =
+      mode === 'replace'
+        ? mergedSearch.length
+        : Math.max(0, mergedSearch.length - existingSearch.length);
+  };
+
+  const dbWithTx = db as SQLite.SQLiteDatabase & {
+    withTransactionAsync?: (task: () => Promise<void>) => Promise<void>;
+  };
+  if (typeof dbWithTx.withTransactionAsync === 'function') {
+    await dbWithTx.withTransactionAsync(runImport);
+  } else {
+    await runImport();
+  }
+
+  invalidateDatabaseCaches();
+  return stats;
+}

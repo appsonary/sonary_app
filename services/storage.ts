@@ -1324,6 +1324,59 @@ export function retryDownload(videoId: string): boolean {
   return true;
 }
 
+/**
+ * Reenfileira em lote todas as faixas que estão com erro na fila de downloads.
+ */
+export function retryAllFailedDownloads(): number {
+  const failedItems = downloadQueue.filter((i) => i.status === 'error');
+  if (failedItems.length === 0) return 0;
+
+  const persistedBatch: Array<{
+    trackId: string;
+    title: string;
+    artist: string;
+    duration: number;
+    thumbnailUrl?: string;
+    status: 'pending';
+    progress: number;
+  }> = [];
+
+  for (const item of failedItems) {
+    pushOrReplacePending(item.track);
+    persistedBatch.push({
+      trackId: item.track.id,
+      title: item.track.title,
+      artist: item.track.artist,
+      duration: item.track.duration,
+      thumbnailUrl: item.track.thumbnailUrl,
+      status: 'pending',
+      progress: 0,
+    });
+  }
+
+  const nativeMod = getNativeDownloader();
+  if (nativeMod) {
+    enqueuePersistenceOp(() =>
+      nativeMod.enqueueItems(
+        persistedBatch.map((b) => ({
+          trackId: b.trackId,
+          title: b.title,
+          artist: b.artist,
+          duration: b.duration,
+          thumbnailUrl: b.thumbnailUrl || '',
+        }))
+      )
+    );
+    preResolveNativeStreams(persistedBatch.map((b) => b.trackId));
+  } else {
+    enqueuePersistenceOp(() => upsertPersistedDownloadQueueBatch(persistedBatch));
+  }
+
+  notifyQueueListeners();
+  scheduleQueueExecution();
+  return failedItems.length;
+}
+
 async function resolveAndDownloadTrack(
   item: DownloadQueueItem,
   handle: ActiveDownloadHandle
@@ -1410,7 +1463,11 @@ async function processQueue(): Promise<void> {
         try {
           await resolveAndDownloadTrack(nextItem, handle);
         } catch (firstErr) {
-          if (firstErr instanceof DownloadCancelledError || handle.cancelled) {
+          if (
+            firstErr instanceof DownloadCancelledError ||
+            handle.cancelled ||
+            (firstErr instanceof Error && firstErr.message.includes('Espaço em disco insuficiente'))
+          ) {
             throw firstErr;
           }
           // Invalida possível URL expirada no streamCache e tenta uma vez com stream novo
@@ -1435,8 +1492,21 @@ async function processQueue(): Promise<void> {
           notifyQueueListeners();
           continue;
         }
+        const errMsg = err instanceof Error ? err.message : String(err);
+        // Espaço em disco insuficiente: pausa a fila sem marcar as demais faixas como erro
+        if (errMsg.includes('Espaço em disco insuficiente')) {
+          nextItem.status = 'pending';
+          nextItem.progress = 0;
+          nextItem.error = undefined;
+          enqueuePersistenceOp(() =>
+            updatePersistedDownloadQueueState(nextItem.track.id, 'pending', 0, null)
+          );
+          notifyQueueListeners();
+          console.warn('[Storage] Fila pausada por espaço insuficiente em disco:', errMsg);
+          break;
+        }
         nextItem.status = 'error';
-        nextItem.error = err instanceof Error ? err.message : String(err);
+        nextItem.error = errMsg;
         enqueuePersistenceOp(() =>
           updatePersistedDownloadQueueState(
             nextItem.track.id,

@@ -1,9 +1,9 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import {
   Animated,
+  FlatList,
   Image,
   Modal,
-  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -30,6 +30,7 @@ export interface DownloadQueueModalProps {
   onClose: () => void;
   onCancelItem: (trackId: string) => void;
   onRetryItem: (trackId: string) => void;
+  onRetryAllFailed?: () => void;
   onCancelAll: () => void;
   onClearFinished: () => void;
 }
@@ -43,6 +44,7 @@ export const DownloadQueueModal: React.FC<DownloadQueueModalProps> = ({
   onClose,
   onCancelItem,
   onRetryItem,
+  onRetryAllFailed,
   onCancelAll,
   onClearFinished,
 }) => {
@@ -80,6 +82,99 @@ export const DownloadQueueModal: React.FC<DownloadQueueModalProps> = ({
       finished: completed + error,
     };
   }, [queue]);
+
+  const renderQueueItem = useCallback(
+    ({ item }: { item: DownloadQueueItem }) => {
+      const pct = Math.max(0, Math.min(100, Math.round(item.progress * 100)));
+      const isDownloading = item.status === 'downloading';
+      const isPending = item.status === 'pending';
+      const isError = item.status === 'error';
+      const isCompleted = item.status === 'completed';
+
+      return (
+        <View style={styles.row}>
+          <View style={styles.thumbBox}>
+            {item.track.thumbnailUrl ? (
+              <Image source={{ uri: item.track.thumbnailUrl }} style={styles.thumb} />
+            ) : (
+              <Music2 color={theme.colors.textMuted} size={18} />
+            )}
+          </View>
+
+          <View style={styles.rowMeta}>
+            <Text style={styles.rowTitle} numberOfLines={1}>
+              {item.track.title}
+            </Text>
+            <Text style={styles.rowArtist} numberOfLines={1}>
+              {item.track.artist}
+            </Text>
+
+            {isDownloading && (
+              <View style={styles.progressSection}>
+                <View style={styles.progressTrack}>
+                  <View style={[styles.progressFill, { width: `${pct}%` }]} />
+                </View>
+                <Text style={styles.progressLabel}>
+                  {pct > 0 ? `Baixando ${pct}%` : 'Preparando...'}
+                </Text>
+              </View>
+            )}
+
+            {isPending && (
+              <View style={styles.statusRow}>
+                <Clock color="#AAAAAA" size={12} />
+                <Text style={styles.statusPendingText}>Na fila</Text>
+              </View>
+            )}
+
+            {isCompleted && (
+              <View style={styles.statusRow}>
+                <CheckCircle2 color={theme.colors.success} size={12} />
+                <Text style={styles.statusCompletedText}>Salva em Baixadas</Text>
+              </View>
+            )}
+
+            {isError && (
+              <View style={styles.statusRow}>
+                <AlertCircle color={theme.colors.danger} size={12} />
+                <Text style={styles.statusErrorText} numberOfLines={1}>
+                  {item.error || 'Falha ao baixar'}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          <View style={styles.rowActions}>
+            {isError && (
+              <TouchableOpacity
+                style={styles.iconActionBtn}
+                onPress={() => onRetryItem(item.track.id)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel={`Tentar novamente download de ${item.track.title}`}
+              >
+                <RotateCcw color="#FFFFFF" size={17} />
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={styles.iconActionBtn}
+              onPress={() => onCancelItem(item.track.id)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel={
+                isDownloading || isPending
+                  ? `Cancelar download de ${item.track.title}`
+                  : `Remover ${item.track.title} da lista`
+              }
+            >
+              <X color="#AAAAAA" size={18} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      );
+    },
+    [onCancelItem, onRetryItem]
+  );
 
   if (!visible) return null;
 
@@ -146,6 +241,21 @@ export const DownloadQueueModal: React.FC<DownloadQueueModalProps> = ({
 
             {(stats.activeOrPending > 0 || stats.finished > 0) && (
               <View style={styles.bulkActionsRow}>
+                {stats.error > 0 && onRetryAllFailed && (
+                  <TouchableOpacity
+                    style={styles.bulkButton}
+                    onPress={onRetryAllFailed}
+                    activeOpacity={0.75}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Tentar novamente ${stats.error} downloads com erro`}
+                    testID="download-queue-retry-all-btn"
+                  >
+                    <RotateCcw color="#FFFFFF" size={14} />
+                    <Text style={styles.bulkButtonText}>
+                      Tentar novamente ({stats.error})
+                    </Text>
+                  </TouchableOpacity>
+                )}
                 {stats.finished > 0 && (
                   <TouchableOpacity
                     style={styles.bulkButton}
@@ -188,109 +298,18 @@ export const DownloadQueueModal: React.FC<DownloadQueueModalProps> = ({
                 </Text>
               </View>
             ) : (
-              <ScrollView
+              <FlatList
+                data={queue}
+                keyExtractor={(item) => item.track.id}
+                renderItem={renderQueueItem}
                 style={styles.listScroll}
                 contentContainerStyle={styles.listContent}
                 showsVerticalScrollIndicator={true}
-              >
-                {queue.map((item) => {
-                  const pct = Math.max(0, Math.min(100, Math.round(item.progress * 100)));
-                  const isDownloading = item.status === 'downloading';
-                  const isPending = item.status === 'pending';
-                  const isError = item.status === 'error';
-                  const isCompleted = item.status === 'completed';
-
-                  return (
-                    <View key={item.track.id} style={styles.row}>
-                      <View style={styles.thumbBox}>
-                        {item.track.thumbnailUrl ? (
-                          <Image
-                            source={{ uri: item.track.thumbnailUrl }}
-                            style={styles.thumb}
-                          />
-                        ) : (
-                          <Music2 color={theme.colors.textMuted} size={18} />
-                        )}
-                      </View>
-
-                      <View style={styles.rowMeta}>
-                        <Text style={styles.rowTitle} numberOfLines={1}>
-                          {item.track.title}
-                        </Text>
-                        <Text style={styles.rowArtist} numberOfLines={1}>
-                          {item.track.artist}
-                        </Text>
-
-                        {isDownloading && (
-                          <View style={styles.progressSection}>
-                            <View style={styles.progressTrack}>
-                              <View
-                                style={[
-                                  styles.progressFill,
-                                  { width: `${pct}%` },
-                                ]}
-                              />
-                            </View>
-                            <Text style={styles.progressLabel}>
-                              {pct > 0 ? `Baixando ${pct}%` : 'Preparando...'}
-                            </Text>
-                          </View>
-                        )}
-
-                        {isPending && (
-                          <View style={styles.statusRow}>
-                            <Clock color="#AAAAAA" size={12} />
-                            <Text style={styles.statusPendingText}>Na fila</Text>
-                          </View>
-                        )}
-
-                        {isCompleted && (
-                          <View style={styles.statusRow}>
-                            <CheckCircle2 color={theme.colors.success} size={12} />
-                            <Text style={styles.statusCompletedText}>Salva em Baixadas</Text>
-                          </View>
-                        )}
-
-                        {isError && (
-                          <View style={styles.statusRow}>
-                            <AlertCircle color={theme.colors.danger} size={12} />
-                            <Text style={styles.statusErrorText} numberOfLines={1}>
-                              {item.error || 'Falha ao baixar'}
-                            </Text>
-                          </View>
-                        )}
-                      </View>
-
-                      <View style={styles.rowActions}>
-                        {isError && (
-                          <TouchableOpacity
-                            style={styles.iconActionBtn}
-                            onPress={() => onRetryItem(item.track.id)}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Tentar novamente download de ${item.track.title}`}
-                          >
-                            <RotateCcw color="#FFFFFF" size={17} />
-                          </TouchableOpacity>
-                        )}
-                        <TouchableOpacity
-                          style={styles.iconActionBtn}
-                          onPress={() => onCancelItem(item.track.id)}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          accessibilityRole="button"
-                          accessibilityLabel={
-                            isDownloading || isPending
-                              ? `Cancelar download de ${item.track.title}`
-                              : `Remover ${item.track.title} da lista`
-                          }
-                        >
-                          <X color="#AAAAAA" size={18} />
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  );
-                })}
-              </ScrollView>
+                initialNumToRender={12}
+                maxToRenderPerBatch={12}
+                windowSize={5}
+                removeClippedSubviews={true}
+              />
             )}
           </Animated.View>
         </TouchableOpacity>
@@ -365,6 +384,7 @@ const styles = StyleSheet.create({
   },
   bulkActionsRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 8,
     paddingHorizontal: 20,
