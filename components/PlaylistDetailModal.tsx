@@ -51,6 +51,10 @@ import {
   DownloadQueueItem,
 } from '../services/storage';
 import { TrackSummary } from '../services/api';
+import {
+  exportPlaylistToFile,
+  savePlaylistToDevice,
+} from '../services/backup';
 import { CircularDownloadProgress, TrackContextSheet } from './TrackCard';
 import { PlayingEqualizer } from './PlayingEqualizer';
 import { DownloadedTrackBadge, MarqueeText, TrackMetaRow } from './MarqueeText';
@@ -528,6 +532,45 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
     }
   };
 
+  const handleSharePlaylistFile = async () => {
+    if (!playlist) return;
+    try {
+      const result = await exportPlaylistToFile(playlist.id);
+      if (!result.shared) {
+        onShowToast?.(
+          'Compartilhamento cancelado ou indisponível neste dispositivo.',
+          'error'
+        );
+      }
+    } catch (err) {
+      onShowToast?.(
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível compartilhar a playlist.',
+        'error'
+      );
+      throw err;
+    }
+  };
+
+  const handleSavePlaylistToDevice = async () => {
+    if (!playlist) return;
+    try {
+      const result = await savePlaylistToDevice(playlist.id);
+      if (result.shared) {
+        onShowToast?.(`Playlist salva em ${result.fileName}`, 'success');
+      }
+    } catch (err) {
+      onShowToast?.(
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível salvar a playlist no dispositivo.',
+        'error'
+      );
+      throw err;
+    }
+  };
+
   const handlePickCustomCover = async () => {
     if (!playlist || playlist.isSystem) return;
     try {
@@ -850,7 +893,7 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
           {playlist?.name || 'Playlist'}
         </Text>
 
-        {playlist && !playlist.isSystem ? (
+        {playlist ? (
           <TouchableOpacity
             style={styles.menuButton}
             onPress={() => setShowOptionsSheet(true)}
@@ -1111,6 +1154,8 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
         onEditDetails={() => setShowEditModal(true)}
         onToggleReorder={() => setIsReordering((prev) => !prev)}
         onDownloadAll={handleDownloadAll}
+        onSharePlaylistFile={handleSharePlaylistFile}
+        onSavePlaylistToDevice={handleSavePlaylistToDevice}
         onDeletePlaylist={handleDelete}
       />
 

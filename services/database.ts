@@ -498,6 +498,100 @@ export async function createPlaylist(
   };
 }
 
+export interface CreatePlaylistWithTracksInput {
+  name: string;
+  description?: string | null;
+  customCoverUri?: string | null;
+  tracks: Array<{
+    trackId: string;
+    title: string;
+    artist: string;
+    duration: number;
+    thumbnailUrl: string;
+    position: number;
+    addedAt: number;
+  }>;
+}
+
+/**
+ * Cria uma nova playlist com capa customizada opcional e todas as suas faixas em uma única transação atômica.
+ */
+export async function createPlaylistWithTracks(
+  input: CreatePlaylistWithTracksInput
+): Promise<PlaylistSummary> {
+  await initDatabase();
+  const db = await getDatabase();
+
+  const trimmedName = input.name.trim() || 'Minha Playlist';
+  const trimmedDesc = input.description?.trim() || null;
+  const customCoverUri = input.customCoverUri || null;
+  const id = `pl_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  const now = Date.now();
+  const orderedTracks = [...input.tracks].sort((a, b) => a.position - b.position);
+
+  const runCreate = async () => {
+    await db.runAsync(
+      `INSERT INTO playlists (
+        id, name, description, thumbnailUrl, isSystem, createdAt, updatedAt
+      ) VALUES (?, ?, ?, ?, 0, ?, ?);`,
+      [id, trimmedName, trimmedDesc, customCoverUri, now, now]
+    );
+
+    for (let idx = 0; idx < orderedTracks.length; idx += 1) {
+      const t = orderedTracks[idx];
+      await db.runAsync(
+        `INSERT OR REPLACE INTO playlist_tracks (
+          playlistId, trackId, title, artist, duration, thumbnailUrl, position, addedAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+        [
+          id,
+          t.trackId,
+          t.title,
+          t.artist,
+          t.duration,
+          t.thumbnailUrl || '',
+          idx,
+          t.addedAt || now,
+        ]
+      );
+    }
+  };
+
+  const dbWithTx = db as SQLite.SQLiteDatabase & {
+    withTransactionAsync?: (task: () => Promise<void>) => Promise<void>;
+  };
+  if (typeof dbWithTx.withTransactionAsync === 'function') {
+    await dbWithTx.withTransactionAsync(runCreate);
+  } else {
+    await runCreate();
+  }
+
+  invalidatePlaylistCaches(id);
+
+  const hasCustomCover = Boolean(customCoverUri);
+  const coverThumbnails = hasCustomCover
+    ? []
+    : orderedTracks
+        .map((t) => t.thumbnailUrl)
+        .filter((uri): uri is string => Boolean(uri))
+        .slice(0, 4);
+  const totalDuration = orderedTracks.reduce((acc, t) => acc + (t.duration || 0), 0);
+
+  return {
+    id,
+    name: trimmedName,
+    description: trimmedDesc,
+    thumbnailUrl: customCoverUri || coverThumbnails[0] || null,
+    hasCustomCover,
+    coverThumbnails,
+    isSystem: false,
+    trackCount: orderedTracks.length,
+    totalDuration,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 /**
  * Retorna a lista de todas as playlists, calculando dinamicamente:
  * - Quantidade de faixas (`trackCount`)

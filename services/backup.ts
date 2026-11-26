@@ -3,6 +3,7 @@ import * as FileSystem from 'expo-file-system';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 import {
+  createPlaylistWithTracks,
   DatabaseBackupHistoryItem,
   DatabaseBackupOfflineRef,
   DatabaseBackupPlaylist,
@@ -11,9 +12,11 @@ import {
   FAVORITES_PLAYLIST_ID,
   getDownloadedTrackIds,
   getPlaybackHistory,
+  getPlaylistById,
   getPlaylists,
   importUserDatabaseSnapshot,
   ImportSnapshotStats,
+  PlaylistSummary,
 } from './database';
 import {
   deletePlaylistCover,
@@ -272,6 +275,11 @@ export function validateAndNormalizeBackupJson(rawJson: string): SonaryBackupV1 
 
   if (root.app !== BACKUP_APP_ID) {
     throw new BackupValidationError('Este arquivo não é um backup válido do Sonary.');
+  }
+  if (root.type === PLAYLIST_EXPORT_TYPE) {
+    throw new BackupValidationError(
+      'Este arquivo é uma playlist individual. Use o botão "Importar" na aba Playlists.'
+    );
   }
   if (root.schemaVersion !== BACKUP_SCHEMA_VERSION) {
     throw new BackupValidationError(
@@ -878,4 +886,478 @@ export async function restoreBackup(
     }
     throw err;
   }
+}
+
+/* ==========================================================================
+   EXPORTAÇÃO & IMPORTAÇÃO DE PLAYLIST INDIVIDUAL (JSON v1)
+   ========================================================================== */
+
+export const PLAYLIST_EXPORT_TYPE = 'playlist';
+export const PLAYLIST_EXPORT_SCHEMA_VERSION = 1;
+export const MAX_PLAYLIST_FILE_BYTES = 5 * 1024 * 1024; // 5 MB
+
+export interface SonaryPlaylistExportV1 {
+  app: typeof BACKUP_APP_ID;
+  type: typeof PLAYLIST_EXPORT_TYPE;
+  schemaVersion: typeof PLAYLIST_EXPORT_SCHEMA_VERSION;
+  appVersion: string;
+  exportedAt: number;
+  playlist: {
+    name: string;
+    description: string | null;
+    customCoverBase64?: string | null;
+    tracks: SonaryBackupTrackV1[];
+  };
+}
+
+export interface PlaylistImportPreview {
+  appVersion: string;
+  exportedAt: number;
+  name: string;
+  description: string | null;
+  trackCount: number;
+  totalDuration: number;
+  hasCustomCover: boolean;
+  customCoverDataUri: string | null;
+  coverThumbnails: string[];
+  offlineMissingCount: number;
+}
+
+export interface PickedPlaylistResult {
+  fileName: string;
+  sizeBytes: number;
+  exported: SonaryPlaylistExportV1;
+  preview: PlaylistImportPreview;
+}
+
+export interface ImportPlaylistOptions {
+  nameOverride?: string;
+  enqueueOfflineDownloads?: boolean;
+}
+
+export interface ImportPlaylistResult {
+  playlist: PlaylistSummary;
+  restoredCustomCover: boolean;
+  enqueuedOfflineCount: number;
+}
+
+export function formatPlaylistExportFileName(playlistName: string): string {
+  const normalized = String(playlistName || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return normalized ? `sonary-playlist-${normalized}.json` : 'sonary-playlist.json';
+}
+
+/**
+ * Monta o payload JSON leve de uma única playlist (incluindo Músicas Curtidas).
+ */
+export async function buildPlaylistExportPayload(
+  playlistId: string
+): Promise<SonaryPlaylistExportV1> {
+  const detail = await getPlaylistById(playlistId);
+  if (!detail) {
+    throw new Error('Playlist não encontrada.');
+  }
+
+  let customCoverBase64: string | null = null;
+  if (
+    !detail.isSystem &&
+    detail.hasCustomCover &&
+    detail.thumbnailUrl &&
+    detail.thumbnailUrl.startsWith(PLAYLIST_COVERS_DIRECTORY)
+  ) {
+    try {
+      const base64Encoding = FileSystem.EncodingType?.Base64 ?? ('base64' as FileSystem.EncodingType);
+      const info = await FileSystem.getInfoAsync(detail.thumbnailUrl);
+      if (info.exists && (!info.size || info.size <= 512 * 1024)) {
+        const rawB64 = await FileSystem.readAsStringAsync(detail.thumbnailUrl, {
+          encoding: base64Encoding,
+        });
+        const valid = validateImageBase64(rawB64);
+        if (valid) {
+          customCoverBase64 = valid.base64;
+        }
+      }
+    } catch {
+      // Capa corrompida/ausente não impede exportar a playlist
+    }
+  }
+
+  const emptyLookup = new Map<string, string>();
+  const orderedTracks = [...detail.tracks].sort((a, b) => a.position - b.position);
+
+  return {
+    app: BACKUP_APP_ID,
+    type: PLAYLIST_EXPORT_TYPE,
+    schemaVersion: PLAYLIST_EXPORT_SCHEMA_VERSION,
+    appVersion: appJson?.expo?.version || '1.0.0',
+    exportedAt: Date.now(),
+    playlist: {
+      name: detail.name,
+      description: detail.description ?? null,
+      customCoverBase64,
+      tracks: orderedTracks.map((t, idx) => ({
+        trackId: t.trackId,
+        title: t.title,
+        artist: t.artist,
+        duration: t.duration,
+        thumbnailUrl: resolveHttpThumbnailForTrack(t.trackId, t.thumbnailUrl, emptyLookup),
+        position: idx,
+        addedAt: t.addedAt,
+      })),
+    },
+  };
+}
+
+async function prepareSerializedPlaylistExport(playlistId: string): Promise<{
+  fileName: string;
+  serialized: string;
+  sizeBytes: number;
+  utf8Encoding: FileSystem.EncodingType;
+}> {
+  const payload = await buildPlaylistExportPayload(playlistId);
+  const serialized = JSON.stringify(payload, null, 2);
+  const fileName = formatPlaylistExportFileName(payload.playlist.name);
+  const utf8Encoding = FileSystem.EncodingType?.UTF8 ?? ('utf8' as FileSystem.EncodingType);
+  return {
+    fileName,
+    serialized,
+    sizeBytes: utf8ByteLength(serialized),
+    utf8Encoding,
+  };
+}
+
+/**
+ * Gera o JSON da playlist e aciona o Share Sheet nativo (com fallback para Android SAF).
+ */
+export async function exportPlaylistToFile(playlistId: string): Promise<ExportBackupResult> {
+  const { fileName, serialized, sizeBytes, utf8Encoding } =
+    await prepareSerializedPlaylistExport(playlistId);
+  const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory || '';
+  const fileUri = `${baseDir}${fileName}`;
+
+  await FileSystem.writeAsStringAsync(fileUri, serialized, {
+    encoding: utf8Encoding,
+  });
+
+  let shared = false;
+  let finalUri = fileUri;
+  const canShare = await Sharing.isAvailableAsync().catch(() => false);
+  if (canShare) {
+    try {
+      await Sharing.shareAsync(fileUri, {
+        mimeType: 'application/json',
+        dialogTitle: 'Compartilhar playlist do Sonary',
+        UTI: 'public.json',
+      });
+      shared = true;
+    } catch (err) {
+      const savedUri = await exportViaAndroidSaf(fileName, serialized, utf8Encoding);
+      if (savedUri) {
+        shared = true;
+        finalUri = savedUri;
+      } else {
+        throw err;
+      }
+    }
+  } else {
+    const savedUri = await exportViaAndroidSaf(fileName, serialized, utf8Encoding);
+    if (savedUri) {
+      shared = true;
+      finalUri = savedUri;
+    }
+  }
+
+  return {
+    fileName,
+    fileUri: finalUri,
+    sizeBytes,
+    shared,
+  };
+}
+
+/**
+ * Salva o JSON da playlist diretamente em uma pasta escolhida no dispositivo (Android SAF).
+ */
+export async function savePlaylistToDevice(playlistId: string): Promise<ExportBackupResult> {
+  const saf = (FileSystem as unknown as { StorageAccessFramework?: any }).StorageAccessFramework;
+  if (Platform.OS !== 'android' || !saf?.requestDirectoryPermissionsAsync) {
+    return exportPlaylistToFile(playlistId);
+  }
+
+  const { fileName, serialized, sizeBytes, utf8Encoding } =
+    await prepareSerializedPlaylistExport(playlistId);
+  const destUri = await exportViaAndroidSaf(fileName, serialized, utf8Encoding);
+
+  return {
+    fileName,
+    fileUri: destUri || '',
+    sizeBytes,
+    shared: Boolean(destUri),
+  };
+}
+
+/**
+ * Valida estritamente e normaliza um JSON de playlist individual (fronteira de confiança).
+ */
+export function validateAndNormalizePlaylistJson(rawJson: string): SonaryPlaylistExportV1 {
+  if (typeof rawJson === 'string' && utf8ByteLength(rawJson) > MAX_PLAYLIST_FILE_BYTES) {
+    throw new BackupValidationError('Arquivo de playlist excede o limite máximo permitido (5 MB).');
+  }
+
+  const root = parseJsonSafely(rawJson) as Record<string, unknown>;
+
+  if (root.app !== BACKUP_APP_ID) {
+    throw new BackupValidationError('Este arquivo não é uma playlist válida do Sonary.');
+  }
+
+  if (root.type !== PLAYLIST_EXPORT_TYPE) {
+    const dataObj = root.data as Record<string, unknown> | undefined;
+    if (dataObj && typeof dataObj === 'object' && Array.isArray(dataObj.playlists)) {
+      throw new BackupValidationError(
+        'Este arquivo é um backup completo do Sonary. Use "Backup e dados" no menu para restaurá-lo.'
+      );
+    }
+    throw new BackupValidationError('Este arquivo não é uma playlist válida do Sonary.');
+  }
+
+  if (root.schemaVersion !== PLAYLIST_EXPORT_SCHEMA_VERSION) {
+    throw new BackupValidationError(
+      `Versão de playlist não suportada (v${String(root.schemaVersion ?? '?')}). Atualize o Sonary.`
+    );
+  }
+
+  if (!root.playlist || typeof root.playlist !== 'object' || Array.isArray(root.playlist)) {
+    throw new BackupValidationError('Dados da playlist ausentes ou inválidos no arquivo.');
+  }
+
+  const now = Date.now();
+  const plObj = root.playlist as Record<string, unknown>;
+  const name = sanitizeText(plObj.name, 200, 'Playlist Importada');
+  const description = sanitizeOptionalText(plObj.description, 1000);
+
+  let customCoverBase64: string | null = null;
+  if (typeof plObj.customCoverBase64 === 'string') {
+    const validImg = validateImageBase64(plObj.customCoverBase64);
+    if (validImg) {
+      customCoverBase64 = validImg.base64;
+    }
+  }
+
+  if (!Array.isArray(plObj.tracks)) {
+    throw new BackupValidationError('Lista de faixas inválida no arquivo da playlist.');
+  }
+  if (plObj.tracks.length > MAX_TRACKS_PER_PLAYLIST) {
+    throw new BackupValidationError(
+      `Playlist "${name}" excede o limite de ${MAX_TRACKS_PER_PLAYLIST} faixas.`
+    );
+  }
+
+  const seenTrackIds = new Set<string>();
+  const tracks: SonaryBackupTrackV1[] = [];
+  for (let idx = 0; idx < plObj.tracks.length; idx += 1) {
+    const rawTrack = plObj.tracks[idx];
+    if (!rawTrack || typeof rawTrack !== 'object' || Array.isArray(rawTrack)) continue;
+    const tObj = rawTrack as Record<string, unknown>;
+    const trackId = sanitizeSafeId(tObj.trackId ?? tObj.id);
+    if (!trackId || seenTrackIds.has(trackId)) continue;
+    seenTrackIds.add(trackId);
+
+    const posNum = Number(tObj.position);
+    tracks.push({
+      trackId,
+      title: sanitizeText(tObj.title, 200, 'Música'),
+      artist: sanitizeText(tObj.artist, 200, 'Artista'),
+      duration: sanitizeDuration(tObj.duration),
+      thumbnailUrl: sanitizeHttpUrl(tObj.thumbnailUrl),
+      position: Number.isFinite(posNum) && posNum >= 0 ? Math.floor(posNum) : idx,
+      addedAt: sanitizeTimestamp(tObj.addedAt, now),
+    });
+  }
+
+  return {
+    app: BACKUP_APP_ID,
+    type: PLAYLIST_EXPORT_TYPE,
+    schemaVersion: PLAYLIST_EXPORT_SCHEMA_VERSION,
+    appVersion: sanitizeText(root.appVersion, 32, '1.0.0'),
+    exportedAt: sanitizeTimestamp(root.exportedAt, now),
+    playlist: {
+      name,
+      description,
+      customCoverBase64,
+      tracks,
+    },
+  };
+}
+
+/**
+ * Calcula pré-visualização da playlist antes da importação.
+ */
+export async function getPlaylistImportPreview(
+  exported: SonaryPlaylistExportV1
+): Promise<PlaylistImportPreview> {
+  const { playlist } = exported;
+  const trackIds = playlist.tracks.map((t) => t.trackId);
+  const alreadyDownloaded = await getVerifiedDownloadedTrackIds(trackIds);
+  const activeQueuedIds = new Set(
+    getDownloadQueue()
+      .filter((i) => i.status === 'pending' || i.status === 'downloading')
+      .map((i) => i.track.id)
+  );
+  const offlineMissingCount = trackIds.filter(
+    (id) => !alreadyDownloaded.has(id) && !activeQueuedIds.has(id)
+  ).length;
+
+  const validCover = playlist.customCoverBase64
+    ? validateImageBase64(playlist.customCoverBase64)
+    : null;
+  const customCoverDataUri = validCover
+    ? `data:image/${validCover.ext === 'png' ? 'png' : 'jpeg'};base64,${validCover.base64}`
+    : null;
+  const coverThumbnails = customCoverDataUri
+    ? []
+    : [...playlist.tracks]
+        .sort((a, b) => a.position - b.position)
+        .map((t) => t.thumbnailUrl)
+        .filter((uri): uri is string => Boolean(uri))
+        .slice(0, 4);
+  const totalDuration = playlist.tracks.reduce((acc, t) => acc + (t.duration || 0), 0);
+
+  return {
+    appVersion: exported.appVersion,
+    exportedAt: exported.exportedAt,
+    name: playlist.name,
+    description: playlist.description,
+    trackCount: playlist.tracks.length,
+    totalDuration,
+    hasCustomCover: Boolean(customCoverDataUri),
+    customCoverDataUri,
+    coverThumbnails,
+    offlineMissingCount,
+  };
+}
+
+/**
+ * Abre o seletor de documentos nativo, valida tamanho/schema e retorna a playlist para preview.
+ */
+export async function pickPlaylistFile(): Promise<PickedPlaylistResult | null> {
+  const picked = await DocumentPicker.getDocumentAsync({
+    type: ['application/json', 'text/plain', '*/*'],
+    copyToCacheDirectory: true,
+    multiple: false,
+  });
+
+  if (picked.canceled || !picked.assets || picked.assets.length === 0) {
+    return null;
+  }
+
+  const asset = picked.assets[0];
+  if (!asset?.uri) {
+    throw new BackupValidationError('Não foi possível acessar o arquivo selecionado.');
+  }
+
+  if (typeof asset.size === 'number' && asset.size > MAX_PLAYLIST_FILE_BYTES) {
+    throw new BackupValidationError('Arquivo excede o limite máximo permitido (5 MB).');
+  }
+
+  const info = await FileSystem.getInfoAsync(asset.uri);
+  if (info.exists && typeof info.size === 'number' && info.size > MAX_PLAYLIST_FILE_BYTES) {
+    throw new BackupValidationError('Arquivo excede o limite máximo permitido (5 MB).');
+  }
+
+  const utf8Encoding = FileSystem.EncodingType?.UTF8 ?? ('utf8' as FileSystem.EncodingType);
+  const rawJson = await FileSystem.readAsStringAsync(asset.uri, {
+    encoding: utf8Encoding,
+  });
+
+  const exported = validateAndNormalizePlaylistJson(rawJson);
+  const preview = await getPlaylistImportPreview(exported);
+
+  return {
+    fileName: asset.name || 'sonary-playlist.json',
+    sizeBytes: utf8ByteLength(rawJson),
+    exported,
+    preview,
+  };
+}
+
+/**
+ * Cria sempre uma nova playlist a partir de um JSON validado, com rollback de capa em caso de erro.
+ */
+export async function importPlaylistFromExport(
+  exported: SonaryPlaylistExportV1,
+  options: ImportPlaylistOptions = {}
+): Promise<ImportPlaylistResult> {
+  await ensureStorageDirectories();
+  const base64Encoding = FileSystem.EncodingType?.Base64 ?? ('base64' as FileSystem.EncodingType);
+  let createdCoverUri: string | null = null;
+
+  let playlist: PlaylistSummary;
+  try {
+    if (exported.playlist.customCoverBase64) {
+      const valid = validateImageBase64(exported.playlist.customCoverBase64);
+      if (valid) {
+        const destUri = `${PLAYLIST_COVERS_DIRECTORY}imp_${Date.now()}_${Math.random()
+          .toString(36)
+          .substring(2, 8)}.${valid.ext}`;
+        await FileSystem.writeAsStringAsync(destUri, valid.base64, {
+          encoding: base64Encoding,
+        });
+        createdCoverUri = destUri;
+      }
+    }
+
+    const finalName =
+      typeof options.nameOverride === 'string' && options.nameOverride.trim()
+        ? sanitizeText(options.nameOverride, 200, exported.playlist.name)
+        : exported.playlist.name;
+
+    playlist = await createPlaylistWithTracks({
+      name: finalName,
+      description: exported.playlist.description,
+      customCoverUri: createdCoverUri,
+      tracks: exported.playlist.tracks,
+    });
+  } catch (err) {
+    if (createdCoverUri) {
+      await deletePlaylistCover(createdCoverUri).catch(() => {});
+    }
+    throw err;
+  }
+
+  let enqueuedOfflineCount = 0;
+  if (options.enqueueOfflineDownloads && exported.playlist.tracks.length > 0) {
+    const trackIds = exported.playlist.tracks.map((t) => t.trackId);
+    const alreadyDownloaded = await getVerifiedDownloadedTrackIds(trackIds);
+    const activeQueuedIds = new Set(
+      getDownloadQueue()
+        .filter((i) => i.status === 'pending' || i.status === 'downloading')
+        .map((i) => i.track.id)
+    );
+    const emptyLookup = new Map<string, string>();
+    const missingTracks = exported.playlist.tracks
+      .filter((t) => !alreadyDownloaded.has(t.trackId) && !activeQueuedIds.has(t.trackId))
+      .map((t) => ({
+        id: t.trackId,
+        title: t.title,
+        artist: t.artist,
+        duration: t.duration,
+        formattedDuration: formatDurationSeconds(t.duration),
+        thumbnailUrl: resolveHttpThumbnailForTrack(t.trackId, t.thumbnailUrl, emptyLookup),
+      }));
+    if (missingTracks.length > 0) {
+      const res = enqueuePlaylistDownload(missingTracks);
+      enqueuedOfflineCount = res.enqueuedCount;
+    }
+  }
+
+  return {
+    playlist,
+    restoredCustomCover: Boolean(createdCoverUri),
+    enqueuedOfflineCount,
+  };
 }

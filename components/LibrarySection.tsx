@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
   StyleProp,
   StyleSheet,
@@ -10,6 +11,7 @@ import {
 } from 'react-native';
 import {
   ChevronRight,
+  FileDown,
   Heart,
   ListMusic,
   Plus,
@@ -55,6 +57,8 @@ export interface LibrarySectionProps {
   onSubmitQuickCreate: () => void;
   onSelectPlaylist: (playlistId: string) => void;
   onPrefetchPlaylist?: (playlistId: string) => void;
+  onImportPlaylist?: () => void;
+  isImportingPlaylist?: boolean;
 }
 
 export const LibrarySection: React.FC<LibrarySectionProps> = ({
@@ -67,6 +71,8 @@ export const LibrarySection: React.FC<LibrarySectionProps> = ({
   onSubmitQuickCreate,
   onSelectPlaylist,
   onPrefetchPlaylist,
+  onImportPlaylist,
+  isImportingPlaylist = false,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -99,25 +105,48 @@ export const LibrarySection: React.FC<LibrarySectionProps> = ({
       {/* Header com botão de Criar Playlist */}
       <View style={styles.playlistTabHeader}>
         <Text style={styles.sectionHeaderTitle}>Sua Biblioteca</Text>
-        <TouchableOpacity
-          style={[
-            styles.createPlaylistButton,
-            isQuickCreateVisible && styles.createPlaylistButtonOpen,
-          ]}
-          onPress={onToggleQuickCreate}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-          accessibilityLabel="Criar nova playlist"
-        >
-          {isQuickCreateVisible ? (
-            <X color="#FFFFFF" size={15} />
-          ) : (
-            <Plus color="#FFFFFF" size={15} />
+        <View style={styles.headerActions}>
+          {onImportPlaylist && (
+            <TouchableOpacity
+              style={[
+                styles.importPlaylistButton,
+                isImportingPlaylist && styles.importPlaylistButtonDisabled,
+              ]}
+              onPress={onImportPlaylist}
+              disabled={isImportingPlaylist}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Importar playlist"
+              testID="library-import-playlist-button"
+            >
+              {isImportingPlaylist ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <FileDown color="#FFFFFF" size={14} />
+              )}
+              <Text style={styles.createPlaylistButtonText}>Importar</Text>
+            </TouchableOpacity>
           )}
-          <Text style={styles.createPlaylistButtonText}>
-            {isQuickCreateVisible ? 'Fechar' : 'Nova'}
-          </Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.createPlaylistButton,
+              isQuickCreateVisible && styles.createPlaylistButtonOpen,
+            ]}
+            onPress={onToggleQuickCreate}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Criar nova playlist"
+          >
+            {isQuickCreateVisible ? (
+              <X color="#FFFFFF" size={15} />
+            ) : (
+              <Plus color="#FFFFFF" size={15} />
+            )}
+            <Text style={styles.createPlaylistButtonText}>
+              {isQuickCreateVisible ? 'Fechar' : 'Nova'}
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Input de Criação Rápida Inline (Material-inspired, sem caixa de fundo) */}
@@ -306,12 +335,31 @@ const styles = StyleSheet.create({
     paddingTop: 2,
     paddingBottom: 12,
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  importPlaylistButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: theme.radii.circular,
+    gap: 6,
+  },
+  importPlaylistButtonDisabled: {
+    opacity: 0.5,
+  },
   createPlaylistButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.09)',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.16)',
+    borderColor: 'rgba(255, 255, 255, 0.14)',
     paddingHorizontal: 14,
     paddingVertical: 7,
     borderRadius: theme.radii.circular,

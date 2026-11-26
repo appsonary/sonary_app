@@ -33,6 +33,7 @@ import { PlaylistDetailModal } from './components/PlaylistDetailModal';
 import { BrandHeader } from './components/BrandHeader';
 import { DevMenuModal, isDevMenuEnabled } from './components/DevMenuModal';
 import { BackupModal } from './components/BackupModal';
+import { PlaylistImportModal } from './components/PlaylistImportModal';
 import { DownloadQueueModal } from './components/DownloadQueueModal';
 import { MainTab, NavigationTabBar } from './components/NavigationTabBar';
 import { SearchBarSection, SearchPillInput } from './components/SearchBarSection';
@@ -177,6 +178,11 @@ import {
   triggerSupportNotificationIfEligible,
 } from './services/supportNotifications';
 import { BACK_PRIORITY, useBackHandler } from './services/backNavigation';
+import {
+  ImportPlaylistResult,
+  PickedPlaylistResult,
+  pickPlaylistFile,
+} from './services/backup';
 import { UpdateModal } from './components/UpdateModal';
 import {
   checkForAppUpdate,
@@ -241,6 +247,9 @@ export default function App() {
   const [downloadQueue, setDownloadQueue] = useState<DownloadQueueItem[]>([]);
   const [isDownloadQueueVisible, setIsDownloadQueueVisible] = useState(false);
   const [isBackupModalVisible, setIsBackupModalVisible] = useState(false);
+  const [pickedPlaylistImport, setPickedPlaylistImport] =
+    useState<PickedPlaylistResult | null>(null);
+  const [isPickingPlaylistImport, setIsPickingPlaylistImport] = useState(false);
   const [isDrawerVisible, setIsDrawerVisible] = useState(false);
   const drawerProgress = useRef(new Animated.Value(0)).current;
   const shellDrawerTranslateX = React.useMemo(
@@ -3150,6 +3159,25 @@ export default function App() {
                         onSubmitQuickCreate={handleQuickCreatePlaylist}
                         onSelectPlaylist={openPlaylistDetail}
                         onPrefetchPlaylist={handlePrefetchPlaylist}
+                        onImportPlaylist={async () => {
+                          if (isPickingPlaylistImport) return;
+                          setIsPickingPlaylistImport(true);
+                          try {
+                            const picked = await pickPlaylistFile();
+                            if (!picked) return;
+                            setPickedPlaylistImport(picked);
+                          } catch (err) {
+                            showToast(
+                              err instanceof Error
+                                ? err.message
+                                : 'Arquivo de playlist inválido ou corrompido.',
+                              'error'
+                            );
+                          } finally {
+                            setIsPickingPlaylistImport(false);
+                          }
+                        }}
+                        isImportingPlaylist={isPickingPlaylistImport}
                       />
                     </View>
                   )}
@@ -3548,6 +3576,28 @@ export default function App() {
                 ? ` • ${result.enqueuedOfflineCount} offline na fila`
                 : '';
             showToast(`Backup restaurado com sucesso${extra}`, 'success');
+          }}
+        />
+
+        {/* Modal de Importação de Playlist Individual JSON */}
+        <PlaylistImportModal
+          visible={Boolean(pickedPlaylistImport)}
+          pickedPlaylist={pickedPlaylistImport}
+          existingPlaylistNames={playlists.map((p) => p.name)}
+          onClose={() => setPickedPlaylistImport(null)}
+          onImported={(result: ImportPlaylistResult) => {
+            setPickedPlaylistImport(null);
+            void loadPlaylists();
+            const count = result.playlist.trackCount;
+            const trackSuffix = `${count} ${count === 1 ? 'música' : 'músicas'}`;
+            const offlineSuffix =
+              result.enqueuedOfflineCount > 0
+                ? ` • ${result.enqueuedOfflineCount} na fila offline`
+                : '';
+            showToast(
+              `Playlist "${result.playlist.name}" importada (${trackSuffix})${offlineSuffix}`,
+              'success'
+            );
           }}
         />
 
