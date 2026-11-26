@@ -404,8 +404,8 @@ test('LibrarySection & App Glow: Transparent layers expose crimson AtmosphericGr
 
   const newBtn = libRoot.findByProps({ accessibilityLabel: 'Criar nova playlist' });
   const newBtnStyle = StyleSheet.flatten(newBtn.props.style);
-  assert.strictEqual(newBtnStyle.backgroundColor, 'rgba(255, 255, 255, 0.09)');
-  assert.strictEqual(newBtnStyle.borderColor, 'rgba(255, 255, 255, 0.16)');
+  assert.strictEqual(newBtnStyle.backgroundColor, 'rgba(255, 255, 255, 0.06)');
+  assert.strictEqual(newBtnStyle.borderColor, 'rgba(255, 255, 255, 0.14)');
 
   const favBtn = libRoot.findByProps({ accessibilityLabel: 'Abrir playlist Músicas Curtidas' });
   const linearGradients = favBtn.findAllByType('LinearGradient');
