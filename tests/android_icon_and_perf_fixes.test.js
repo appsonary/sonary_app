@@ -14,6 +14,7 @@ const {
   syncGradleVersions,
   syncAndroidAppName,
   syncMainActivityManifestAttrs,
+  syncNativeBuildMemoryLimits,
 } = require('../scripts/patch-android');
 const { patchTrackPlayerMusicService } = require('../plugins/withTrackPlayerFGS');
 
@@ -392,6 +393,23 @@ test('BackgroundDownloads plugin: applies WorkManager, dataSync FGS, MainApplica
     assert.strictEqual(applyBackgroundDownloadPatches(tmpRoot), false, 'Second call must be idempotent');
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('Native CMake memory guard: syncNativeBuildMemoryLimits caps Gradle workers and Ninja compile pool idempotently', () => {
+  const tmpAndroid = fs.mkdtempSync(path.join(os.tmpdir(), 'sonary-cmake-mem-'));
+  try {
+    const propsPath = path.join(tmpAndroid, 'gradle.properties');
+    const gradlePath = path.join(tmpAndroid, 'build.gradle');
+    fs.writeFileSync(propsPath, 'org.gradle.jvmargs=-Xmx2048m\n');
+    fs.writeFileSync(gradlePath, 'allprojects {}\n');
+
+    assert.strictEqual(syncNativeBuildMemoryLimits(tmpAndroid), true);
+    assert.ok(fs.readFileSync(propsPath, 'utf8').includes('org.gradle.workers.max=2'));
+    assert.ok(fs.readFileSync(gradlePath, 'utf8').includes('CMAKE_JOB_POOLS=compile='));
+    assert.strictEqual(syncNativeBuildMemoryLimits(tmpAndroid), false, 'Second call must be idempotent');
+  } finally {
+    fs.rmSync(tmpAndroid, { recursive: true, force: true });
   }
 });
 

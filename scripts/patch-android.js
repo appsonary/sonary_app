@@ -147,6 +147,51 @@ function syncMainActivityManifestAttrs(manifestContent) {
   );
 }
 
+const NATIVE_MEMORY_GUARD_MARKER = '// [SonaryPro] Native CMake Memory Guard';
+
+const NATIVE_MEMORY_GUARD_BLOCK = `
+${NATIVE_MEMORY_GUARD_MARKER}
+subprojects {
+    pluginManager.withPlugin("com.android.library") {
+        def maxJobs = System.getenv("CI") == "true" ? 4 : 2
+        android.defaultConfig.externalNativeBuild.cmake.arguments(
+            "-DCMAKE_JOB_POOLS=compile=\${maxJobs};link=1",
+            "-DCMAKE_JOB_POOL_COMPILE=compile",
+            "-DCMAKE_JOB_POOL_LINK=link"
+        )
+    }
+}
+`;
+
+function syncNativeBuildMemoryLimits(androidDir) {
+  let changed = false;
+
+  const gradlePropsPath = path.join(androidDir, 'gradle.properties');
+  if (fs.existsSync(gradlePropsPath)) {
+    const props = fs.readFileSync(gradlePropsPath, 'utf8');
+    if (!/^\s*org\.gradle\.workers\.max\s*=/m.test(props)) {
+      const sep = props.endsWith('\n') ? '' : '\n';
+      fs.writeFileSync(
+        gradlePropsPath,
+        `${props}${sep}# Evita OOM do clang++/ninja em máquinas com muitos núcleos e pouca RAM livre\norg.gradle.workers.max=2\n`,
+        'utf8'
+      );
+      changed = true;
+    }
+  }
+
+  const rootBuildGradlePath = path.join(androidDir, 'build.gradle');
+  if (fs.existsSync(rootBuildGradlePath)) {
+    const buildGradle = fs.readFileSync(rootBuildGradlePath, 'utf8');
+    if (!buildGradle.includes(NATIVE_MEMORY_GUARD_MARKER)) {
+      fs.writeFileSync(rootBuildGradlePath, `${buildGradle}\n${NATIVE_MEMORY_GUARD_BLOCK}`, 'utf8');
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
 function runPatchAndroid() {
 console.log('\n[SonaryPro] 🛡️ Verificando e aplicando blindagem nativa Android...');
 
@@ -390,6 +435,14 @@ if (applyAppUpdaterPatches(PROJECT_ROOT)) {
   console.log('[SonaryPro] ✔️ App Updater: Já está atualizado.');
 }
 
+// 4i. Patch: Limite de paralelismo Gradle/CMake/Ninja para evitar OOM do clang++ no Windows
+if (syncNativeBuildMemoryLimits(ANDROID_DIR)) {
+  patchesApplied++;
+  console.log('[SonaryPro] ✅ Gradle/CMake: Limite de workers e pool de compilação C++ aplicado.');
+} else {
+  console.log('[SonaryPro] ✔️ Gradle/CMake: Limite de memória nativo já está configurado.');
+}
+
 // 5. Configura adb reverse para o Metro Bundler na porta 8081 se houver dispositivo conectado
 try {
   const devices = execSync('adb devices', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'], timeout: 3000 });
@@ -413,6 +466,7 @@ module.exports = {
   syncGradleVersions,
   syncAndroidAppName,
   syncMainActivityManifestAttrs,
+  syncNativeBuildMemoryLimits,
   runPatchAndroid,
 };
 
