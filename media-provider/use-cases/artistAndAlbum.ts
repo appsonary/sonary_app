@@ -22,7 +22,7 @@ import {
   pickBestThumbnail,
 } from '../parsers/browseParsers';
 import {
-  artistMatchesInferred,
+  artistCandidateMatchesQuery,
   normalizeArtistForMatch,
 } from '../parsers/searchParsers';
 
@@ -187,13 +187,12 @@ export function createArtistAndAlbumUseCases({
     if (!resolvedChannelId && cleanName && cleanName.toLowerCase() !== 'artista') {
       try {
         const artistSearchFn = hooks?.getSearchArtists?.() || searchArtists;
-        const matches = await artistSearchFn(cleanName, 3);
+        const matches = await artistSearchFn(cleanName, 5);
         if (Array.isArray(matches) && matches.length > 0) {
           const targetNorm = normalizeArtistForMatch(cleanName);
           searchArtistMeta =
             matches.find((a) => normalizeArtistForMatch(a.name) === targetNorm) ||
-            matches.find((a) => artistMatchesInferred(a.name, cleanName)) ||
-            matches[0];
+            matches.find((a) => artistCandidateMatchesQuery(a.name, cleanName));
           if (searchArtistMeta?.id) {
             resolvedChannelId = searchArtistMeta.id;
           }

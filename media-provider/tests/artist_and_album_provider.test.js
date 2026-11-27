@@ -650,3 +650,119 @@ test('Album API: preserves short intro/interlude tracks (< 45s) and falls back t
   }
 });
 
+test('Artist API Regression: getArtistProfile rejects unrelated YTM matches (e.g. Bruno Mars / Sam Smith) instead of blind matches[0], while accepting compacted official handles', async () => {
+  const originalFetch = global.fetch;
+  const originalSearchArtists = api.searchArtists;
+  const originalSearchTracks = api.searchTracks;
+  const browsedIds = [];
+
+  try {
+    api.searchArtists = async (q) => {
+      if (q === 'Dancing With You (Baby)' || q === 'Bruno') {
+        return [
+          { id: 'UCZn4r7heNOPY-C43YIywnVA', name: 'Bruno Mars', subtitle: 'Artista • 592 mi ouvintes mensais', thumbnailUrl: '' },
+          { id: 'UCU6cE7pdJPc6DU2jSrKEsdQ', name: 'Drake', subtitle: 'Artista • 131 mi ouvintes mensais', thumbnailUrl: '' },
+        ];
+      }
+      if (q === 'James Smith') {
+        return [
+          { id: 'UCgpBsaDW2n_6ruzht3wvP0A', name: 'Sam Smith', subtitle: 'Artista • 59,7 mi ouvintes mensais', thumbnailUrl: '' },
+        ];
+      }
+      if (q === 'JonasBrothersOfficial') {
+        return [
+          { id: 'UC_jonas_real', name: 'Jonas Brothers', subtitle: 'Artista • 28 mi ouvintes mensais', thumbnailUrl: 'https://example.com/jb.jpg' },
+        ];
+      }
+      return [];
+    };
+
+    api.searchTracks = async (q) => [
+      {
+        id: 'trk_fallback_1',
+        title: `Track for ${q}`,
+        artist: q,
+        duration: 205,
+        formattedDuration: '3:25',
+        thumbnailUrl: 'https://example.com/t.jpg',
+      },
+    ];
+
+    global.fetch = async (_url, init) => {
+      const body = JSON.parse(init.body);
+      browsedIds.push(body.browseId);
+      if (body.browseId === 'UC_jonas_real') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            header: {
+              musicImmersiveHeaderRenderer: {
+                title: { runs: [{ text: 'Jonas Brothers' }] },
+              },
+            },
+            contents: {
+              singleColumnBrowseResultsRenderer: {
+                tabs: [
+                  {
+                    tabRenderer: {
+                      content: {
+                        sectionListRenderer: {
+                          contents: [
+                            {
+                              musicShelfRenderer: {
+                                contents: [
+                                  {
+                                    musicResponsiveListItemRenderer: {
+                                      playlistItemData: { videoId: 'jb_sucker' },
+                                      flexColumns: [
+                                        { musicResponsiveListItemFlexColumnRenderer: { text: { runs: [{ text: 'Sucker' }] } } },
+                                        { musicResponsiveListItemFlexColumnRenderer: { text: { runs: [{ text: 'Jonas Brothers' }] } } },
+                                      ],
+                                    },
+                                  },
+                                ],
+                              },
+                            },
+                          ],
+                        },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          }),
+        };
+      }
+      throw new Error(`Must NEVER browse unrelated artist channel: ${body.browseId}`);
+    };
+
+    // 1. Song title query returning [Bruno Mars, Drake] -> must NOT hijack into Bruno Mars
+    const noHijack = await api.getArtistProfile('Dancing With You (Baby)');
+    assert.strictEqual(noHijack.channelId, undefined);
+    assert.strictEqual(noHijack.name, 'Dancing With You (Baby)');
+    assert.strictEqual(browsedIds.includes('UCZn4r7heNOPY-C43YIywnVA'), false);
+
+    // 2. Partial surname homonym ("James Smith" when only "Sam Smith" returned) -> must NOT hijack into Sam Smith
+    const noSurnameHijack = await api.getArtistProfile('James Smith');
+    assert.strictEqual(noSurnameHijack.channelId, undefined);
+    assert.strictEqual(noSurnameHijack.name, 'James Smith');
+
+    // 2b. Single-word query ("Bruno") must NOT hijack into multi-word famous artist ("Bruno Mars")
+    const noSingleWordHijack = await api.getArtistProfile('Bruno');
+    assert.strictEqual(noSingleWordHijack.channelId, undefined);
+    assert.strictEqual(noSingleWordHijack.name, 'Bruno');
+    assert.strictEqual(browsedIds.includes('UCZn4r7heNOPY-C43YIywnVA'), false);
+
+    // 3. Compacted official handle ("JonasBrothersOfficial" -> "Jonas Brothers") -> accepted!
+    const validCompact = await api.getArtistProfile('JonasBrothersOfficial');
+    assert.strictEqual(validCompact.channelId, 'UC_jonas_real');
+    assert.strictEqual(validCompact.name, 'Jonas Brothers');
+  } finally {
+    global.fetch = originalFetch;
+    api.searchArtists = originalSearchArtists;
+    api.searchTracks = originalSearchTracks;
+  }
+});
+

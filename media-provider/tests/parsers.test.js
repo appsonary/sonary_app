@@ -2,11 +2,16 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const {
+  artistCandidateMatchesQuery,
   extractVideoId,
   parseInnerTubeSearchResponse,
   parseInvidiousItems,
   parsePipedItems,
 } = require('../parsers/searchParsers');
+const {
+  extractTrackMetadata,
+  getTrackArtistCandidates,
+} = require('../../services/trackMetadata');
 const {
   parseAlbumBrowsePayload,
   parseArtistBrowsePayload,
@@ -390,4 +395,89 @@ test('Parsers: parseArtistBrowsePayload and parseAlbumBrowsePayload extract shel
   assert.strictEqual(parsedAlbum.tracks.length, 1);
   assert.strictEqual(parsedAlbum.tracks[0].album, 'Studio LP');
   assert.strictEqual(parsedAlbum.tracks[0].thumbnailUrl, 'https://img/album544.jpg');
+});
+
+test('Metadata & Artist Matching: extractTrackMetadata detects inverted "Song - Artist" on artist channel while preserving curator channels and artistCandidateMatchesQuery rejects unrelated artists', () => {
+  // 1. Exact bug case: inverted "Dancing With You (Baby) - James Smith" on channel "James Smith"
+  const james = extractTrackMetadata('Dancing With You (Baby) - James Smith', 'James Smith');
+  assert.strictEqual(james.primaryArtist, 'James Smith');
+  assert.strictEqual(james.cleanTitle, 'Dancing With You (Baby)');
+  assert.strictEqual(james.secondaryArtist, undefined);
+
+  // 2. Inverted with feat. and channel suffixes (Official / VEVO / - Topic / compacted handle / multi-dash)
+  const featCase = extractTrackMetadata(
+    'Dancing With You (Baby) - James Smith feat. Anne-Marie (Official Video)',
+    'JamesSmithOfficial'
+  );
+  assert.strictEqual(featCase.primaryArtist, 'James Smith');
+  assert.strictEqual(featCase.cleanTitle, 'Dancing With You (Baby)');
+  assert.strictEqual(featCase.secondaryArtist, undefined);
+
+  const topicCase = extractTrackMetadata(
+    'Dancing With You (Baby) - James Smith (Official Video)',
+    'James Smith - Topic'
+  );
+  assert.strictEqual(topicCase.primaryArtist, 'James Smith');
+  assert.strictEqual(topicCase.cleanTitle, 'Dancing With You (Baby)');
+
+  const vevoCase = extractTrackMetadata('Hello - Adele (Official Music Video)', 'AdeleVEVO');
+  assert.strictEqual(vevoCase.primaryArtist, 'Adele');
+  assert.strictEqual(vevoCase.cleanTitle, 'Hello');
+
+  const multiDashInverted = extractTrackMetadata('Part 1 - Part 2 - James Smith', 'James Smith');
+  assert.strictEqual(multiDashInverted.primaryArtist, 'James Smith');
+  assert.strictEqual(multiDashInverted.cleanTitle, 'Part 1 - Part 2');
+
+  // 3. Curator channel ("COLORS") must keep left-side artist ("Leon Thomas")
+  const colors = extractTrackMetadata(
+    "Leon Thomas - VIBES DON'T LIE | A COLORS SHOW",
+    'COLORS'
+  );
+  assert.strictEqual(colors.primaryArtist, 'Leon Thomas');
+  assert.strictEqual(colors.secondaryArtist, 'COLORS');
+  assert.strictEqual(colors.cleanTitle, "VIBES DON'T LIE");
+
+  // 4. Standard "Artist - Song" on artist's own channel and self-titled songs
+  const standard = extractTrackMetadata('Other Artist - Target Band', 'Other Artist');
+  assert.strictEqual(standard.primaryArtist, 'Other Artist');
+  assert.strictEqual(standard.cleanTitle, 'Target Band');
+
+  const selfTitled = extractTrackMetadata('Black Sabbath - Black Sabbath', 'Black Sabbath');
+  assert.strictEqual(selfTitled.primaryArtist, 'Black Sabbath');
+  assert.strictEqual(selfTitled.cleanTitle, 'Black Sabbath');
+
+  // 4b. Candidate extraction must never propose song titles or version suffixes ("Live", "Future") on artist's own channel
+  assert.deepStrictEqual(
+    getTrackArtistCandidates('Indie Band XYZ - Live', 'Indie Band XYZ'),
+    ['Indie Band XYZ']
+  );
+  assert.deepStrictEqual(
+    getTrackArtistCandidates('Indie Band XYZ - Future', 'Indie Band XYZ'),
+    ['Indie Band XYZ']
+  );
+  assert.deepStrictEqual(
+    getTrackArtistCandidates('Indie Band XYZ - Live', 'Indie Uploads'),
+    ['Indie Uploads']
+  );
+  assert.deepStrictEqual(
+    getTrackArtistCandidates('Dancing With You (Baby) - James Smith', 'Indie Vibes'),
+    ['Dancing With You (Baby)', 'James Smith', 'Indie Vibes']
+  );
+
+  // 5. Strict artist query matching (blocks single-word hijacks, accepts official/article/compact variants)
+  assert.strictEqual(artistCandidateMatchesQuery('Bruno Mars', 'Dancing With You (Baby)'), false);
+  assert.strictEqual(artistCandidateMatchesQuery('Sam Smith', 'James Smith'), false);
+  assert.strictEqual(artistCandidateMatchesQuery('Bruno Mars', 'Bruno'), false);
+  assert.strictEqual(artistCandidateMatchesQuery('Taylor Swift', 'Taylor'), false);
+  assert.strictEqual(artistCandidateMatchesQuery('Courtney Love', 'Love'), false);
+  assert.strictEqual(artistCandidateMatchesQuery('21 Savage', 'Savage'), false);
+  assert.strictEqual(artistCandidateMatchesQuery('The Three Days Grace Tribute', 'Three Days Grace'), false);
+  assert.strictEqual(artistCandidateMatchesQuery('James Smith', 'James Smith'), true);
+  assert.strictEqual(artistCandidateMatchesQuery('James Smith', 'James Smith (Official)'), true);
+  assert.strictEqual(artistCandidateMatchesQuery('Jonas Brothers', 'JonasBrothers'), true);
+  assert.strictEqual(artistCandidateMatchesQuery('Coldplay', 'ColdplayOfficial'), true);
+  assert.strictEqual(artistCandidateMatchesQuery('Coldplay', 'Coldplay - Topic'), true);
+  assert.strictEqual(artistCandidateMatchesQuery('Coldplay', 'ColdplayVEVO'), true);
+  assert.strictEqual(artistCandidateMatchesQuery('The Beatles', 'Beatles'), true);
+  assert.strictEqual(artistCandidateMatchesQuery('James Smith Band', 'James Smith'), true);
 });

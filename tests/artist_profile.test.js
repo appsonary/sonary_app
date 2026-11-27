@@ -850,3 +850,396 @@ test('ArtistProfileModal: lazy Ver tudo fetches getArtistTopTracks, ignores stal
   }
 });
 
+test('NowPlayingModal Artist Resolution Regression: resolves inverted "Dancing With You (Baby) - James Smith" (official & 3rd-party uploads) and blocks stale Bruno Mars profile on fast track switch', async () => {
+  const NowPlayingModal = require('../components/NowPlayingModal').default;
+  const originalGetArtistProfile = api.getArtistProfile;
+  const originalGetRelatedTracks = api.getRelatedTracks;
+  const originalGetTrackLyrics = api.getTrackLyrics;
+
+  let pendingJamesResolve = null;
+
+  try {
+    api.getRelatedTracks = async () => [];
+    api.getTrackLyrics = async () => ({ trackId: 'x', type: 'none', lines: [], provider: 'none', cachedAt: Date.now() });
+    api.getArtistProfile = async (name) => {
+      if (name === 'Bruno Mars') {
+        return {
+          name: 'Bruno Mars',
+          channelId: 'UCZn4r7heNOPY-C43YIywnVA',
+          avatarUrl: 'https://example.com/bruno.jpg',
+          subtitle: 'Artista • 592 mi ouvintes mensais',
+          topTracks: [],
+          albums: [],
+          singles: [],
+        };
+      }
+      if (name === 'Dancing With You (Baby)') {
+        return {
+          name: 'Dancing With You (Baby)',
+          channelId: undefined,
+          avatarUrl: '',
+          subtitle: 'Artista',
+          topTracks: [],
+          albums: [],
+          singles: [],
+        };
+      }
+      if (name === 'James Smith') {
+        if (pendingJamesResolve === 'DEFER') {
+          return new Promise((resolve) => {
+            pendingJamesResolve = resolve;
+          });
+        }
+        return {
+          name: 'James Smith',
+          channelId: 'UCWvOYwCl5b-v10Bdj4BwW7w',
+          avatarUrl: 'https://example.com/james.jpg',
+          subtitle: 'Artista • 848 mil ouvintes mensais',
+          topTracks: [],
+          albums: [],
+          singles: [],
+        };
+      }
+      if (name === 'Live') {
+        return {
+          name: 'Live',
+          channelId: 'UC_BAND_LIVE',
+          avatarUrl: '',
+          subtitle: 'Artista • 3 mi ouvintes mensais',
+          topTracks: [],
+          albums: [],
+          singles: [],
+        };
+      }
+      if (name === 'Future') {
+        return {
+          name: 'Future',
+          channelId: 'UC_RAPPER_FUTURE',
+          avatarUrl: '',
+          subtitle: 'Artista • 50 mi ouvintes mensais',
+          topTracks: [],
+          albums: [],
+          singles: [],
+        };
+      }
+      if (name === 'Failing Channel') {
+        throw new Error('Network error');
+      }
+      return {
+        name,
+        channelId: undefined,
+        avatarUrl: '',
+        subtitle: 'Artista',
+        topTracks: [],
+        albums: [],
+        singles: [],
+      };
+    };
+
+    const openedCalls = [];
+    let tree;
+
+    // 1. Official channel inverted title: "Dancing With You (Baby) - James Smith" on "James Smith"
+    await actAsync(async () => {
+      tree = renderer.create(
+        React.createElement(NowPlayingModal, {
+          visible: true,
+          onClose: () => {},
+          track: {
+            id: '5ydkJWXEIU0',
+            url: 'https://stream.example.com/1.m4a',
+            title: 'Dancing With You (Baby) - James Smith',
+            artist: 'James Smith',
+            duration: 209,
+          },
+          isPlaying: true,
+          isBuffering: false,
+          onTogglePlay: () => {},
+          onSkipNext: () => {},
+          onSkipPrevious: () => {},
+          onOpenArtistProfile: (params) => openedCalls.push(params),
+        })
+      );
+    });
+
+    const subtitleBtn1 = tree.root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Ver perfil de James Smith'
+    );
+    await actAsync(async () => {
+      subtitleBtn1.props.onPress();
+    });
+    assert.strictEqual(openedCalls.length, 1);
+    assert.strictEqual(openedCalls[0].artistName, 'James Smith');
+    assert.strictEqual(openedCalls[0].channelId, 'UCWvOYwCl5b-v10Bdj4BwW7w');
+    assert.strictEqual(openedCalls[0].initialProfile?.name, 'James Smith');
+
+    // 2. Third-party upload with inverted title -> falls back from unverified song title to verified right-side artist "James Smith"
+    openedCalls.length = 0;
+    await actAsync(async () => {
+      tree.update(
+        React.createElement(NowPlayingModal, {
+          visible: true,
+          onClose: () => {},
+          track: {
+            id: '3rd_party_inv',
+            url: 'https://stream.example.com/2.m4a',
+            title: 'Dancing With You (Baby) - James Smith',
+            artist: 'Indie Vibes',
+            duration: 209,
+          },
+          isPlaying: true,
+          isBuffering: false,
+          onTogglePlay: () => {},
+          onSkipNext: () => {},
+          onSkipPrevious: () => {},
+          onOpenArtistProfile: (params) => openedCalls.push(params),
+        })
+      );
+    });
+
+    const subtitleBtn2 = tree.root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Ver perfil de Indie Vibes'
+    );
+    await actAsync(async () => {
+      subtitleBtn2.props.onPress();
+    });
+    assert.strictEqual(openedCalls.length, 1);
+    assert.strictEqual(openedCalls[0].artistName, 'James Smith');
+    assert.strictEqual(openedCalls[0].channelId, 'UCWvOYwCl5b-v10Bdj4BwW7w');
+
+    // 3. Fast track switch from Bruno Mars -> James Smith while James Smith fetch is still in flight
+    await actAsync(async () => {
+      tree.update(
+        React.createElement(NowPlayingModal, {
+          visible: true,
+          onClose: () => {},
+          track: {
+            id: 'bruno_1',
+            url: 'https://stream.example.com/b.m4a',
+            title: 'Die With A Smile',
+            artist: 'Bruno Mars',
+            duration: 252,
+          },
+          isPlaying: true,
+          isBuffering: false,
+          onTogglePlay: () => {},
+          onSkipNext: () => {},
+          onSkipPrevious: () => {},
+          onOpenArtistProfile: (params) => openedCalls.push(params),
+        })
+      );
+    });
+
+    openedCalls.length = 0;
+    pendingJamesResolve = 'DEFER';
+
+    await actAsync(async () => {
+      tree.update(
+        React.createElement(NowPlayingModal, {
+          visible: true,
+          onClose: () => {},
+          track: {
+            id: 'james_fast_switch',
+            url: 'https://stream.example.com/j.m4a',
+            title: 'Dancing With You (Baby) - James Smith',
+            artist: 'James Smith',
+            duration: 209,
+          },
+          isPlaying: true,
+          isBuffering: false,
+          onTogglePlay: () => {},
+          onSkipNext: () => {},
+          onSkipPrevious: () => {},
+          onOpenArtistProfile: (params) => openedCalls.push(params),
+        })
+      );
+    });
+
+    const subtitleBtnFast = tree.root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Ver perfil de James Smith'
+    );
+    await actAsync(async () => {
+      subtitleBtnFast.props.onPress();
+    });
+
+    assert.strictEqual(openedCalls.length, 1);
+    assert.strictEqual(openedCalls[0].artistName, 'James Smith');
+    assert.strictEqual(
+      openedCalls[0].channelId,
+      undefined,
+      'Must NEVER leak stale Bruno Mars channelId while new artist profile is loading'
+    );
+    assert.strictEqual(
+      openedCalls[0].initialProfile,
+      null,
+      'Must NEVER leak stale Bruno Mars initialProfile while new artist profile is loading'
+    );
+
+    if (typeof pendingJamesResolve === 'function') {
+      await actAsync(async () => {
+        pendingJamesResolve({
+          name: 'James Smith',
+          channelId: 'UCWvOYwCl5b-v10Bdj4BwW7w',
+          avatarUrl: '',
+          subtitle: 'Artista',
+          topTracks: [],
+          albums: [],
+          singles: [],
+        });
+      });
+    }
+
+    // 4. Unverified indie artist on own channel with "Live" or famous-artist song title ("Future") must NEVER hijack
+    for (const songSuffix of ['Live', 'Future']) {
+      openedCalls.length = 0;
+      await actAsync(async () => {
+        tree.update(
+          React.createElement(NowPlayingModal, {
+            visible: true,
+            onClose: () => {},
+            track: {
+              id: `indie_${songSuffix}`,
+              url: 'https://stream.example.com/i.m4a',
+              title: `Indie Band XYZ - ${songSuffix}`,
+              artist: 'Indie Band XYZ',
+              duration: 210,
+            },
+            isPlaying: true,
+            isBuffering: false,
+            onTogglePlay: () => {},
+            onSkipNext: () => {},
+            onSkipPrevious: () => {},
+            onOpenArtistProfile: (params) => openedCalls.push(params),
+          })
+        );
+      });
+      const indieBtn = tree.root.find(
+        (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Ver perfil de Indie Band XYZ'
+      );
+      await actAsync(async () => {
+        indieBtn.props.onPress();
+      });
+      assert.strictEqual(openedCalls.length, 1);
+      assert.strictEqual(openedCalls[0].artistName, 'Indie Band XYZ');
+      assert.strictEqual(
+        openedCalls[0].channelId,
+        undefined,
+        `Must NEVER hijack "Indie Band XYZ - ${songSuffix}" into "${songSuffix}"`
+      );
+    }
+
+    // 5. Updating relatedTracks prop while getArtistProfile is in flight must NOT permanently drop resolved profile
+    openedCalls.length = 0;
+    pendingJamesResolve = 'DEFER';
+    await actAsync(async () => {
+      tree.update(
+        React.createElement(NowPlayingModal, {
+          visible: true,
+          onClose: () => {},
+          track: {
+            id: 'james_related_race',
+            url: 'https://stream.example.com/jr.m4a',
+            title: 'Dancing With You (Baby) - James Smith',
+            artist: 'James Smith',
+            duration: 209,
+          },
+          relatedTracks: [],
+          isPlaying: true,
+          isBuffering: false,
+          onTogglePlay: () => {},
+          onSkipNext: () => {},
+          onSkipPrevious: () => {},
+          onOpenArtistProfile: (params) => openedCalls.push(params),
+        })
+      );
+    });
+    await actAsync(async () => {
+      tree.update(
+        React.createElement(NowPlayingModal, {
+          visible: true,
+          onClose: () => {},
+          track: {
+            id: 'james_related_race',
+            url: 'https://stream.example.com/jr.m4a',
+            title: 'Dancing With You (Baby) - James Smith',
+            artist: 'James Smith',
+            duration: 209,
+          },
+          relatedTracks: [
+            { id: 'rel_1', title: 'Other Song', artist: 'James Smith', duration: 200, formattedDuration: '3:20', thumbnailUrl: '' },
+          ],
+          isPlaying: true,
+          isBuffering: false,
+          onTogglePlay: () => {},
+          onSkipNext: () => {},
+          onSkipPrevious: () => {},
+          onOpenArtistProfile: (params) => openedCalls.push(params),
+        })
+      );
+    });
+    if (typeof pendingJamesResolve === 'function') {
+      await actAsync(async () => {
+        pendingJamesResolve({
+          name: 'James Smith',
+          channelId: 'UCWvOYwCl5b-v10Bdj4BwW7w',
+          avatarUrl: 'https://example.com/james.jpg',
+          subtitle: 'Artista • 848 mil ouvintes mensais',
+          topTracks: [],
+          albums: [],
+          singles: [],
+        });
+      });
+    }
+    const subtitleBtnRace = tree.root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Ver perfil de James Smith'
+    );
+    await actAsync(async () => {
+      subtitleBtnRace.props.onPress();
+    });
+    assert.strictEqual(openedCalls.length, 1);
+    assert.strictEqual(openedCalls[0].channelId, 'UCWvOYwCl5b-v10Bdj4BwW7w');
+    assert.strictEqual(openedCalls[0].initialProfile?.name, 'James Smith');
+
+    // 6. Partial fallback error on 3rd-party upload must not pair track.artist with song-title profile
+    openedCalls.length = 0;
+    await actAsync(async () => {
+      tree.update(
+        React.createElement(NowPlayingModal, {
+          visible: true,
+          onClose: () => {},
+          track: {
+            id: 'partial_err_3rd',
+            url: 'https://stream.example.com/pe.m4a',
+            title: 'Dancing With You (Baby) - Unverified Local Singer',
+            artist: 'Failing Channel',
+            duration: 209,
+          },
+          isPlaying: true,
+          isBuffering: false,
+          onTogglePlay: () => {},
+          onSkipNext: () => {},
+          onSkipPrevious: () => {},
+          onOpenArtistProfile: (params) => openedCalls.push(params),
+        })
+      );
+    });
+    const partialBtn = tree.root.find(
+      (n) => n.type === 'TouchableOpacity' && n.props.accessibilityLabel === 'Ver perfil de Failing Channel'
+    );
+    await actAsync(async () => {
+      partialBtn.props.onPress();
+    });
+    assert.strictEqual(openedCalls.length, 1);
+    assert.strictEqual(openedCalls[0].artistName, 'Failing Channel');
+    assert.strictEqual(openedCalls[0].initialProfile, null);
+
+    await actAsync(async () => {
+      tree.unmount();
+    });
+  } finally {
+    api.getArtistProfile = originalGetArtistProfile;
+    api.getRelatedTracks = originalGetRelatedTracks;
+    api.getTrackLyrics = originalGetTrackLyrics;
+  }
+});
+

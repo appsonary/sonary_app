@@ -67,6 +67,7 @@ import {
   extractTrackMetadata,
   getArtistProfile,
   getRelatedTracks,
+  getTrackArtistCandidates,
   getTrackLyrics,
   hasLetterboxArtwork,
   LyricLine,
@@ -924,7 +925,11 @@ export default function NowPlayingModal({
   const [isLoadingLyrics, setIsLoadingLyrics] = useState<boolean>(false);
   const [fetchedRelatedTracks, setFetchedRelatedTracks] = useState<TrackSummary[]>([]);
   const [isFetchingRelated, setIsFetchingRelated] = useState<boolean>(false);
-  const [artistProfile, setArtistProfile] = useState<ArtistProfile | null>(null);
+  const [resolvedArtistState, setResolvedArtistState] = useState<{
+    trackKey: string;
+    artistName: string;
+    profile: ArtistProfile | null;
+  } | null>(null);
   const [isArtistModalVisible, setIsArtistModalVisible] = useState<boolean>(false);
   const [showContextMenu, setShowContextMenu] = useState(false);
   const sheetTranslateY = useRef(new Animated.Value(360)).current;
@@ -2254,61 +2259,153 @@ export default function NowPlayingModal({
     () => extractTrackMetadata(track?.title, track?.artist),
     [track?.title, track?.artist]
   );
-  const effectiveArtistName =
-    resolvedTrackMeta.primaryArtist || track?.artist || 'Artista';
 
-  // Busca automática de faixas relacionadas e perfil do artista (cacheado por trackId/artistName para evitar re-renders ao abrir o modal)
+  const currentTrackArtistKey = `${track?.id || ''}::${track?.title || ''}::${track?.artist || ''}`;
+
+  const artistCandidates = useMemo(
+    () => getTrackArtistCandidates(track?.title, track?.artist),
+    [track?.title, track?.artist]
+  );
+
+  const currentArtistEntry =
+    resolvedArtistState && resolvedArtistState.trackKey === currentTrackArtistKey
+      ? resolvedArtistState
+      : null;
+  const artistProfile = currentArtistEntry?.profile ?? null;
+  const effectiveArtistName =
+    currentArtistEntry?.artistName ||
+    resolvedTrackMeta.primaryArtist ||
+    track?.artist ||
+    'Artista';
+
+  // Busca automática de faixas relacionadas (isolada do perfil do artista para não cancelar fetches em voo)
   const lastFetchedRelatedTrackIdRef = useRef<string | null>(null);
-  const lastFetchedArtistNameRef = useRef<string | null>(null);
+  const lastFetchedArtistTrackKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    let isCancelled = false;
-    if (track?.id && !relatedTracks) {
-      if (lastFetchedRelatedTrackIdRef.current !== track.id) {
-        lastFetchedRelatedTrackIdRef.current = track.id;
-        setIsFetchingRelated(true);
-        getRelatedTracks(track.id, track.title, track.artist)
-          .then((res) => {
-            if (!isCancelled) {
-              setFetchedRelatedTracks(res || []);
-              setIsFetchingRelated(false);
-            }
-          })
-          .catch(() => {
-            if (!isCancelled) {
-              lastFetchedRelatedTrackIdRef.current = null;
-              setFetchedRelatedTracks([]);
-              setIsFetchingRelated(false);
-            }
-          });
-      }
+    const trackId = track?.id;
+    if (!trackId || relatedTracks || lastFetchedRelatedTrackIdRef.current === trackId) {
+      return;
     }
 
-    if (effectiveArtistName) {
-      if (lastFetchedArtistNameRef.current !== effectiveArtistName) {
-        lastFetchedArtistNameRef.current = effectiveArtistName;
-        getArtistProfile(effectiveArtistName)
-          .then((prof) => {
-            if (!isCancelled) {
-              setArtistProfile(prof);
-            }
-          })
-          .catch(() => {
-            if (!isCancelled) {
-              lastFetchedArtistNameRef.current = null;
-              setArtistProfile(null);
-            }
-          });
-      }
-    } else {
-      lastFetchedArtistNameRef.current = null;
-      setArtistProfile(null);
-    }
+    let isCancelled = false;
+    let completed = false;
+    lastFetchedRelatedTrackIdRef.current = trackId;
+    setIsFetchingRelated(true);
+    getRelatedTracks(trackId, track.title, track.artist)
+      .then((res) => {
+        if (!isCancelled) {
+          completed = true;
+          setFetchedRelatedTracks(res || []);
+          setIsFetchingRelated(false);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          lastFetchedRelatedTrackIdRef.current = null;
+          setFetchedRelatedTracks([]);
+          setIsFetchingRelated(false);
+        }
+      });
 
     return () => {
       isCancelled = true;
+      if (!completed && lastFetchedRelatedTrackIdRef.current === trackId) {
+        lastFetchedRelatedTrackIdRef.current = null;
+      }
     };
-  }, [track?.id, track?.title, track?.artist, effectiveArtistName, relatedTracks]);
+  }, [track?.id, track?.title, track?.artist, relatedTracks]);
+
+  // Pré-carregamento e resolução estrita do perfil do artista (cacheado por trackKey)
+  useEffect(() => {
+    let isCancelled = false;
+    if (artistCandidates.length === 0) {
+      lastFetchedArtistTrackKeyRef.current = null;
+      setResolvedArtistState(null);
+      return;
+    }
+
+    if (lastFetchedArtistTrackKeyRef.current === currentTrackArtistKey) {
+      return;
+    }
+
+    lastFetchedArtistTrackKeyRef.current = currentTrackArtistKey;
+    let completed = false;
+
+    (async () => {
+      try {
+        const firstName = artistCandidates[0];
+        const firstProf = await getArtistProfile(firstName);
+        if (isCancelled) return;
+
+        if (firstProf?.channelId || artistCandidates.length === 1) {
+          completed = true;
+          setResolvedArtistState({
+            trackKey: currentTrackArtistKey,
+            artistName: firstName,
+            profile: firstProf,
+          });
+          return;
+        }
+
+        let fallbackNonVerified: { name: string; profile: ArtistProfile } | null = null;
+        const rawCleaned = (track?.artist || '')
+          .replace(/\s*-\s*Topic$/i, '')
+          .replace(/VEVO$/i, '')
+          .trim();
+
+        for (let i = 1; i < artistCandidates.length; i += 1) {
+          const candName = artistCandidates[i];
+          try {
+            const altProf = await getArtistProfile(candName);
+            if (isCancelled) return;
+            if (altProf?.channelId) {
+              completed = true;
+              setResolvedArtistState({
+                trackKey: currentTrackArtistKey,
+                artistName: candName,
+                profile: altProf,
+              });
+              return;
+            }
+            if (
+              rawCleaned &&
+              candName.toLowerCase() === rawCleaned.toLowerCase() &&
+              altProf
+            ) {
+              fallbackNonVerified = { name: candName, profile: altProf };
+            }
+          } catch {
+            // tenta próximo candidato
+          }
+        }
+
+        const fallbackArtistName = fallbackNonVerified?.name || rawCleaned || firstName;
+        const fallbackProfile =
+          fallbackNonVerified?.profile ||
+          (fallbackArtistName.toLowerCase() === firstName.toLowerCase() ? firstProf : null);
+
+        completed = true;
+        setResolvedArtistState({
+          trackKey: currentTrackArtistKey,
+          artistName: fallbackArtistName,
+          profile: fallbackProfile,
+        });
+      } catch {
+        if (!isCancelled) {
+          lastFetchedArtistTrackKeyRef.current = null;
+          setResolvedArtistState(null);
+        }
+      }
+    })();
+
+    return () => {
+      isCancelled = true;
+      if (!completed && lastFetchedArtistTrackKeyRef.current === currentTrackArtistKey) {
+        lastFetchedArtistTrackKeyRef.current = null;
+      }
+    };
+  }, [currentTrackArtistKey, artistCandidates, track?.artist]);
 
   const effectiveRelatedTracks = useMemo(() => {
     if (relatedTracks && relatedTracks.length > 0) return relatedTracks;

@@ -38,6 +38,7 @@ import {
 } from './lyrics';
 import {
   extractTrackMetadata,
+  getTrackArtistCandidates,
   isValidMusicTrack,
   inferDominantArtistFromTracks,
   parseDurationToSeconds,
@@ -76,6 +77,7 @@ export {
   AllInstancesFailedError,
   InvalidApiResponseError,
   extractTrackMetadata,
+  getTrackArtistCandidates,
   isValidMusicTrack,
   inferDominantArtistFromTracks,
   parseDurationToSeconds,

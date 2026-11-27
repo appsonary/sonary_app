@@ -39,6 +39,41 @@ const NON_MUSIC_TITLE_PHRASE_REGEX =
 const VERSION_SUFFIX_ONLY_REGEX =
   /^(?:original mix|radio edit|extended mix|club mix|remix|ao vivo|live(?:\s+.*)?|acoustic|ac[uú]stico|instrumental|remaster(?:ed)?(?:\s+.*)?|version|demo|bonus track)$/i;
 
+const CHANNEL_DECORATION_SUFFIX_REGEX =
+  /\s*(?:-\s*topic|vevo|official(?:\s+(?:channel|music|artist|audio|video))?|oficial|music)$/i;
+
+const COLLAB_TAIL_REGEX =
+  /\s*(?:\((?:feat\.?|ft\.?|part\.?|with)\s+.*?\)|\[(?:feat\.?|ft\.?|part\.?|with)\s+.*?\]|\s+(?:feat\.?|ft\.?|part\.?|with)\s+.*)$/i;
+
+function normalizeArtistIdentity(value: string): { spaced: string; compact: string } {
+  const stripped = (value || '')
+    .replace(COLLAB_TAIL_REGEX, '')
+    .replace(CHANNEL_DECORATION_SUFFIX_REGEX, '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[.,'"`’\-–—_/\\()[\]&+!?]/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+  return {
+    spaced: stripped,
+    compact: stripped.replace(/\s+/g, ''),
+  };
+}
+
+function matchesChannelArtist(candidate: string, channelArtist: string): boolean {
+  if (!candidate || !channelArtist || GENERIC_ARTIST_NAME_REGEX.test(channelArtist)) {
+    return false;
+  }
+  const candLead = candidate.split(/,|&/)[0].trim();
+  const c = normalizeArtistIdentity(candLead);
+  const ch = normalizeArtistIdentity(channelArtist);
+  if (!c.spaced || !ch.spaced) return false;
+  if (c.spaced === ch.spaced) return true;
+  if (c.compact.length >= 5 && c.compact === ch.compact) return true;
+  return false;
+}
+
 export function parseDurationToSeconds(duration: number | string | undefined | null): number {
   if (typeof duration === 'number') {
     return Math.max(0, Math.floor(duration));
@@ -79,6 +114,23 @@ function normalizeArtistKey(name: string): string {
   return name.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
+const OFFICIAL_TITLE_TAG_REGEX =
+  /\s*(?:\((?:official\s*(?:music\s*)?(?:video|audio|lyric\s*video|visualizer)|lyric\s*video|visualizer|audio|hd|4k|hq|clipe\s*oficial|vídeo\s*oficial|áudio\s*oficial)\)|\[(?:official\s*(?:music\s*)?(?:video|audio|lyric\s*video|visualizer)|lyric\s*video|visualizer|audio|hd|4k|hq|clipe\s*oficial|vídeo\s*oficial|áudio\s*oficial)\])/gi;
+
+function stripChannelDecorators(raw?: string): string {
+  return (raw || '')
+    .replace(/\s*-\s*Topic$/i, '')
+    .replace(/VEVO$/i, '')
+    .trim();
+}
+
+function cleanWorkingTitle(rawTitle?: string): string {
+  return (rawTitle || '')
+    .replace(/\s*\|\s*.*$/, '')
+    .replace(OFFICIAL_TITLE_TAG_REGEX, '')
+    .trim();
+}
+
 /**
  * Extrai o artista musical principal e o título limpo a partir de títulos compostos
  * (ex: "Artista - Música (Official Video) | Programa" -> primaryArtist: "Artista", cleanTitle: "Música").
@@ -87,18 +139,8 @@ export function extractTrackMetadata(
   rawTitle?: string,
   rawArtist?: string
 ): ExtractedTrackMetadata {
-  const cleanedArtist = (rawArtist || '')
-    .replace(/\s*-\s*Topic$/i, '')
-    .replace(/VEVO$/i, '')
-    .trim();
-
-  const workingTitle = (rawTitle || '')
-    .replace(/\s*\|\s*.*$/, '')
-    .replace(
-      /\s*(?:\((?:official\s*(?:music\s*)?(?:video|audio|lyric\s*video|visualizer)|lyric\s*video|visualizer|audio|hd|4k|hq|clipe\s*oficial|vídeo\s*oficial|áudio\s*oficial)\)|\[(?:official\s*(?:music\s*)?(?:video|audio|lyric\s*video|visualizer)|lyric\s*video|visualizer|audio|hd|4k|hq|clipe\s*oficial|vídeo\s*oficial|áudio\s*oficial)\])/gi,
-      ''
-    )
-    .trim();
+  const cleanedArtist = stripChannelDecorators(rawArtist);
+  const workingTitle = cleanWorkingTitle(rawTitle);
 
   const dashParts = workingTitle.split(TITLE_DASH_SEPARATOR_REGEX);
   if (dashParts.length >= 2) {
@@ -111,6 +153,29 @@ export function extractTrackMetadata(
           primaryArtist: cleanedArtist || 'Artista',
           cleanTitle: leftSide,
         };
+      }
+
+      if (cleanedArtist && !matchesChannelArtist(leftSide, cleanedArtist)) {
+        const lastPart = dashParts[dashParts.length - 1].trim();
+        const inverted = matchesChannelArtist(rightSide, cleanedArtist)
+          ? { artistSide: rightSide, titleSide: leftSide }
+          : dashParts.length > 2 && lastPart && matchesChannelArtist(lastPart, cleanedArtist)
+            ? { artistSide: lastPart, titleSide: dashParts.slice(0, -1).join(' - ').trim() }
+            : null;
+
+        if (inverted) {
+          const invertedArtist =
+            inverted.artistSide.replace(COLLAB_TAIL_REGEX, '').trim() || cleanedArtist;
+          const invertedCleanTitle =
+            inverted.titleSide
+              .replace(/\s*\((?:feat\.?|ft\.?|part\.?)\s+.*?\)/gi, '')
+              .trim() || inverted.titleSide;
+
+          return {
+            primaryArtist: invertedArtist,
+            cleanTitle: invertedCleanTitle,
+          };
+        }
       }
 
       const primaryArtist = leftSide
@@ -140,6 +205,56 @@ export function extractTrackMetadata(
     primaryArtist: fallbackArtist,
     cleanTitle: workingTitle || rawTitle || 'Música',
   };
+}
+
+/**
+ * Retorna candidatos ordenados de artista para resolução de perfil.
+ * Só inclui o lado direito de " - " quando o lado esquerdo não corresponde ao canal
+ * e o trecho não é um sufixo de versão (ex: Live, Remix, Acoustic).
+ */
+export function getTrackArtistCandidates(
+  rawTitle?: string,
+  rawArtist?: string
+): string[] {
+  const seen = new Set<string>();
+  const list: string[] = [];
+  const pushCandidate = (raw?: string) => {
+    const cleaned = stripChannelDecorators(raw);
+    if (!cleaned || GENERIC_ARTIST_NAME_REGEX.test(cleaned)) return;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    list.push(cleaned);
+  };
+
+  const meta = extractTrackMetadata(rawTitle, rawArtist);
+  const cleanedArtist = stripChannelDecorators(rawArtist);
+  pushCandidate(meta.primaryArtist);
+
+  const workingTitle = cleanWorkingTitle(rawTitle);
+  const dashParts = workingTitle.split(TITLE_DASH_SEPARATOR_REGEX);
+  if (dashParts.length >= 2) {
+    const leftSide = dashParts[0].trim();
+    const rightRaw =
+      dashParts.length > 2
+        ? dashParts[dashParts.length - 1].trim()
+        : dashParts.slice(1).join(' - ').trim();
+    const rightClean = rightRaw.replace(COLLAB_TAIL_REGEX, '').trim();
+    const leftMatchesChannel = Boolean(
+      cleanedArtist && matchesChannelArtist(leftSide, cleanedArtist)
+    );
+    if (
+      !leftMatchesChannel &&
+      rightClean &&
+      !VERSION_SUFFIX_ONLY_REGEX.test(rightRaw) &&
+      !VERSION_SUFFIX_ONLY_REGEX.test(rightClean)
+    ) {
+      pushCandidate(rightClean);
+    }
+  }
+
+  pushCandidate(cleanedArtist);
+  return list;
 }
 
 /**

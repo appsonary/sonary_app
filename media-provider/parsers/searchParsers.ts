@@ -70,6 +70,58 @@ export function artistMatchesInferred(artistName: string, inferredName: string):
   );
 }
 
+const ARTIST_HANDLE_SUFFIX_REGEX =
+  /\s*(?:[\(\[]\s*(?:official(?:\s+(?:channel|music|artist|audio|video))?|oficial|vevo|topic|music)\s*[\)\]]|-\s*topic|vevo|official(?:\s+(?:channel|music|artist|audio|video))?|oficial|music)$/i;
+
+function stripArtistHandleSuffix(value: string): string {
+  return (value || '').replace(ARTIST_HANDLE_SUFFIX_REGEX, '').trim();
+}
+
+export function artistCandidateMatchesQuery(
+  candidateName: string,
+  queryName: string
+): boolean {
+  const candNorm = normalizeArtistForMatch(candidateName);
+  const rawQueryNorm = normalizeArtistForMatch(queryName);
+  if (!candNorm || !rawQueryNorm) return false;
+  if (
+    TRIBUTE_OR_COVER_REGEX.test(candNorm) &&
+    !TRIBUTE_OR_COVER_REGEX.test(rawQueryNorm)
+  ) {
+    return false;
+  }
+  if (candNorm === rawQueryNorm) return true;
+
+  const strippedCandNorm =
+    normalizeArtistForMatch(stripArtistHandleSuffix(candidateName)) || candNorm;
+  const strippedQueryNorm =
+    normalizeArtistForMatch(stripArtistHandleSuffix(queryName)) || rawQueryNorm;
+  if (strippedCandNorm === strippedQueryNorm) return true;
+
+  const candNoArticle = strippedCandNorm.replace(/^the\s+/, '');
+  const queryNoArticle = strippedQueryNorm.replace(/^the\s+/, '');
+  if (candNoArticle.length >= 3 && candNoArticle === queryNoArticle) {
+    return true;
+  }
+
+  const candCompact = strippedCandNorm.replace(/\s+/g, '');
+  const queryCompact = strippedQueryNorm.replace(/\s+/g, '');
+  if (candCompact.length >= 3 && candCompact === queryCompact) {
+    return true;
+  }
+
+  // Contenção parcial exige >= 2 palavras cobrindo >= 65% do nome maior para evitar sequestro por palavra única (ex: "Bruno" -> "Bruno Mars").
+  const [shorter, longer] =
+    strippedCandNorm.length <= strippedQueryNorm.length
+      ? [strippedCandNorm, strippedQueryNorm]
+      : [strippedQueryNorm, strippedCandNorm];
+  return (
+    shorter.includes(' ') &&
+    shorter.length >= longer.length * 0.65 &&
+    ` ${longer} `.includes(` ${shorter} `)
+  );
+}
+
 export function upgradeArtistThumbUrl(rawUrl: string): string {
   if (!rawUrl) return '';
   return rawUrl.replace(/=w\d+-h\d+/i, '=w240-h240');
