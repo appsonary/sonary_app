@@ -32,6 +32,7 @@ export interface PlaylistOptionsSheetProps {
   isReordering: boolean;
   isDownloadingAll: boolean;
   hasUnqueuedMissingTracks?: boolean;
+  offlineOnly?: boolean;
   onClose: () => void;
   onPickCustomCover: () => void;
   onResetCustomCover: () => void;
@@ -49,6 +50,7 @@ export const PlaylistOptionsSheet: React.FC<PlaylistOptionsSheetProps> = ({
   isReordering,
   isDownloadingAll,
   hasUnqueuedMissingTracks = false,
+  offlineOnly = false,
   onClose,
   onPickCustomCover,
   onResetCustomCover,
@@ -301,41 +303,45 @@ export const PlaylistOptionsSheet: React.FC<PlaylistOptionsSheetProps> = ({
                       <Text style={styles.actionText}>Nome e detalhes</Text>
                     </TouchableOpacity>
 
-                    <TouchableOpacity
-                      style={[styles.actionRow, !canReorder && styles.actionRowDisabled]}
-                      onPress={() => {
-                        if (!canReorder) return;
-                        dismissSheet(onToggleReorder);
-                      }}
-                      disabled={!canReorder}
-                      activeOpacity={0.7}
-                      accessibilityRole="button"
-                      accessibilityLabel="Ordenar faixas da playlist"
-                    >
-                      <ArrowUpDown color={canReorder ? '#FFFFFF' : '#717171'} size={21} />
-                      <Text style={[styles.actionText, !canReorder && styles.actionTextDisabled]}>
-                        {isReordering ? 'Concluir ordenação' : 'Ordenar faixas'}
-                      </Text>
-                    </TouchableOpacity>
+                    {!offlineOnly && (
+                      <TouchableOpacity
+                        style={[styles.actionRow, !canReorder && styles.actionRowDisabled]}
+                        onPress={() => {
+                          if (!canReorder) return;
+                          dismissSheet(onToggleReorder);
+                        }}
+                        disabled={!canReorder}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel="Ordenar faixas da playlist"
+                      >
+                        <ArrowUpDown color={canReorder ? '#FFFFFF' : '#717171'} size={21} />
+                        <Text style={[styles.actionText, !canReorder && styles.actionTextDisabled]}>
+                          {isReordering ? 'Concluir ordenação' : 'Ordenar faixas'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
                   </>
                 )}
 
-                <TouchableOpacity
-                  style={[styles.actionRow, !canDownload && styles.actionRowDisabled]}
-                  onPress={() => {
-                    if (!canDownload) return;
-                    dismissSheet(onDownloadAll);
-                  }}
-                  disabled={!canDownload}
-                  activeOpacity={0.7}
-                  accessibilityRole="button"
-                  accessibilityLabel="Baixar playlist"
-                >
-                  <Download color={canDownload ? '#FFFFFF' : '#717171'} size={21} />
-                  <Text style={[styles.actionText, !canDownload && styles.actionTextDisabled]}>
-                    {isDownloadBlocked ? 'Baixando playlist...' : 'Baixar playlist'}
-                  </Text>
-                </TouchableOpacity>
+                {!offlineOnly && (
+                  <TouchableOpacity
+                    style={[styles.actionRow, !canDownload && styles.actionRowDisabled]}
+                    onPress={() => {
+                      if (!canDownload) return;
+                      dismissSheet(onDownloadAll);
+                    }}
+                    disabled={!canDownload}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel="Baixar playlist"
+                  >
+                    <Download color={canDownload ? '#FFFFFF' : '#717171'} size={21} />
+                    <Text style={[styles.actionText, !canDownload && styles.actionTextDisabled]}>
+                      {isDownloadBlocked ? 'Baixando playlist...' : 'Baixar playlist'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
 
                 {canExport && (
                   <TouchableOpacity

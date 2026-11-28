@@ -21,6 +21,7 @@ const { patchTrackPlayerMusicService } = require('../plugins/withTrackPlayerFGS'
 const { applyBackgroundDownloadPatches } = require('../plugins/withBackgroundDownloads');
 const { applyReleaseSigningPatch } = require('../plugins/withReleaseSigning');
 const { applyAppUpdaterPatches } = require('../plugins/withAppUpdater');
+const { applyLocalMediaLibraryPatches } = require('../plugins/withLocalMediaLibrary');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const ANDROID_DIR = path.join(PROJECT_ROOT, 'android');
@@ -433,6 +434,14 @@ if (applyAppUpdaterPatches(PROJECT_ROOT)) {
   console.log('[SonaryPro] ✅ App Updater: Permissão, FileProvider e módulo nativo aplicados.');
 } else {
   console.log('[SonaryPro] ✔️ App Updater: Já está atualizado.');
+}
+
+// 4h-2. Patch: Scanner de músicas locais do dispositivo (READ_MEDIA_AUDIO + SonaryLocalMediaModule)
+if (applyLocalMediaLibraryPatches(PROJECT_ROOT)) {
+  patchesApplied++;
+  console.log('[SonaryPro] ✅ Local Media Library: Permissão READ_MEDIA_AUDIO e módulo nativo aplicados.');
+} else {
+  console.log('[SonaryPro] ✔️ Local Media Library: Já está atualizado.');
 }
 
 // 4i. Patch: Limite de paralelismo Gradle/CMake/Ninja para evitar OOM do clang++ no Windows

@@ -14,17 +14,22 @@ import {
 } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
 import {
+  AlertTriangle,
   CheckCircle2,
   Clock,
   Download,
+  EyeOff,
   ListMusic,
   ListPlus,
   MoreVertical,
   Music2,
+  Pencil,
   Play,
   Plus,
   Radio,
+  RefreshCw,
   Share2,
+  Smartphone,
   Trash2,
   X,
 } from 'lucide-react-native';
@@ -114,11 +119,18 @@ export interface TrackCardProps {
   isQueued?: boolean;
   downloadProgress?: number;
   isOfflineList?: boolean;
+  isLocalDevice?: boolean;
+  isCorrupted?: boolean;
+  corruptionReason?: string;
   showInlineActions?: boolean;
   onPress: () => void;
   onAddToPlaylist?: () => void;
   onDownload?: () => void;
   onDeleteOffline?: () => void;
+  onEditMetadata?: () => void;
+  onRevalidateLocal?: () => void;
+  onHideLocal?: () => void;
+  onDeleteDeviceFile?: () => void;
   onPlayNext?: () => void;
   onAddToQueue?: () => void;
 }
@@ -132,6 +144,8 @@ export interface TrackContextSheetProps {
   isDownloading?: boolean;
   isQueued?: boolean;
   downloadProgress?: number;
+  isLocalDevice?: boolean;
+  isCorrupted?: boolean;
   onClose: () => void;
   onPress: () => void;
   onPlayNext?: () => void;
@@ -139,6 +153,10 @@ export interface TrackContextSheetProps {
   onAddToPlaylist?: () => void;
   onDownload?: () => void;
   onDeleteOffline?: () => void;
+  onEditMetadata?: () => void;
+  onRevalidateLocal?: () => void;
+  onHideLocal?: () => void;
+  onDeleteDeviceFile?: () => void;
   onRemoveFromPlaylist?: () => void;
 }
 
@@ -151,6 +169,8 @@ export const TrackContextSheet: React.FC<TrackContextSheetProps> = ({
   isDownloading = false,
   isQueued = false,
   downloadProgress = 0,
+  isLocalDevice = false,
+  isCorrupted = false,
   onClose,
   onPress,
   onPlayNext,
@@ -158,6 +178,10 @@ export const TrackContextSheet: React.FC<TrackContextSheetProps> = ({
   onAddToPlaylist,
   onDownload,
   onDeleteOffline,
+  onEditMetadata,
+  onRevalidateLocal,
+  onHideLocal,
+  onDeleteDeviceFile,
   onRemoveFromPlaylist,
 }) => {
   useBackModalLock(true);
@@ -235,75 +259,77 @@ export const TrackContextSheet: React.FC<TrackContextSheetProps> = ({
 
             <View style={styles.sheetDivider} />
 
-            {/* 3 Blocos de Ação Rápida no Topo */}
-            <View style={styles.quickTilesRow}>
-              {onPlayNext && (
-                <TouchableOpacity
-                  style={styles.quickTile}
-                  onPress={(e) => {
-                    e?.stopPropagation?.();
-                    onClose();
-                    onPlayNext();
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Tocar a seguir"
-                >
-                  <ListPlus color="#FFFFFF" size={22} />
-                  <Text style={styles.quickTileText} numberOfLines={1}>
-                    Tocar a seguir
-                  </Text>
-                </TouchableOpacity>
-              )}
+            {/* 3 Blocos de Ação Rápida no Topo (ocultos para arquivos corrompidos) */}
+            {!isCorrupted && (
+              <View style={styles.quickTilesRow}>
+                {onPlayNext && (
+                  <TouchableOpacity
+                    style={styles.quickTile}
+                    onPress={(e) => {
+                      e?.stopPropagation?.();
+                      onClose();
+                      onPlayNext();
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Tocar a seguir"
+                  >
+                    <ListPlus color="#FFFFFF" size={22} />
+                    <Text style={styles.quickTileText} numberOfLines={1}>
+                      Tocar a seguir
+                    </Text>
+                  </TouchableOpacity>
+                )}
 
-              <TouchableOpacity
-                style={styles.quickTile}
-                onPress={(e) => {
-                  e?.stopPropagation?.();
-                  onClose();
-                  onPress();
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Iniciar rádio"
-              >
-                <Radio color="#FFFFFF" size={22} />
-                <Text style={styles.quickTileText} numberOfLines={1}>
-                  Iniciar rádio
-                </Text>
-              </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.quickTile}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    onClose();
+                    onPress();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Iniciar rádio"
+                >
+                  <Radio color="#FFFFFF" size={22} />
+                  <Text style={styles.quickTileText} numberOfLines={1}>
+                    Iniciar rádio
+                  </Text>
+                </TouchableOpacity>
 
-              {onAddToPlaylist ? (
-                <TouchableOpacity
-                  style={styles.quickTile}
-                  onPress={(e) => {
-                    e?.stopPropagation?.();
-                    onClose();
-                    onAddToPlaylist();
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Adicionar à playlist"
-                >
-                  <Plus color="#FFFFFF" size={22} />
-                  <Text style={styles.quickTileText} numberOfLines={1}>
-                    Playlist
-                  </Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  style={styles.quickTile}
-                  onPress={(e) => {
-                    e?.stopPropagation?.();
-                    onClose();
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Compartilhar"
-                >
-                  <Share2 color="#FFFFFF" size={22} />
-                  <Text style={styles.quickTileText} numberOfLines={1}>
-                    Compartilhar
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
+                {onAddToPlaylist ? (
+                  <TouchableOpacity
+                    style={styles.quickTile}
+                    onPress={(e) => {
+                      e?.stopPropagation?.();
+                      onClose();
+                      onAddToPlaylist();
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Adicionar à playlist"
+                  >
+                    <Plus color="#FFFFFF" size={22} />
+                    <Text style={styles.quickTileText} numberOfLines={1}>
+                      Playlist
+                    </Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.quickTile}
+                    onPress={(e) => {
+                      e?.stopPropagation?.();
+                      onClose();
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Compartilhar"
+                  >
+                    <Share2 color="#FFFFFF" size={22} />
+                    <Text style={styles.quickTileText} numberOfLines={1}>
+                      Compartilhar
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
 
             {/* Lista Vertical de Opções */}
             <View style={styles.sheetActionsList}>
@@ -391,6 +417,72 @@ export const TrackContextSheet: React.FC<TrackContextSheetProps> = ({
                 </TouchableOpacity>
               )}
 
+              {onEditMetadata && (
+                <TouchableOpacity
+                  style={styles.sheetActionRow}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    onClose();
+                    onEditMetadata();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Editar informações"
+                >
+                  <Pencil color="#FFFFFF" size={20} />
+                  <Text style={styles.sheetActionText}>Editar informações</Text>
+                </TouchableOpacity>
+              )}
+
+              {onRevalidateLocal && (
+                <TouchableOpacity
+                  style={styles.sheetActionRow}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    onClose();
+                    onRevalidateLocal();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Revalidar arquivo"
+                >
+                  <RefreshCw color="#FFFFFF" size={20} />
+                  <Text style={styles.sheetActionText}>Revalidar arquivo</Text>
+                </TouchableOpacity>
+              )}
+
+              {onHideLocal && (
+                <TouchableOpacity
+                  style={styles.sheetActionRow}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    onClose();
+                    onHideLocal();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Ocultar do Sonary"
+                >
+                  <EyeOff color="#AAAAAA" size={20} />
+                  <Text style={styles.sheetActionText}>Ocultar do Sonary</Text>
+                </TouchableOpacity>
+              )}
+
+              {onDeleteDeviceFile && (
+                <TouchableOpacity
+                  style={styles.sheetActionRow}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    onClose();
+                    onDeleteDeviceFile();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Apagar do dispositivo"
+                >
+                  <Trash2 color="#FF4E45" size={20} />
+                  <Text style={[styles.sheetActionText, { color: '#FF4E45' }]}>
+                    Apagar do dispositivo
+                  </Text>
+                </TouchableOpacity>
+              )}
+
               {onRemoveFromPlaylist && (
                 <TouchableOpacity
                   style={styles.sheetActionRow}
@@ -431,11 +523,18 @@ const TrackCardInner: React.FC<TrackCardProps> = ({
   isQueued = false,
   downloadProgress = 0,
   isOfflineList = false,
+  isLocalDevice = false,
+  isCorrupted = false,
+  corruptionReason,
   showInlineActions,
   onPress,
   onAddToPlaylist,
   onDownload,
   onDeleteOffline,
+  onEditMetadata,
+  onRevalidateLocal,
+  onHideLocal,
+  onDeleteDeviceFile,
   onPlayNext,
   onAddToQueue,
 }) => {
@@ -443,7 +542,18 @@ const TrackCardInner: React.FC<TrackCardProps> = ({
   const [isHovered, setIsHovered] = useState(false);
   const [showContextMenu, setShowContextMenu] = useState(false);
 
-  const hasMenu = Boolean(onPlayNext || onAddToQueue);
+  useEffect(() => {
+    setImageError(false);
+  }, [thumbnailUrl]);
+
+  const hasMenu = Boolean(
+    onPlayNext ||
+      onAddToQueue ||
+      onEditMetadata ||
+      onRevalidateLocal ||
+      onHideLocal ||
+      onDeleteDeviceFile
+  );
   const showDirectActions = showInlineActions ?? !hasMenu;
 
   const handleToggleMenu = (e?: any) => {
@@ -494,7 +604,11 @@ const TrackCardInner: React.FC<TrackCardProps> = ({
 
       {/* Thumbnail da Faixa com Scrim e Play no Hover */}
       <View style={styles.thumbnailContainer}>
-        {thumbnailUrl && !imageError ? (
+        {isCorrupted ? (
+          <View style={[styles.thumbnailFallback, { backgroundColor: 'rgba(255, 78, 69, 0.16)' }]}>
+            <AlertTriangle color="#FF4E45" size={20} />
+          </View>
+        ) : thumbnailUrl && !imageError ? (
           <Image
             source={{ uri: thumbnailUrl }}
             style={styles.trackThumbnail}
@@ -507,9 +621,9 @@ const TrackCardInner: React.FC<TrackCardProps> = ({
         )}
 
         {/* Indicador de reprodução ativa ou Hover Play overlay */}
-        {isActive ? (
+        {isActive && !isCorrupted ? (
           <PlayingEqualizer isPlaying={isPlaying} />
-        ) : isHovered ? (
+        ) : isHovered && !isCorrupted ? (
           <View style={styles.thumbnailHoverOverlay}>
             <Play color="#FFFFFF" fill="#FFFFFF" size={16} />
           </View>
@@ -523,15 +637,35 @@ const TrackCardInner: React.FC<TrackCardProps> = ({
           style={[
             styles.trackTitle,
             isActive && styles.trackTitleActive,
+            isCorrupted && { color: '#FFB4B0' },
           ]}
         >
           {title}
         </MarqueeText>
         <TrackMetaRow
           active={Boolean(isActive)}
-          leading={isDownloaded && !isOfflineList ? <DownloadedTrackBadge /> : undefined}
-          artistText={artistMetaText}
-          textStyle={styles.trackArtist}
+          leading={
+            isCorrupted ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 5 }}>
+                <AlertTriangle color="#FF4E45" size={12} />
+              </View>
+            ) : isLocalDevice ? (
+              <View
+                style={{ flexDirection: 'row', alignItems: 'center', marginRight: 5 }}
+                accessibilityLabel="Arquivo do dispositivo"
+              >
+                <Smartphone color="#AAAAAA" size={12} />
+              </View>
+            ) : isDownloaded && !isOfflineList ? (
+              <DownloadedTrackBadge />
+            ) : undefined
+          }
+          artistText={
+            isCorrupted
+              ? `Corrompido • ${corruptionReason || 'Arquivo ilegível'}`
+              : artistMetaText
+          }
+          textStyle={[styles.trackArtist, isCorrupted && { color: '#FF6B63' }]}
         />
       </View>
 
@@ -649,13 +783,19 @@ const TrackCardInner: React.FC<TrackCardProps> = ({
           isDownloading={isDownloading}
           isQueued={isQueued}
           downloadProgress={downloadProgress}
+          isLocalDevice={isLocalDevice}
+          isCorrupted={isCorrupted}
           onClose={() => setShowContextMenu(false)}
           onPress={onPress}
-          onPlayNext={onPlayNext}
-          onAddToQueue={onAddToQueue}
-          onAddToPlaylist={onAddToPlaylist}
+          onPlayNext={isCorrupted ? undefined : onPlayNext}
+          onAddToQueue={isCorrupted ? undefined : onAddToQueue}
+          onAddToPlaylist={isCorrupted ? undefined : onAddToPlaylist}
           onDownload={onDownload}
           onDeleteOffline={onDeleteOffline}
+          onEditMetadata={onEditMetadata}
+          onRevalidateLocal={onRevalidateLocal}
+          onHideLocal={onHideLocal}
+          onDeleteDeviceFile={onDeleteDeviceFile}
         />
       )}
     </TouchableOpacity>

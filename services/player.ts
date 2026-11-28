@@ -121,6 +121,14 @@ function normalizeTrackHeaders(
   };
 }
 
+function normalizeTrackArtwork(artwork?: Track['artwork']): Track['artwork'] {
+  if (typeof artwork === 'string') {
+    const trimmed = artwork.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  return artwork || undefined;
+}
+
 function buildNormalizedTrack(params: PlayTrackParams): Track {
   const isHttp = typeof params.url === 'string' && params.url.startsWith('http');
   const userAgent = params.userAgent || (isHttp ? DEFAULT_USER_AGENT : undefined);
@@ -131,7 +139,7 @@ function buildNormalizedTrack(params: PlayTrackParams): Track {
     url: params.url,
     title: params.title,
     artist: params.artist,
-    artwork: params.artwork,
+    artwork: normalizeTrackArtwork(params.artwork),
     duration: params.duration,
     userAgent,
     headers,
@@ -144,6 +152,7 @@ function normalizeQueueTrack(t: Track): Track {
   const userAgent = t.userAgent || (isHttp ? DEFAULT_USER_AGENT : undefined);
   return {
     ...t,
+    artwork: normalizeTrackArtwork(t.artwork),
     userAgent,
     headers: normalizeTrackHeaders(isHttp, userAgent, t.headers as Record<string, string> | undefined),
     contentType: t.contentType || (isHttp ? 'audio/mp4' : undefined),

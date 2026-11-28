@@ -15,6 +15,7 @@ class InMemorySQLiteDatabase {
     this.appSettings = new Map();
     this.lyricsCache = new Map();
     this.downloadQueue = new Map();
+    this.localDeviceTracks = new Map();
     const now = Date.now();
     this.playlists.set('__favorites__', {
       id: '__favorites__',
@@ -219,6 +220,20 @@ class InMemorySQLiteDatabase {
     }
 
     // 8. Update playback_history
+    if (cleanSql.includes('UPDATE playback_history SET title = ?, artist = ?, thumbnailUrl = ? WHERE trackId = ?')) {
+      const [title, artist, thumbnailUrl, trackId] = params;
+      let changes = 0;
+      for (const h of this.playbackHistory) {
+        if (h.trackId === trackId) {
+          h.title = title;
+          h.artist = artist;
+          h.thumbnailUrl = thumbnailUrl;
+          changes += 1;
+        }
+      }
+      return { lastInsertRowId: 0, changes };
+    }
+
     if (cleanSql.includes('UPDATE playback_history SET')) {
       const [title, artist, duration, thumbnailUrl, playedAt, id] = params;
       const item = this.playbackHistory.find((h) => h.id === id);
@@ -263,6 +278,14 @@ class InMemorySQLiteDatabase {
         this.playbackHistory = this.playbackHistory.slice(0, 500);
       }
       return { lastInsertRowId: 0, changes: 1 };
+    }
+
+    // 10b. Delete specific track from playback_history
+    if (cleanSql.includes('DELETE FROM playback_history WHERE trackId = ?')) {
+      const [trackId] = params;
+      const prevLen = this.playbackHistory.length;
+      this.playbackHistory = this.playbackHistory.filter((h) => h.trackId !== trackId);
+      return { lastInsertRowId: 0, changes: prevLen - this.playbackHistory.length };
     }
 
     // 11. Clear playback_history
@@ -389,6 +412,140 @@ class InMemorySQLiteDatabase {
       return { lastInsertRowId: 0, changes };
     }
 
+    if (cleanSql.includes('DELETE FROM playlist_tracks WHERE trackId = ?')) {
+      const [trackId] = params;
+      const prevLen = this.playlistTracks.length;
+      this.playlistTracks = this.playlistTracks.filter((t) => t.trackId !== trackId);
+      return { lastInsertRowId: 0, changes: prevLen - this.playlistTracks.length };
+    }
+
+    if (cleanSql.includes('UPDATE playlist_tracks SET title = ?, artist = ?, thumbnailUrl = ? WHERE trackId = ?')) {
+      const [title, artist, thumbnailUrl, trackId] = params;
+      let changes = 0;
+      for (const t of this.playlistTracks) {
+        if (t.trackId === trackId) {
+          t.title = title;
+          t.artist = artist;
+          t.thumbnailUrl = thumbnailUrl;
+          changes += 1;
+        }
+      }
+      return { lastInsertRowId: 0, changes };
+    }
+
+    // 15. Local device tracks CRUD
+    if (cleanSql.includes('INSERT OR REPLACE INTO local_device_tracks')) {
+      const [
+        id,
+        mediaStoreId,
+        contentUri,
+        fileName,
+        folderName,
+        relativePath,
+        mimeType,
+        fileSize,
+        dateModified,
+        title,
+        artist,
+        album,
+        duration,
+        artworkUri,
+        customTitle,
+        customArtist,
+        customArtworkUri,
+        isCorrupted,
+        corruptionReason,
+        isHidden,
+        scannedAt,
+      ] = params;
+      this.localDeviceTracks.set(id, {
+        id,
+        mediaStoreId,
+        contentUri,
+        fileName,
+        folderName,
+        relativePath,
+        mimeType,
+        fileSize,
+        dateModified,
+        title,
+        artist,
+        album,
+        duration,
+        artworkUri,
+        customTitle,
+        customArtist,
+        customArtworkUri,
+        isCorrupted,
+        corruptionReason,
+        isHidden,
+        scannedAt,
+      });
+      return { lastInsertRowId: 1, changes: 1 };
+    }
+
+    if (cleanSql.includes('UPDATE local_device_tracks SET customTitle = ?, customArtist = ?, customArtworkUri = ? WHERE id = ?')) {
+      const [customTitle, customArtist, customArtworkUri, id] = params;
+      const item = this.localDeviceTracks.get(id);
+      if (item) {
+        item.customTitle = customTitle;
+        item.customArtist = customArtist;
+        item.customArtworkUri = customArtworkUri;
+      }
+      return { lastInsertRowId: 0, changes: item ? 1 : 0 };
+    }
+
+    if (cleanSql.includes('UPDATE local_device_tracks SET isCorrupted = 0, corruptionReason = NULL, title = ?, artist = ?, album = ?, duration = ?, artworkUri = ? WHERE id = ?')) {
+      const [title, artist, album, duration, artworkUri, id] = params;
+      const item = this.localDeviceTracks.get(id);
+      if (item) {
+        item.isCorrupted = 0;
+        item.corruptionReason = null;
+        item.title = title;
+        item.artist = artist;
+        item.album = album;
+        item.duration = duration;
+        item.artworkUri = artworkUri;
+      }
+      return { lastInsertRowId: 0, changes: item ? 1 : 0 };
+    }
+
+    if (cleanSql.includes('UPDATE local_device_tracks SET isCorrupted = ?, corruptionReason = ? WHERE id = ?')) {
+      const [isCorrupted, corruptionReason, id] = params;
+      const item = this.localDeviceTracks.get(id);
+      if (item) {
+        item.isCorrupted = isCorrupted;
+        item.corruptionReason = corruptionReason;
+      }
+      return { lastInsertRowId: 0, changes: item ? 1 : 0 };
+    }
+
+    if (cleanSql.includes('UPDATE local_device_tracks SET isHidden = ? WHERE id = ?')) {
+      const [isHidden, id] = params;
+      const item = this.localDeviceTracks.get(id);
+      if (item) {
+        item.isHidden = isHidden;
+      }
+      return { lastInsertRowId: 0, changes: item ? 1 : 0 };
+    }
+
+    if (cleanSql.includes('UPDATE local_device_tracks SET isHidden = 0 WHERE isHidden = 1')) {
+      let changes = 0;
+      for (const item of this.localDeviceTracks.values()) {
+        if (item.isHidden) {
+          item.isHidden = 0;
+          changes += 1;
+        }
+      }
+      return { lastInsertRowId: 0, changes };
+    }
+
+    if (cleanSql.includes('DELETE FROM local_device_tracks WHERE id = ?')) {
+      const [id] = params;
+      const deleted = this.localDeviceTracks.delete(id);
+      return { lastInsertRowId: 0, changes: deleted ? 1 : 0 };
+    }
+
     return { lastInsertRowId: 0, changes: 0 };
   }
 
@@ -447,6 +604,20 @@ class InMemorySQLiteDatabase {
       cleanSql.includes('FROM playlist_tracks') &&
       cleanSql.includes('ORDER BY playlistId ASC, position ASC')
     ) {
+      if (cleanSql.includes('SELECT playlistId, trackId, duration FROM playlist_tracks')) {
+        return [...this.playlistTracks]
+          .sort((a, b) => {
+            if (a.playlistId !== b.playlistId) {
+              return a.playlistId.localeCompare(b.playlistId);
+            }
+            return a.position - b.position;
+          })
+          .map((t) => ({
+            playlistId: t.playlistId,
+            trackId: t.trackId,
+            duration: t.duration,
+          }));
+      }
       return [...this.playlistTracks]
         .filter((t) => Boolean(t.thumbnailUrl))
         .sort((a, b) => {
@@ -470,20 +641,33 @@ class InMemorySQLiteDatabase {
         .sort((a, b) => a.position - b.position)
         .map((t) => {
           const dl = this.downloadedTracks.get(t.trackId);
+          const ldt = this.localDeviceTracks.get(t.trackId);
+          const validLocal = ldt && !ldt.isCorrupted && !ldt.isHidden ? ldt : null;
           return {
             playlistId: t.playlistId,
             trackId: t.trackId,
-            title: t.title,
-            artist: t.artist,
+            title: (ldt && ldt.customTitle) || t.title,
+            artist: (ldt && ldt.customArtist) || t.artist,
             duration: t.duration,
-            thumbnailUrl: t.thumbnailUrl,
+            thumbnailUrl: (ldt && (ldt.customArtworkUri || ldt.artworkUri)) || t.thumbnailUrl,
             position: t.position,
             addedAt: t.addedAt,
-            localUri: dl ? dl.localUri : null,
-            isDownloaded: dl ? 1 : 0,
+            localUri: dl ? dl.localUri : validLocal ? validLocal.contentUri : null,
+            isDownloaded: dl || validLocal ? 1 : 0,
+            isLocalDevice: ldt ? 1 : 0,
+            isCorrupted: ldt ? ldt.isCorrupted : 0,
+            corruptionReason: ldt ? ldt.corruptionReason : null,
           };
         });
       return tracks;
+    }
+
+    // 8. Local device tracks list
+    if (cleanSql.includes('FROM local_device_tracks')) {
+      return Array.from(this.localDeviceTracks.values()).sort((a, b) => {
+        if (b.dateModified !== a.dateModified) return b.dateModified - a.dateModified;
+        return b.scannedAt - a.scannedAt;
+      });
     }
 
     // 5. Favorite tracks IN (...)
@@ -582,6 +766,13 @@ class InMemorySQLiteDatabase {
     if (cleanSql.includes('FROM lyrics_cache WHERE trackId = ?')) {
       const [trackId] = params;
       const entry = this.lyricsCache.get(trackId);
+      return entry ? { ...entry } : null;
+    }
+
+    // 9. Local device track by id
+    if (cleanSql.includes('FROM local_device_tracks WHERE id = ?')) {
+      const [id] = params;
+      const entry = this.localDeviceTracks.get(id);
       return entry ? { ...entry } : null;
     }
 

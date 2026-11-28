@@ -17,6 +17,7 @@ import {
   View,
 } from 'react-native';
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowUpDown,
   ChevronDown,
@@ -27,6 +28,7 @@ import {
   Heart,
   ListMusic,
   MoreVertical,
+  Music2,
   Pause,
   Play,
 } from 'lucide-react-native';
@@ -83,6 +85,7 @@ export interface PlaylistDetailModalProps {
   onClose: () => void;
   playlistId: string | null;
   initialPlaylist?: PlaylistSummary | null;
+  offlineOnly?: boolean;
   currentActiveTrackId?: string;
   isPlaying?: boolean;
   downloadedTrackIds?: Set<string>;
@@ -186,30 +189,48 @@ const PlaylistTrackRow = React.memo<PlaylistTrackRowProps>(
 
         {/* Capa da Música (Token track-card: 4px) */}
         <View style={styles.trackThumbnailContainer}>
-          <Image
-            source={{ uri: item.thumbnailUrl }}
-            style={[
-              styles.trackThumbnail,
-              hasLetterboxArtwork(item.thumbnailUrl) && styles.trackThumbnailLetterboxCrop,
-            ]}
-            resizeMode="cover"
-          />
-          {isActive && <PlayingEqualizer isPlaying={isPlaying} />}
+          {item.isCorrupted ? (
+            <View style={styles.corruptedThumbFallback}>
+              <AlertTriangle color="#FF4E45" size={18} />
+            </View>
+          ) : item.thumbnailUrl ? (
+            <Image
+              source={{ uri: item.thumbnailUrl }}
+              style={[
+                styles.trackThumbnail,
+                hasLetterboxArtwork(item.thumbnailUrl) && styles.trackThumbnailLetterboxCrop,
+              ]}
+              resizeMode="cover"
+            />
+          ) : (
+            <View style={styles.trackThumbPlaceholder}>
+              <Music2 color="#717171" size={18} />
+            </View>
+          )}
+          {isActive && !item.isCorrupted && <PlayingEqualizer isPlaying={isPlaying} />}
         </View>
 
         {/* Informações da Música */}
         <View style={styles.trackInfo}>
           <MarqueeText
-            active={isActive}
-            style={[styles.trackTitle, isActive && styles.trackTitleActive]}
+            active={isActive && !item.isCorrupted}
+            style={[
+              styles.trackTitle,
+              isActive && !item.isCorrupted && styles.trackTitleActive,
+              item.isCorrupted && styles.trackTitleCorrupted,
+            ]}
           >
             {item.title}
           </MarqueeText>
           <TrackMetaRow
             style={styles.trackMetaRow}
-            active={isActive}
+            active={isActive && !item.isCorrupted}
             leading={
-              isDownloaded ? (
+              item.isCorrupted ? (
+                <View style={styles.statusBadge} accessibilityLabel="Arquivo corrompido">
+                  <AlertTriangle color="#FF4E45" size={12} />
+                </View>
+              ) : isDownloaded ? (
                 <DownloadedTrackBadge />
               ) : (
                 <View style={styles.statusBadge} accessibilityLabel="Stream">
@@ -217,8 +238,12 @@ const PlaylistTrackRow = React.memo<PlaylistTrackRowProps>(
                 </View>
               )
             }
-            artistText={item.artist}
-            textStyle={styles.trackArtist}
+            artistText={
+              item.isCorrupted
+                ? `Arquivo corrompido${item.corruptionReason ? ` • ${item.corruptionReason}` : ''}`
+                : item.artist
+            }
+            textStyle={[styles.trackArtist, item.isCorrupted && styles.trackArtistCorrupted]}
           />
         </View>
 
@@ -265,6 +290,7 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
   onClose,
   playlistId,
   initialPlaylist,
+  offlineOnly = false,
   currentActiveTrackId,
   isPlaying,
   downloadedTrackIds,
@@ -317,6 +343,28 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
   const isClosingRef = useRef(false);
   const playlistRef = useRef<PlaylistDetail | null>(playlist);
   playlistRef.current = playlist;
+
+  const completedDownloadIds = useMemo(
+    () =>
+      new Set(
+        downloadQueue
+          .filter((item) => item.status === 'completed')
+          .map((item) => item.track.id)
+      ),
+    [downloadQueue]
+  );
+
+  const isTrackDownloaded = useCallback(
+    (track: PlaylistTrackItem): boolean => {
+      const id = track.trackId || track.id;
+      return Boolean(
+        track.isDownloaded ||
+        downloadedTrackIds?.has(id) ||
+        completedDownloadIds.has(id)
+      );
+    },
+    [downloadedTrackIds, completedDownloadIds]
+  );
 
   useEffect(() => {
     const unsubscribe = subscribeDownloadQueue((q) => {
@@ -488,12 +536,26 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
 
   const handlePressTrack = useCallback(
     (item: PlaylistTrackItem, index: number) => {
+      if (item.isCorrupted) {
+        onShowToast?.(
+          `Arquivo corrompido: ${item.corruptionReason || 'não é possível reproduzir esta faixa'}`,
+          'error'
+        );
+        return;
+      }
       const current = playlistRef.current;
       if (current) {
-        onPlayTrack(item, index, current.tracks);
+        const list = offlineOnly
+          ? current.tracks.filter(
+              (t) => !t.isCorrupted && isTrackDownloaded(t)
+            )
+          : current.tracks.filter((t) => !t.isCorrupted);
+        const targetId = item.trackId || item.id;
+        const resolvedIdx = list.findIndex((t) => (t.trackId || t.id) === targetId);
+        onPlayTrack(item, resolvedIdx >= 0 ? resolvedIdx : index, list);
       }
     },
-    [onPlayTrack]
+    [onPlayTrack, offlineOnly, isTrackDownloaded, onShowToast]
   );
 
   const handleOpenTrackMenu = useCallback(
@@ -505,7 +567,9 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
 
   const handleDownloadAll = () => {
     if (!playlist || playlist.tracks.length === 0) return;
-    const missingTracks = playlist.tracks.filter((t) => !isTrackDownloaded(t));
+    const missingTracks = playlist.tracks.filter(
+      (t) => !isTrackDownloaded(t) && !t.isLocalDevice
+    );
     if (missingTracks.length === 0) {
       onShowToast?.('Todas as músicas da playlist já estão salvas em Baixadas', 'success');
       return;
@@ -697,28 +761,6 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
     }
   };
 
-  const completedDownloadIds = useMemo(
-    () =>
-      new Set(
-        downloadQueue
-          .filter((item) => item.status === 'completed')
-          .map((item) => item.track.id)
-      ),
-    [downloadQueue]
-  );
-
-  const isTrackDownloaded = useCallback(
-    (track: PlaylistTrackItem): boolean => {
-      const id = track.trackId || track.id;
-      return Boolean(
-        track.isDownloaded ||
-        downloadedTrackIds?.has(id) ||
-        completedDownloadIds.has(id)
-      );
-    },
-    [downloadedTrackIds, completedDownloadIds]
-  );
-
   const toTrackSummary = (track: PlaylistTrackItem): TrackSummary => ({
     id: track.trackId || track.id,
     title: track.title,
@@ -748,7 +790,10 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
   const hasUnqueuedMissingTracks = useMemo(
     () =>
       (playlist?.tracks || []).some(
-        (t) => !isTrackDownloaded(t) && !pendingOrDownloadingIds.has(t.trackId || t.id)
+        (t) =>
+          !t.isLocalDevice &&
+          !isTrackDownloaded(t) &&
+          !pendingOrDownloadingIds.has(t.trackId || t.id)
       ),
     [playlist?.tracks, isTrackDownloaded, pendingOrDownloadingIds]
   );
@@ -769,17 +814,27 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
     extrapolate: 'clamp',
   });
 
+  const scopedTracks = useMemo(() => {
+    const all = playlist?.tracks || [];
+    if (!offlineOnly) return all;
+    return all.filter((t) => isTrackDownloaded(t) && !t.isCorrupted);
+  }, [playlist?.tracks, offlineOnly, isTrackDownloaded]);
+
   const displayedTracks = useMemo(
     () =>
-      (playlist?.tracks || []).filter((t) => {
+      scopedTracks.filter((t) => {
         if (!searchQuery.trim()) return true;
         const q = searchQuery.toLowerCase();
         return t.title.toLowerCase().includes(q) || t.artist.toLowerCase().includes(q);
       }),
-    [playlist?.tracks, searchQuery]
+    [scopedTracks, searchQuery]
   );
 
-  const totalTracksCount = playlist?.tracks.length ?? 0;
+  const totalTracksCount = scopedTracks.length;
+  const scopedTotalDuration = useMemo(
+    () => scopedTracks.reduce((acc, t) => acc + (t.duration || 0), 0),
+    [scopedTracks]
+  );
 
   const activeDownloadingItem = useMemo(
     () => downloadQueue.find((item) => item.status === 'downloading') ?? null,
@@ -956,15 +1011,19 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
                       <Text style={styles.playlistDesc}>{playlist.description}</Text>
                     ) : null}
                     <Text style={styles.playlistMeta}>
-                      {playlist.trackCount}{' '}
-                      {playlist.trackCount === 1 ? 'música' : 'músicas'} •{' '}
-                      {formatTotalDuration(playlist.totalDuration)}
+                      {offlineOnly
+                        ? `Modo offline • ${scopedTracks.length} de ${playlist.trackCount} ${
+                            playlist.trackCount === 1 ? 'música' : 'músicas'
+                          } • ${formatTotalDuration(scopedTotalDuration)}`
+                        : `${playlist.trackCount} ${
+                            playlist.trackCount === 1 ? 'música' : 'músicas'
+                          } • ${formatTotalDuration(playlist.totalDuration)}`}
                     </Text>
                   </View>
 
                   {/* Nova Barra de Ações em 1 Única Linha Centralizada */}
                   <View style={styles.actionsBar}>
-                    {playlist.tracks.length > 0 && (
+                    {!offlineOnly && playlist.tracks.length > 0 && (
                       <TouchableOpacity
                         style={[
                           styles.circleActionItem,
@@ -988,10 +1047,10 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
                     <TouchableOpacity
                       style={[
                         styles.playAllButton,
-                        playlist.tracks.length === 0 && styles.playAllButtonDisabled,
+                        scopedTracks.length === 0 && styles.playAllButtonDisabled,
                       ]}
-                      onPress={() => onPlayAll(playlist.tracks)}
-                      disabled={playlist.tracks.length === 0}
+                      onPress={() => onPlayAll(scopedTracks)}
+                      disabled={scopedTracks.length === 0}
                       activeOpacity={0.85}
                       accessibilityRole="button"
                       accessibilityLabel="Tocar todas as músicas da playlist"
@@ -1000,7 +1059,7 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
                       <Text style={styles.playAllText}>Tocar</Text>
                     </TouchableOpacity>
 
-                    {playlist.tracks.length > 1 && (
+                    {!offlineOnly && playlist.tracks.length > 1 && (
                       <TouchableOpacity
                         style={styles.circleActionItem}
                         onPress={() => setIsReordering((prev) => !prev)}
@@ -1064,12 +1123,18 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
                 <View style={styles.emptyContainer}>
                   <ListMusic color="#717171" size={48} />
                   <Text style={styles.emptyTitle}>
-                    {searchQuery ? 'Nenhuma faixa encontrada' : 'Sua playlist está vazia'}
+                    {searchQuery
+                      ? 'Nenhuma faixa encontrada'
+                      : offlineOnly
+                        ? 'Nenhuma música baixada nesta playlist'
+                        : 'Sua playlist está vazia'}
                   </Text>
                   <Text style={styles.emptySubtitle}>
                     {searchQuery
                       ? `Não foram encontrados resultados para "${searchQuery}".`
-                      : 'Pesquise por músicas online ou navegue nas baixadas e adicione faixas aqui.'}
+                      : offlineOnly
+                        ? 'Baixe músicas desta playlist para ouvi-las no modo offline.'
+                        : 'Pesquise por músicas online ou navegue nas baixadas e adicione faixas aqui.'}
                   </Text>
                 </View>
               )
@@ -1102,7 +1167,7 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
           title={menuItem.track.title}
           artist={menuItem.track.artist}
           durationText={formatSeconds(menuItem.track.duration)}
-          isOfflineList={false}
+          isOfflineList={offlineOnly}
           isDownloaded={isTrackDownloaded(menuItem.track)}
           isDownloading={activeDownloadingItem?.track.id === menuItem.track.trackId}
           isQueued={queuedTrackIds.has(menuItem.track.trackId)}
@@ -1111,26 +1176,29 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
               ? Math.round((activeDownloadingItem?.progress || 0) * 100)
               : 0
           }
+          isLocalDevice={Boolean(menuItem.track.isLocalDevice)}
+          isCorrupted={Boolean(menuItem.track.isCorrupted)}
           onClose={() => setMenuItem(null)}
-          onPress={() =>
-            onPlayTrack(menuItem.track, menuItem.index, playlist.tracks)
-          }
+          onPress={() => handlePressTrack(menuItem.track, menuItem.index)}
           onPlayNext={
-            onPlayNext
+            !menuItem.track.isCorrupted && onPlayNext
               ? () => onPlayNext(toTrackSummary(menuItem.track))
               : undefined
           }
           onAddToQueue={
-            onAddToQueue
+            !menuItem.track.isCorrupted && onAddToQueue
               ? () => onAddToQueue(toTrackSummary(menuItem.track))
               : undefined
           }
           onAddToPlaylist={
-            onAddToPlaylist
+            !menuItem.track.isCorrupted && onAddToPlaylist
               ? () => onAddToPlaylist(toTrackSummary(menuItem.track))
               : undefined
           }
           onDownload={
+            !offlineOnly &&
+            !menuItem.track.isLocalDevice &&
+            !menuItem.track.isCorrupted &&
             onDownloadTrack
               ? () => onDownloadTrack(toTrackSummary(menuItem.track))
               : undefined
@@ -1148,6 +1216,7 @@ export const PlaylistDetailModal: React.FC<PlaylistDetailModalProps> = ({
         isReordering={isReordering}
         isDownloadingAll={isDownloadingAll}
         hasUnqueuedMissingTracks={hasUnqueuedMissingTracks}
+        offlineOnly={offlineOnly}
         onClose={() => setShowOptionsSheet(false)}
         onPickCustomCover={handlePickCustomCover}
         onResetCustomCover={handleResetCustomCover}
@@ -1428,6 +1497,22 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: '#1E1E1E',
   },
+  corruptedThumbFallback: {
+    width: 44,
+    height: 44,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255, 78, 69, 0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  trackThumbPlaceholder: {
+    width: 44,
+    height: 44,
+    borderRadius: 4,
+    backgroundColor: '#1E1E1E',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   trackThumbnailLetterboxCrop: {
     transform: [{ scale: 1.35 }],
   },
@@ -1445,6 +1530,9 @@ const styles = StyleSheet.create({
     color: theme.colors.brandPrimary,
     fontWeight: '700',
   },
+  trackTitleCorrupted: {
+    color: '#FFB4B0',
+  },
   trackMetaRow: {
     marginTop: 3,
   },
@@ -1456,6 +1544,9 @@ const styles = StyleSheet.create({
   trackArtist: {
     color: '#AAAAAA',
     fontSize: 11,
+  },
+  trackArtistCorrupted: {
+    color: '#FF4E45',
   },
   trackDuration: {
     color: '#AAAAAA',

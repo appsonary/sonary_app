@@ -62,6 +62,7 @@ import {
   X,
 } from 'lucide-react-native';
 import { RepeatMode, seekTo } from '../services/player';
+import { isLocalDeviceTrackId } from '../services/database';
 import {
   ArtistProfile,
   extractTrackMetadata,
@@ -2218,7 +2219,7 @@ export default function NowPlayingModal({
 
   const loadLyrics = React.useCallback(
     (forceRefresh: boolean = false) => {
-      if (!track?.title || !track?.artist) {
+      if (!track?.title || !track?.artist || isLocalDeviceTrackId(track?.id)) {
         setLyricsPayload(null);
         setIsLoadingLyrics(false);
         return () => { };

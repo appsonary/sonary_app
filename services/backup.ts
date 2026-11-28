@@ -16,6 +16,7 @@ import {
   getPlaylists,
   importUserDatabaseSnapshot,
   ImportSnapshotStats,
+  isLocalDeviceTrackId,
   PlaylistSummary,
 } from './database';
 import {
@@ -340,7 +341,7 @@ export function validateAndNormalizeBackupJson(rawJson: string): SonaryBackupV1 
       if (!rawTrack || typeof rawTrack !== 'object' || Array.isArray(rawTrack)) continue;
       const tObj = rawTrack as Record<string, unknown>;
       const trackId = sanitizeSafeId(tObj.trackId ?? tObj.id);
-      if (!trackId || seenTrackIds.has(trackId)) continue;
+      if (!trackId || isLocalDeviceTrackId(trackId) || seenTrackIds.has(trackId)) continue;
       seenTrackIds.add(trackId);
 
       const posNum = Number(tObj.position);
@@ -376,7 +377,7 @@ export function validateAndNormalizeBackupJson(rawJson: string): SonaryBackupV1 
     if (!rawH || typeof rawH !== 'object' || Array.isArray(rawH)) continue;
     const hObj = rawH as Record<string, unknown>;
     const trackId = sanitizeSafeId(hObj.trackId ?? hObj.id);
-    if (!trackId || seenHistoryIds.has(trackId)) continue;
+    if (!trackId || isLocalDeviceTrackId(trackId) || seenHistoryIds.has(trackId)) continue;
     seenHistoryIds.add(trackId);
 
     playbackHistory.push({
@@ -411,7 +412,7 @@ export function validateAndNormalizeBackupJson(rawJson: string): SonaryBackupV1 
     if (!rawOff || typeof rawOff !== 'object' || Array.isArray(rawOff)) continue;
     const oObj = rawOff as Record<string, unknown>;
     const id = sanitizeSafeId(oObj.id ?? oObj.trackId);
-    if (!id || seenOffline.has(id)) continue;
+    if (!id || isLocalDeviceTrackId(id) || seenOffline.has(id)) continue;
     seenOffline.add(id);
 
     offlineTrackRefs.push({
@@ -540,15 +541,17 @@ export async function buildBackupPayload(): Promise<SonaryBackupV1> {
       createdAt: pl.createdAt,
       updatedAt: pl.updatedAt,
       customCoverBase64,
-      tracks: pl.tracks.map((t) => ({
-        trackId: t.trackId,
-        title: t.title,
-        artist: t.artist,
-        duration: t.duration,
-        thumbnailUrl: sanitizeHttpUrl(t.thumbnailUrl),
-        position: t.position,
-        addedAt: t.addedAt,
-      })),
+      tracks: pl.tracks
+        .filter((t) => !isLocalDeviceTrackId(t.trackId))
+        .map((t, idx) => ({
+          trackId: t.trackId,
+          title: t.title,
+          artist: t.artist,
+          duration: t.duration,
+          thumbnailUrl: sanitizeHttpUrl(t.thumbnailUrl),
+          position: idx,
+          addedAt: t.addedAt,
+        })),
     });
   }
 
@@ -561,15 +564,19 @@ export async function buildBackupPayload(): Promise<SonaryBackupV1> {
     exportedAt: Date.now(),
     data: {
       playlists,
-      playbackHistory: snapshot.playbackHistory.map((h) => ({
-        ...h,
-        thumbnailUrl: sanitizeHttpUrl(h.thumbnailUrl),
-      })),
+      playbackHistory: snapshot.playbackHistory
+        .filter((h) => !isLocalDeviceTrackId(h.trackId))
+        .map((h) => ({
+          ...h,
+          thumbnailUrl: sanitizeHttpUrl(h.thumbnailUrl),
+        })),
       searchHistory: snapshot.searchHistory.slice(0, MAX_SEARCH_HISTORY_ITEMS),
-      offlineTrackRefs: snapshot.offlineTrackRefs.map((o) => ({
-        ...o,
-        thumbnailUrl: resolveHttpThumbnailForTrack(o.id, o.thumbnailUrl, thumbLookup),
-      })),
+      offlineTrackRefs: snapshot.offlineTrackRefs
+        .filter((o) => !isLocalDeviceTrackId(o.id))
+        .map((o) => ({
+          ...o,
+          thumbnailUrl: resolveHttpThumbnailForTrack(o.id, o.thumbnailUrl, thumbLookup),
+        })),
     },
   };
 }
@@ -846,7 +853,10 @@ export async function restoreBackup(
 
     let enqueuedOfflineCount = 0;
     if (options.enqueueOfflineDownloads && backup.data.offlineTrackRefs.length > 0) {
-      const offlineIds = backup.data.offlineTrackRefs.map((t) => t.id);
+      const cloudOfflineRefs = backup.data.offlineTrackRefs.filter(
+        (t) => !isLocalDeviceTrackId(t.id)
+      );
+      const offlineIds = cloudOfflineRefs.map((t) => t.id);
       const alreadyDownloaded = await getVerifiedDownloadedTrackIds(offlineIds);
       const activeQueuedIds = new Set(
         getDownloadQueue()
@@ -857,7 +867,7 @@ export async function restoreBackup(
         backup.data.playlists,
         backup.data.playbackHistory
       );
-      const missingTracks = backup.data.offlineTrackRefs
+      const missingTracks = cloudOfflineRefs
         .filter((t) => !alreadyDownloaded.has(t.id) && !activeQueuedIds.has(t.id))
         .map((t) => ({
           id: t.id,
@@ -988,7 +998,10 @@ export async function buildPlaylistExportPayload(
   }
 
   const emptyLookup = new Map<string, string>();
-  const orderedTracks = [...detail.tracks].sort((a, b) => a.position - b.position);
+  // Músicas locais do dispositivo (local_*) não podem ser exportadas para backup/compartilhamento
+  const orderedTracks = [...detail.tracks]
+    .filter((t) => !isLocalDeviceTrackId(t.trackId))
+    .sort((a, b) => a.position - b.position);
 
   return {
     app: BACKUP_APP_ID,
@@ -1164,7 +1177,7 @@ export function validateAndNormalizePlaylistJson(rawJson: string): SonaryPlaylis
     if (!rawTrack || typeof rawTrack !== 'object' || Array.isArray(rawTrack)) continue;
     const tObj = rawTrack as Record<string, unknown>;
     const trackId = sanitizeSafeId(tObj.trackId ?? tObj.id);
-    if (!trackId || seenTrackIds.has(trackId)) continue;
+    if (!trackId || isLocalDeviceTrackId(trackId) || seenTrackIds.has(trackId)) continue;
     seenTrackIds.add(trackId);
 
     const posNum = Number(tObj.position);

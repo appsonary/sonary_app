@@ -18,8 +18,10 @@ import {
   Pause,
   Play,
   RefreshCw,
+  Smartphone,
 } from 'lucide-react-native';
 import { LyricLine, TrackLyricsPayload } from '../services/api';
+import { isLocalDeviceTrackId } from '../services/database';
 import { LyricsBackdropBackground } from './AmbientGlowBackground';
 
 const ANDROID_STATUS_BAR_HEIGHT =
@@ -81,6 +83,7 @@ export const LyricsViewer = React.memo(function LyricsViewer({
   const userScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isFullscreen = variant === 'fullscreen';
+  const isLocalDeviceTrack = isLocalDeviceTrackId(track?.id);
 
   // Prioriza prop direta syncedLyrics (compatibilidade com suíte de testes) ou payload real da API
   const effectivePayload = useMemo<TrackLyricsPayload>(() => {
@@ -180,9 +183,33 @@ export const LyricsViewer = React.memo(function LyricsViewer({
   }, [activeLyricIndex, displayMode, effectivePayload.type, isFullscreen, isUserScrolling, viewportHeight]);
 
   const hasRealLyrics =
-    effectivePayload.type !== 'none' && effectivePayload.lines.length > 0;
+    !isLocalDeviceTrack &&
+    effectivePayload.type !== 'none' &&
+    effectivePayload.lines.length > 0;
 
   const renderLyricsBody = () => {
+    if (isLocalDeviceTrack) {
+      return (
+        <View
+          style={[
+            styles.emptyLyricsContainer,
+            isFullscreen && styles.emptyLyricsContainerFullscreen,
+          ]}
+          testID="local-track-lyrics-notice"
+        >
+          <View style={styles.unavailableBox}>
+            <Smartphone color="rgba(255, 255, 255, 0.55)" size={isFullscreen ? 36 : 28} />
+            <Text style={styles.emptyLyricsTitle}>
+              Letras indisponíveis para arquivos locais
+            </Text>
+            <Text style={styles.emptyLyricsSubtitle}>
+              Músicas do dispositivo tocam 100% offline e não consultam letras na internet.
+            </Text>
+          </View>
+        </View>
+      );
+    }
+
     if (!hasRealLyrics) {
       return (
         <View
@@ -410,25 +437,29 @@ export const LyricsViewer = React.memo(function LyricsViewer({
           <View style={styles.embeddedCardTitleBlock}>
             <Text style={styles.embeddedCardTitle}>Letras</Text>
             <Text style={styles.embeddedCardSubtitle}>
-              Arraste para cima para ver a letra
+              {isLocalDeviceTrack
+                ? 'Indisponível para músicas do dispositivo'
+                : 'Arraste para cima para ver a letra'}
             </Text>
           </View>
         </View>
 
-        <View style={styles.headerActionsRow}>
-          <TouchableOpacity
-            style={styles.embeddedLyricsExpandBtn}
-            onPress={(e) => {
-              e?.stopPropagation?.();
-              onToggleExpand();
-            }}
-            accessibilityRole="button"
-            accessibilityLabel="Expandir letras"
-          >
-            <Maximize2 color="#FFFFFF" size={15} />
-            <Text style={styles.embeddedLyricsExpandText}>EXPANDIR</Text>
-          </TouchableOpacity>
-        </View>
+        {!isLocalDeviceTrack && (
+          <View style={styles.headerActionsRow}>
+            <TouchableOpacity
+              style={styles.embeddedLyricsExpandBtn}
+              onPress={(e) => {
+                e?.stopPropagation?.();
+                onToggleExpand();
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Expandir letras"
+            >
+              <Maximize2 color="#FFFFFF" size={15} />
+              <Text style={styles.embeddedLyricsExpandText}>EXPANDIR</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </TouchableOpacity>
 
       {/* Corpo compacto das letras (somente leitura; tocar no card com letra abre tela cheia) */}

@@ -6,6 +6,16 @@ import * as SQLite from 'expo-sqlite';
 export const FAVORITES_PLAYLIST_ID = '__favorites__';
 
 /**
+ * Prefixo reservado para faixas descobertas localmente no dispositivo (MediaStore).
+ * Garante separação de IDs remotos e bloqueio automático em backups/streaming.
+ */
+export const LOCAL_TRACK_ID_PREFIX = 'local_';
+
+export function isLocalDeviceTrackId(id?: string | null): boolean {
+  return typeof id === 'string' && id.startsWith(LOCAL_TRACK_ID_PREFIX);
+}
+
+/**
  * Interface que representa os metadados e localização de uma faixa persistida offline.
  */
 export interface DownloadedTrack {
@@ -51,6 +61,73 @@ export interface PlaylistTrackItem {
   addedAt: number;
   localUri?: string | null;
   isDownloaded: boolean;
+  isLocalDevice?: boolean;
+  isCorrupted?: boolean;
+  corruptionReason?: string | null;
+}
+
+/**
+ * Resumo de playlist exibida na aba Baixadas (com contagem de faixas disponíveis offline).
+ */
+export interface OfflinePlaylistSummary extends PlaylistSummary {
+  downloadedTrackCount: number;
+  totalTrackCount: number;
+  downloadedDuration: number;
+}
+
+/**
+ * Faixa de áudio descoberta localmente no armazenamento do dispositivo (MediaStore).
+ */
+export interface LocalDeviceTrack {
+  id: string;
+  mediaStoreId: string;
+  contentUri: string;
+  fileName: string;
+  folderName: string;
+  relativePath: string;
+  mimeType: string;
+  fileSize: number;
+  dateModified: number;
+  /** Título efetivo (customTitle ?? title) */
+  title: string;
+  /** Artista efetivo (customArtist ?? artist) */
+  artist: string;
+  /** Capa efetiva (customArtworkUri ?? artworkUri ?? '') */
+  thumbnailUrl: string;
+  /** URI local para compatibilidade com PlayableTrack */
+  localUri: string;
+  album: string | null;
+  duration: number;
+  rawTitle: string;
+  rawArtist: string;
+  artworkUri: string | null;
+  customTitle: string | null;
+  customArtist: string | null;
+  customArtworkUri: string | null;
+  isCorrupted: boolean;
+  corruptionReason: string | null;
+  isHidden: boolean;
+  scannedAt: number;
+}
+
+export interface LocalDeviceTrackUpsertInput {
+  id: string;
+  mediaStoreId: string;
+  contentUri: string;
+  fileName: string;
+  folderName: string;
+  relativePath: string;
+  mimeType?: string | null;
+  fileSize: number;
+  dateModified: number;
+  title: string;
+  artist: string;
+  album?: string | null;
+  duration: number;
+  artworkUri?: string | null;
+  isCorrupted: boolean;
+  corruptionReason?: string | null;
+  scannedAt: number;
 }
 
 /**
@@ -287,6 +364,35 @@ export async function initDatabase(): Promise<void> {
         updatedAt INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_download_queue_pos ON download_queue(position ASC, createdAt ASC);
+    `);
+
+    // 8. Tabela de músicas locais descobertas no dispositivo (MediaStore)
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS local_device_tracks (
+        id TEXT PRIMARY KEY,
+        mediaStoreId TEXT NOT NULL,
+        contentUri TEXT NOT NULL,
+        fileName TEXT NOT NULL,
+        folderName TEXT NOT NULL,
+        relativePath TEXT NOT NULL,
+        mimeType TEXT,
+        fileSize INTEGER NOT NULL DEFAULT 0,
+        dateModified INTEGER NOT NULL DEFAULT 0,
+        title TEXT NOT NULL,
+        artist TEXT NOT NULL,
+        album TEXT,
+        duration INTEGER NOT NULL DEFAULT 0,
+        artworkUri TEXT,
+        customTitle TEXT,
+        customArtist TEXT,
+        customArtworkUri TEXT,
+        isCorrupted INTEGER NOT NULL DEFAULT 0,
+        corruptionReason TEXT,
+        isHidden INTEGER NOT NULL DEFAULT 0,
+        scannedAt INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_local_device_tracks_folder ON local_device_tracks(folderName);
+      CREATE INDEX IF NOT EXISTS idx_local_device_tracks_corrupted ON local_device_tracks(isCorrupted, isHidden);
     `);
 
     // Pragmas de performance para leituras concorrentes sem bloqueio (WAL + cache em memória)
@@ -765,20 +871,27 @@ export async function getPlaylistById(id: string): Promise<PlaylistDetail | null
       addedAt: number;
       localUri: string | null;
       isDownloaded: number;
+      isLocalDevice?: number;
+      isCorrupted?: number;
+      corruptionReason?: string | null;
     }>(
       `SELECT 
         pt.playlistId,
         pt.trackId,
-        pt.title,
-        pt.artist,
+        COALESCE(ldt.customTitle, pt.title) AS title,
+        COALESCE(ldt.customArtist, pt.artist) AS artist,
         pt.duration,
-        pt.thumbnailUrl,
+        COALESCE(ldt.customArtworkUri, ldt.artworkUri, pt.thumbnailUrl) AS thumbnailUrl,
         pt.position,
         pt.addedAt,
-        dt.localUri,
-        CASE WHEN dt.id IS NOT NULL THEN 1 ELSE 0 END AS isDownloaded
+        COALESCE(dt.localUri, CASE WHEN ldt.id IS NOT NULL AND ldt.isCorrupted = 0 AND ldt.isHidden = 0 THEN ldt.contentUri ELSE NULL END) AS localUri,
+        CASE WHEN dt.id IS NOT NULL OR (ldt.id IS NOT NULL AND ldt.isCorrupted = 0 AND ldt.isHidden = 0) THEN 1 ELSE 0 END AS isDownloaded,
+        CASE WHEN ldt.id IS NOT NULL THEN 1 ELSE 0 END AS isLocalDevice,
+        COALESCE(ldt.isCorrupted, 0) AS isCorrupted,
+        ldt.corruptionReason AS corruptionReason
       FROM playlist_tracks pt
       LEFT JOIN downloaded_tracks dt ON pt.trackId = dt.id
+      LEFT JOIN local_device_tracks ldt ON pt.trackId = ldt.id
       WHERE pt.playlistId = ?
       ORDER BY pt.position ASC;`,
       [id]
@@ -791,11 +904,14 @@ export async function getPlaylistById(id: string): Promise<PlaylistDetail | null
       title: t.title,
       artist: t.artist,
       duration: t.duration,
-      thumbnailUrl: t.thumbnailUrl,
+      thumbnailUrl: t.thumbnailUrl || '',
       position: t.position,
       addedAt: t.addedAt,
       localUri: t.localUri,
       isDownloaded: Boolean(t.isDownloaded),
+      isLocalDevice: Boolean(t.isLocalDevice) || isLocalDeviceTrackId(t.trackId),
+      isCorrupted: Boolean(t.isCorrupted),
+      corruptionReason: t.corruptionReason ?? null,
     }));
 
     const totalDuration = tracks.reduce((acc, t) => acc + (t.duration || 0), 0);
@@ -1806,6 +1922,8 @@ export async function exportUserDatabaseSnapshot(): Promise<DatabaseUserSnapshot
   for (const summary of summaries) {
     const detail = await getPlaylistById(summary.id);
     if (!detail) continue;
+    // Músicas locais do dispositivo (local_*) nunca entram no backup
+    const cloudTracks = detail.tracks.filter((t) => !isLocalDeviceTrackId(t.trackId));
     playlists.push({
       id: detail.id,
       name: detail.name,
@@ -1814,37 +1932,41 @@ export async function exportUserDatabaseSnapshot(): Promise<DatabaseUserSnapshot
       customCoverUri: !detail.isSystem && detail.hasCustomCover ? detail.thumbnailUrl : null,
       createdAt: detail.createdAt,
       updatedAt: detail.updatedAt,
-      tracks: detail.tracks.map((t, index) => ({
+      tracks: cloudTracks.map((t, index) => ({
         trackId: t.trackId,
         title: t.title,
         artist: t.artist,
         duration: t.duration,
         thumbnailUrl: t.thumbnailUrl || '',
-        position: typeof t.position === 'number' ? t.position : index,
+        position: index,
         addedAt: t.addedAt,
       })),
     });
   }
 
   const historyRows = await getPlaybackHistory(500);
-  const playbackHistory: DatabaseBackupHistoryItem[] = historyRows.map((h) => ({
-    trackId: h.trackId,
-    title: h.title,
-    artist: h.artist,
-    duration: h.duration,
-    thumbnailUrl: h.thumbnailUrl || '',
-    playedAt: h.playedAt,
-  }));
+  const playbackHistory: DatabaseBackupHistoryItem[] = historyRows
+    .filter((h) => !isLocalDeviceTrackId(h.trackId))
+    .map((h) => ({
+      trackId: h.trackId,
+      title: h.title,
+      artist: h.artist,
+      duration: h.duration,
+      thumbnailUrl: h.thumbnailUrl || '',
+      playedAt: h.playedAt,
+    }));
 
   const searchHistory = await getSearchHistory(MAX_SEARCH_HISTORY);
   const downloaded = await getDownloadedTracks();
-  const offlineTrackRefs: DatabaseBackupOfflineRef[] = downloaded.map((d) => ({
-    id: d.id,
-    title: d.title,
-    artist: d.artist,
-    duration: d.duration,
-    thumbnailUrl: d.thumbnailUrl || '',
-  }));
+  const offlineTrackRefs: DatabaseBackupOfflineRef[] = downloaded
+    .filter((d) => !isLocalDeviceTrackId(d.id))
+    .map((d) => ({
+      id: d.id,
+      title: d.title,
+      artist: d.artist,
+      duration: d.duration,
+      thumbnailUrl: d.thumbnailUrl || '',
+    }));
 
   return {
     playlists,
@@ -2074,4 +2196,365 @@ export async function importUserDatabaseSnapshot(
 
   invalidateDatabaseCaches();
   return stats;
+}
+
+
+/* ==========================================================================
+   LOCAL DEVICE TRACKS (MÚSICAS LOCAIS DO DISPOSITIVO VIA MEDIASTORE)
+   ========================================================================== */
+
+interface RawLocalDeviceTrackRow {
+  id: string;
+  mediaStoreId: string;
+  contentUri: string;
+  fileName: string;
+  folderName: string;
+  relativePath: string;
+  mimeType: string | null;
+  fileSize: number;
+  dateModified: number;
+  title: string;
+  artist: string;
+  album: string | null;
+  duration: number;
+  artworkUri: string | null;
+  customTitle: string | null;
+  customArtist: string | null;
+  customArtworkUri: string | null;
+  isCorrupted: number;
+  corruptionReason: string | null;
+  isHidden: number;
+  scannedAt: number;
+}
+
+function mapRawLocalTrack(row: RawLocalDeviceTrackRow): LocalDeviceTrack {
+  const effectiveTitle = (row.customTitle && row.customTitle.trim()) || row.title || row.fileName || 'Música';
+  const effectiveArtist = (row.customArtist && row.customArtist.trim()) || row.artist || 'Artista desconhecido';
+  const effectiveArtwork = row.customArtworkUri || row.artworkUri || '';
+
+  return {
+    id: row.id,
+    mediaStoreId: row.mediaStoreId,
+    contentUri: row.contentUri,
+    fileName: row.fileName,
+    folderName: row.folderName,
+    relativePath: row.relativePath,
+    mimeType: row.mimeType || '',
+    fileSize: Number(row.fileSize || 0),
+    dateModified: Number(row.dateModified || 0),
+    title: effectiveTitle,
+    artist: effectiveArtist,
+    thumbnailUrl: effectiveArtwork,
+    localUri: row.contentUri,
+    album: row.album ?? null,
+    duration: Number(row.duration || 0),
+    rawTitle: row.title,
+    rawArtist: row.artist,
+    artworkUri: row.artworkUri ?? null,
+    customTitle: row.customTitle ?? null,
+    customArtist: row.customArtist ?? null,
+    customArtworkUri: row.customArtworkUri ?? null,
+    isCorrupted: Boolean(row.isCorrupted),
+    corruptionReason: row.corruptionReason ?? null,
+    isHidden: Boolean(row.isHidden),
+    scannedAt: Number(row.scannedAt || 0),
+  };
+}
+
+/**
+ * Retorna todas as faixas locais descobertas no dispositivo.
+ */
+export async function getLocalDeviceTracks(options?: {
+  includeHidden?: boolean;
+  includeCorrupted?: boolean;
+}): Promise<LocalDeviceTrack[]> {
+  await initDatabase();
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<RawLocalDeviceTrackRow>(
+    `SELECT id, mediaStoreId, contentUri, fileName, folderName, relativePath, mimeType,
+            fileSize, dateModified, title, artist, album, duration, artworkUri,
+            customTitle, customArtist, customArtworkUri, isCorrupted, corruptionReason,
+            isHidden, scannedAt
+     FROM local_device_tracks
+     ORDER BY dateModified DESC, scannedAt DESC;`
+  );
+  const includeHidden = options?.includeHidden ?? false;
+  const includeCorrupted = options?.includeCorrupted ?? true;
+  return rows
+    .map(mapRawLocalTrack)
+    .filter((t) => (includeHidden || !t.isHidden) && (includeCorrupted || !t.isCorrupted));
+}
+
+/**
+ * Busca uma faixa local do dispositivo pelo ID (`local_<mediaStoreId>`).
+ */
+export async function getLocalDeviceTrackById(id: string): Promise<LocalDeviceTrack | null> {
+  if (!isLocalDeviceTrackId(id)) return null;
+  await initDatabase();
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<RawLocalDeviceTrackRow>(
+    `SELECT id, mediaStoreId, contentUri, fileName, folderName, relativePath, mimeType,
+            fileSize, dateModified, title, artist, album, duration, artworkUri,
+            customTitle, customArtist, customArtworkUri, isCorrupted, corruptionReason,
+            isHidden, scannedAt
+     FROM local_device_tracks
+     WHERE id = ? LIMIT 1;`,
+    [id]
+  );
+  return row ? mapRawLocalTrack(row) : null;
+}
+
+/**
+ * Sincroniza o catálogo local com o resultado da varredura MediaStore.
+ * Preserva overrides manuais (`customTitle`, `customArtist`, `customArtworkUri`) e `isHidden`,
+ * removendo registros cujos arquivos não existem mais no dispositivo.
+ */
+export async function syncLocalDeviceTracks(
+  scannedRows: LocalDeviceTrackUpsertInput[]
+): Promise<LocalDeviceTrack[]> {
+  await initDatabase();
+  const db = await getDatabase();
+  const existing = await getLocalDeviceTracks({ includeHidden: true, includeCorrupted: true });
+  const existingById = new Map<string, LocalDeviceTrack>(existing.map((t) => [t.id, t]));
+  const nextIds = new Set<string>(scannedRows.map((r) => r.id));
+
+  const runSync = async () => {
+    for (const prev of existing) {
+      if (!nextIds.has(prev.id)) {
+        await db.runAsync(`DELETE FROM local_device_tracks WHERE id = ?;`, [prev.id]);
+      }
+    }
+
+    for (const row of scannedRows) {
+      const prev = existingById.get(row.id);
+      await db.runAsync(
+        `INSERT OR REPLACE INTO local_device_tracks (
+          id, mediaStoreId, contentUri, fileName, folderName, relativePath, mimeType,
+          fileSize, dateModified, title, artist, album, duration, artworkUri,
+          customTitle, customArtist, customArtworkUri, isCorrupted, corruptionReason,
+          isHidden, scannedAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        [
+          row.id,
+          row.mediaStoreId,
+          row.contentUri,
+          row.fileName,
+          row.folderName,
+          row.relativePath,
+          row.mimeType || '',
+          row.fileSize,
+          row.dateModified,
+          row.title,
+          row.artist,
+          row.album ?? null,
+          row.duration,
+          row.artworkUri ?? null,
+          prev?.customTitle ?? null,
+          prev?.customArtist ?? null,
+          prev?.customArtworkUri ?? null,
+          row.isCorrupted ? 1 : 0,
+          row.corruptionReason ?? null,
+          prev?.isHidden ? 1 : 0,
+          row.scannedAt,
+        ]
+      );
+    }
+  };
+
+  const dbWithTx = db as SQLite.SQLiteDatabase & {
+    withTransactionAsync?: (task: () => Promise<void>) => Promise<void>;
+  };
+  if (typeof dbWithTx.withTransactionAsync === 'function') {
+    await dbWithTx.withTransactionAsync(runSync);
+  } else {
+    await runSync();
+  }
+
+  invalidateDownloadedCaches();
+  return getLocalDeviceTracks({ includeHidden: false, includeCorrupted: true });
+}
+
+/**
+ * Atualiza metadados manuais (Título, Artista e Capa) de uma faixa local no SQLite,
+ * propagando os novos valores para `playlist_tracks` e `playback_history` sem alterar o arquivo original.
+ */
+export async function updateLocalTrackMetadata(
+  id: string,
+  updates: {
+    customTitle?: string | null;
+    customArtist?: string | null;
+    customArtworkUri?: string | null;
+  }
+): Promise<LocalDeviceTrack | null> {
+  await initDatabase();
+  const current = await getLocalDeviceTrackById(id);
+  if (!current) return null;
+
+  const nextCustomTitle =
+    updates.customTitle !== undefined
+      ? (updates.customTitle?.trim() || null)
+      : current.customTitle;
+  const nextCustomArtist =
+    updates.customArtist !== undefined
+      ? (updates.customArtist?.trim() || null)
+      : current.customArtist;
+  const nextCustomArtworkUri =
+    updates.customArtworkUri !== undefined
+      ? (updates.customArtworkUri || null)
+      : current.customArtworkUri;
+
+  const db = await getDatabase();
+  await db.runAsync(
+    `UPDATE local_device_tracks SET customTitle = ?, customArtist = ?, customArtworkUri = ? WHERE id = ?;`,
+    [nextCustomTitle, nextCustomArtist, nextCustomArtworkUri, id]
+  );
+
+  const effectiveTitle = nextCustomTitle || current.rawTitle || current.fileName || 'Música';
+  const effectiveArtist = nextCustomArtist || current.rawArtist || 'Artista desconhecido';
+  const effectiveThumb = nextCustomArtworkUri || current.artworkUri || '';
+
+  await db.runAsync(
+    `UPDATE playlist_tracks SET title = ?, artist = ?, thumbnailUrl = ? WHERE trackId = ?;`,
+    [effectiveTitle, effectiveArtist, effectiveThumb, id]
+  );
+  await db.runAsync(
+    `UPDATE playback_history SET title = ?, artist = ?, thumbnailUrl = ? WHERE trackId = ?;`,
+    [effectiveTitle, effectiveArtist, effectiveThumb, id]
+  );
+
+  invalidateDatabaseCaches();
+  return getLocalDeviceTrackById(id);
+}
+
+/**
+ * Atualiza status de corrupção de uma faixa local (ex.: falha de decodificação em runtime ou revalidação).
+ * Quando `refreshedMeta` é informado (ex.: arquivo recuperado na revalidação), também atualiza metadados extraídos.
+ */
+export async function markLocalTrackCorrupted(
+  id: string,
+  isCorrupted: boolean,
+  reason: string | null = null,
+  refreshedMeta?: {
+    title?: string;
+    artist?: string;
+    album?: string | null;
+    duration?: number;
+    artworkUri?: string | null;
+  }
+): Promise<void> {
+  await initDatabase();
+  const db = await getDatabase();
+  if (!isCorrupted && refreshedMeta) {
+    const current = await getLocalDeviceTrackById(id);
+    if (current) {
+      const nextRawTitle = refreshedMeta.title || current.rawTitle;
+      const nextRawArtist = refreshedMeta.artist || current.rawArtist;
+      const nextAlbum = refreshedMeta.album !== undefined ? refreshedMeta.album : current.album;
+      const nextDuration =
+        typeof refreshedMeta.duration === 'number' && refreshedMeta.duration > 0
+          ? refreshedMeta.duration
+          : current.duration;
+      const nextArtwork =
+        refreshedMeta.artworkUri !== undefined ? refreshedMeta.artworkUri : current.artworkUri;
+      await db.runAsync(
+        `UPDATE local_device_tracks SET isCorrupted = 0, corruptionReason = NULL, title = ?, artist = ?, album = ?, duration = ?, artworkUri = ? WHERE id = ?;`,
+        [nextRawTitle, nextRawArtist, nextAlbum, nextDuration, nextArtwork, id]
+      );
+      invalidateDownloadedCaches();
+      return;
+    }
+  }
+  await db.runAsync(
+    `UPDATE local_device_tracks SET isCorrupted = ?, corruptionReason = ? WHERE id = ?;`,
+    [isCorrupted ? 1 : 0, isCorrupted ? (reason || 'Arquivo corrompido ou incompatível') : null, id]
+  );
+  invalidateDownloadedCaches();
+}
+
+/**
+ * Oculta ou restaura uma faixa local na biblioteca do Sonary sem tocar no arquivo físico.
+ */
+export async function setLocalTrackHidden(id: string, hidden: boolean): Promise<void> {
+  await initDatabase();
+  const db = await getDatabase();
+  await db.runAsync(
+    `UPDATE local_device_tracks SET isHidden = ? WHERE id = ?;`,
+    [hidden ? 1 : 0, id]
+  );
+  invalidateDownloadedCaches();
+}
+
+/**
+ * Restaura todas as faixas locais ocultadas manualmente pelo usuário.
+ */
+export async function restoreAllHiddenLocalTracks(): Promise<void> {
+  await initDatabase();
+  const db = await getDatabase();
+  await db.runAsync(`UPDATE local_device_tracks SET isHidden = 0 WHERE isHidden = 1;`);
+  invalidateDownloadedCaches();
+}
+
+/**
+ * Remove o registro de uma faixa local do SQLite (após exclusão física confirmada no dispositivo).
+ */
+export async function deleteLocalDeviceTrackRecord(id: string): Promise<void> {
+  await initDatabase();
+  const db = await getDatabase();
+  await db.runAsync(`DELETE FROM local_device_tracks WHERE id = ?;`, [id]);
+  await db.runAsync(`DELETE FROM playlist_tracks WHERE trackId = ?;`, [id]);
+  await db.runAsync(`DELETE FROM playback_history WHERE trackId = ?;`, [id]);
+  invalidateDatabaseCaches();
+}
+
+/**
+ * Retorna playlists (incluindo Músicas Curtidas) que possuem ao menos 1 faixa disponível offline
+ * (baixada pelo Sonary ou arquivo local válido do dispositivo).
+ */
+export async function getOfflinePlaylistsSummary(
+  excludedLocalFolders?: Iterable<string>
+): Promise<OfflinePlaylistSummary[]> {
+  await initDatabase();
+  const db = await getDatabase();
+  const excludedSet = new Set<string>(
+    Array.from(excludedLocalFolders || []).map((f) => f.toLowerCase())
+  );
+
+  const [playlists, downloaded, localTracks, plTrackRows] = await Promise.all([
+    getPlaylists(),
+    getDownloadedTracks(),
+    getLocalDeviceTracks({ includeHidden: false, includeCorrupted: false }),
+    db.getAllAsync<{ playlistId: string; trackId: string; duration: number }>(
+      `SELECT playlistId, trackId, duration FROM playlist_tracks ORDER BY playlistId ASC, position ASC;`
+    ),
+  ]);
+
+  const offlineIds = new Set<string>(downloaded.map((d) => d.id));
+  for (const lt of localTracks) {
+    if (!excludedSet.has(lt.folderName.toLowerCase())) {
+      offlineIds.add(lt.id);
+    }
+  }
+
+  const statsByPlaylist = new Map<string, { count: number; duration: number }>();
+  for (const row of plTrackRows) {
+    if (!offlineIds.has(row.trackId)) continue;
+    const prev = statsByPlaylist.get(row.playlistId) || { count: 0, duration: 0 };
+    prev.count += 1;
+    prev.duration += Number(row.duration || 0);
+    statsByPlaylist.set(row.playlistId, prev);
+  }
+
+  const result: OfflinePlaylistSummary[] = [];
+  for (const pl of playlists) {
+    const stat = statsByPlaylist.get(pl.id);
+    if (!stat || stat.count <= 0) continue;
+    result.push({
+      ...pl,
+      downloadedTrackCount: stat.count,
+      totalTrackCount: pl.trackCount,
+      downloadedDuration: stat.duration,
+    });
+  }
+
+  return result;
 }

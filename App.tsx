@@ -35,6 +35,14 @@ import { DevMenuModal, isDevMenuEnabled } from './components/DevMenuModal';
 import { BackupModal } from './components/BackupModal';
 import { PlaylistImportModal } from './components/PlaylistImportModal';
 import { DownloadQueueModal } from './components/DownloadQueueModal';
+import {
+  DownloadsSection,
+  UnifiedOfflineTrackItem,
+} from './components/DownloadsSection';
+import {
+  EditLocalTrackModal,
+  EditLocalTrackSavePayload,
+} from './components/EditLocalTrackModal';
 import { MainTab, NavigationTabBar } from './components/NavigationTabBar';
 import { SearchBarSection, SearchPillInput } from './components/SearchBarSection';
 import { SupportSection } from './components/SupportSection';
@@ -149,8 +157,14 @@ import {
 } from './services/storage';
 import {
   DownloadedTrack,
+  LocalDeviceTrack,
+  OfflinePlaylistSummary,
+  isLocalDeviceTrackId,
   getDownloadedTracks,
   getDownloadedTrackIds,
+  getLocalDeviceTracks,
+  getOfflinePlaylistsSummary,
+  markLocalTrackCorrupted,
   getPlaylistById,
   getPlaylists,
   PlaylistSummary,
@@ -177,6 +191,23 @@ import {
   RealPlaytimeTracker,
   triggerSupportNotificationIfEligible,
 } from './services/supportNotifications';
+import {
+  checkLocalAudioPermission,
+  deleteLocalTrackFromDevice,
+  DownloadsSortMode,
+  getDownloadsSortMode,
+  getExcludedLocalFolders,
+  hideLocalTrackFromLibrary,
+  isLocalMediaEnabled,
+  requestLocalAudioPermission,
+  restoreHiddenLocalTracks,
+  revalidateLocalTrack,
+  saveLocalTrackMetadataEdit,
+  scanAndSyncLocalDeviceAudio,
+  setDownloadsSortMode,
+  setExcludedLocalFolders,
+  setLocalMediaEnabled,
+} from './services/localMedia';
 import { BACK_PRIORITY, useBackHandler } from './services/backNavigation';
 import {
   ImportPlaylistResult,
@@ -208,7 +239,7 @@ type SelectedArtistTarget = {
   subtitle?: string;
   initialProfile?: ArtistProfile | null;
 };
-type NavHistoryEntry = { tab: MainTab; playlistId: string | null };
+type NavHistoryEntry = { tab: MainTab; playlistId: string | null; offlineOnly?: boolean };
 const EXIT_PROMPT_MS = 2000;
 const EXIT_PROMPT_MESSAGE = 'Pressione voltar novamente para sair';
 
@@ -238,6 +269,15 @@ export default function App() {
   const [isLoadingMoreSearch, setIsLoadingMoreSearch] = useState(false);
   const [downloadsSearchQuery, setDownloadsSearchQuery] = useState('');
   const [downloadedTracks, setDownloadedTracks] = useState<DownloadedTrack[]>([]);
+  const [localDeviceTracks, setLocalDeviceTracks] = useState<LocalDeviceTrack[]>([]);
+  const [hiddenLocalCount, setHiddenLocalCount] = useState(0);
+  const [offlinePlaylists, setOfflinePlaylists] = useState<OfflinePlaylistSummary[]>([]);
+  const [localMediaEnabled, setLocalMediaEnabledState] = useState(false);
+  const [isScanningLocalMedia, setIsScanningLocalMedia] = useState(false);
+  const [excludedLocalFolders, setExcludedLocalFoldersState] = useState<string[]>([]);
+  const [downloadsSortMode, setDownloadsSortModeState] = useState<DownloadsSortMode>('recent');
+  const [editingLocalTrack, setEditingLocalTrack] = useState<LocalDeviceTrack | null>(null);
+  const [isPlaylistDetailOfflineOnly, setIsPlaylistDetailOfflineOnly] = useState(false);
   const [playlists, setPlaylists] = useState<PlaylistSummary[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -462,6 +502,9 @@ export default function App() {
         ]);
         await syncPlayerQueue();
         return true;
+      }
+      if (isLocalDeviceTrackId(track.id)) {
+        return false;
       }
       const streamInfo = await getAudioStream(track.id);
       if (expectedEpoch !== undefined && queueGenerationRef.current !== expectedEpoch) {
@@ -820,6 +863,23 @@ export default function App() {
 
       const failedTrack = nativeActiveTrack ?? (await getActiveTrack().catch(() => undefined));
 
+      // Arquivo local do dispositivo corrompido ou incompatível em tempo de execução:
+      // marca no SQLite para destacar na tela e nunca tenta fallback HTTP/MediaProvider
+      if (failedTrack && isLocalDeviceTrackId(failedTrack.id)) {
+        const reason = 'Arquivo corrompido ou formato incompatível';
+        await markLocalTrackCorrupted(failedTrack.id, true, reason).catch(() => {});
+        await loadOfflineTracks().catch(() => {});
+        showToast(`Arquivo corrompido: "${failedTrack.title || 'Áudio local'}"`, 'error');
+        setErrorMessage(
+          `Arquivo local corrompido ou incompatível: "${failedTrack.title || 'Áudio local'}".`
+        );
+        const advanced = await skipToNext().catch(() => false);
+        if (!advanced) {
+          await resetPlayer().catch(() => {});
+        }
+        return;
+      }
+
       // Se o player encontrou erro em um stream remoto, aciona fallback resiliente via download local
       if (failedTrack && !downloadedIds.has(failedTrack.id)) {
         if (recoveringTrackIdRef.current === failedTrack.id) {
@@ -910,9 +970,33 @@ export default function App() {
       if (options?.clean) {
         await syncAndCleanStorage();
       }
-      const offlineList = await getDownloadedTracks();
+      const [offlineList, allLocalList, excludedFolders, enabled, sortPref] = await Promise.all([
+        getDownloadedTracks(),
+        getLocalDeviceTracks({ includeHidden: true, includeCorrupted: true }),
+        getExcludedLocalFolders(),
+        isLocalMediaEnabled(),
+        getDownloadsSortMode(),
+      ]);
+      const visibleLocal = allLocalList.filter((t) => !t.isHidden);
+      const hiddenCount = allLocalList.length - visibleLocal.length;
+      const offlinePl = await getOfflinePlaylistsSummary(excludedFolders);
+
       setDownloadedTracks(offlineList);
-      setDownloadedIds(new Set(offlineList.map((t) => t.id)));
+      setLocalDeviceTracks(visibleLocal);
+      setHiddenLocalCount(hiddenCount);
+      setExcludedLocalFoldersState(excludedFolders);
+      setLocalMediaEnabledState(enabled);
+      setDownloadsSortModeState(sortPref);
+      setOfflinePlaylists(offlinePl);
+
+      const excludedSet = new Set(excludedFolders.map((f) => f.toLowerCase()));
+      const allOfflineIds = new Set<string>(offlineList.map((t) => t.id));
+      for (const lt of visibleLocal) {
+        if (!lt.isCorrupted && !excludedSet.has((lt.folderName || 'Armazenamento').toLowerCase())) {
+          allOfflineIds.add(lt.id);
+        }
+      }
+      setDownloadedIds(allOfflineIds);
     } catch (err) {
       console.error('Falha ao carregar faixas offline do SQLite:', err);
     }
@@ -925,6 +1009,9 @@ export default function App() {
     try {
       const list = await getPlaylists();
       setPlaylists(list);
+      const excludedFolders = await getExcludedLocalFolders().catch(() => [] as string[]);
+      const offlinePl = await getOfflinePlaylistsSummary(excludedFolders).catch(() => []);
+      setOfflinePlaylists(offlinePl);
       return list;
     } catch (err) {
       console.error('Falha ao carregar playlists do SQLite:', err);
@@ -1309,6 +1396,7 @@ export default function App() {
       pushNavHistory({
         tab: visibleTab,
         playlistId: isPlaylistDetailVisible ? selectedPlaylistId : null,
+        offlineOnly: isPlaylistDetailVisible ? isPlaylistDetailOfflineOnly : undefined,
       });
     }
     tabTransitionRef.current?.stop();
@@ -1335,6 +1423,7 @@ export default function App() {
     pendingTab,
     activeTab,
     isPlaylistDetailVisible,
+    isPlaylistDetailOfflineOnly,
     selectedPlaylistId,
     pushNavHistory,
     closeNowPlayingImmediate,
@@ -1469,10 +1558,17 @@ export default function App() {
   }, []);
 
   const openPlaylistDetail = useCallback(
-    (playlistId: string) => {
-      if (isPlaylistDetailVisible && selectedPlaylistId === playlistId && !selectedArtistRef.current) {
+    (playlistId: string, options?: { offlineOnly?: boolean }) => {
+      const nextOfflineOnly = Boolean(options?.offlineOnly);
+      if (
+        isPlaylistDetailVisible &&
+        selectedPlaylistId === playlistId &&
+        !selectedArtistRef.current
+      ) {
+        setIsPlaylistDetailOfflineOnly(nextOfflineOnly);
         return;
       }
+      setIsPlaylistDetailOfflineOnly(nextOfflineOnly);
       artistHistoryRef.current = [];
       selectedArtistRef.current = null;
       setSelectedArtist(null);
@@ -1480,6 +1576,7 @@ export default function App() {
       pushNavHistory({
         tab: visibleTab,
         playlistId: isPlaylistDetailVisible ? selectedPlaylistId : null,
+        offlineOnly: isPlaylistDetailVisible ? isPlaylistDetailOfflineOnly : undefined,
       });
       tabTransitionRef.current?.stop();
       shellTransitionRef.current?.stop();
@@ -1506,6 +1603,7 @@ export default function App() {
     },
     [
       isPlaylistDetailVisible,
+      isPlaylistDetailOfflineOnly,
       selectedPlaylistId,
       pendingTab,
       activeTab,
@@ -1529,6 +1627,7 @@ export default function App() {
       setActiveTab(top.tab);
       setPendingTab(null);
       setSelectedPlaylistId(top.playlistId);
+      setIsPlaylistDetailOfflineOnly(Boolean(top.offlineOnly));
       isPlaylistDetailVisibleRef.current = true;
       setIsPlaylistDetailVisible(true);
       return;
@@ -1549,6 +1648,7 @@ export default function App() {
 
     isPlaylistDetailVisibleRef.current = false;
     setIsPlaylistDetailVisible(false);
+    setIsPlaylistDetailOfflineOnly(false);
     tabContentOpacity.setValue(1);
     shellOpacity.setValue(0);
     fadeOpacity(
@@ -1863,6 +1963,9 @@ export default function App() {
         duration: track.duration,
       };
     }
+    if (isLocalDeviceTrackId(track.id)) {
+      throw new Error(`Arquivo local corrompido ou indisponível: "${track.title}"`);
+    }
     const streamInfo = await getAudioStream(track.id);
     return {
       id: track.id,
@@ -1928,10 +2031,23 @@ export default function App() {
     options?: { shuffle?: boolean }
   ) => {
     if (!tracks || tracks.length === 0) return;
-    const orderedTracks = options?.shuffle ? shuffleArray(tracks) : tracks;
+    const requestedTrack =
+      startIndex >= 0 && startIndex < tracks.length ? tracks[startIndex] : tracks[0];
+    const playableTracks = tracks.filter(
+      (t) => !(t as { isCorrupted?: boolean }).isCorrupted
+    );
+    if (playableTracks.length === 0) {
+      showToast('Nenhuma faixa válida disponível para reprodução.', 'error');
+      return;
+    }
+    const orderedTracks = options?.shuffle ? shuffleArray(playableTracks) : playableTracks;
+    const matchedIdx =
+      !options?.shuffle && requestedTrack
+        ? orderedTracks.findIndex((t) => t.id === requestedTrack.id)
+        : 0;
     const safeIndex =
-      !options?.shuffle && startIndex >= 0 && startIndex < orderedTracks.length
-        ? startIndex
+      !options?.shuffle && matchedIdx >= 0 && matchedIdx < orderedTracks.length
+        ? matchedIdx
         : 0;
     activePlaylistRef.current = {
       type: 'playlist',
@@ -2143,23 +2259,25 @@ export default function App() {
       // Garante registro offline local quando o arquivo existe em disco; se foi apagado externamente, limpa SQLite
       let playbackParams: Parameters<typeof playTrackPreservingQueue>[0];
       if (localUri) {
-        const alreadyInDb = downloadedIds.has(track.id) || (await isDownloaded(track.id));
-        if (queueGenerationRef.current !== selectionEpoch) return;
-        if (!alreadyInDb) {
-          const trackSummary: TrackSummary = {
-            id: track.id,
-            title: track.title,
-            artist: track.artist,
-            duration: track.duration,
-            thumbnailUrl: track.thumbnailUrl,
-            formattedDuration:
-              'formattedDuration' in track && track.formattedDuration
-                ? track.formattedDuration
-                : formatSeconds(track.duration),
-          };
-          await registerLocalTrackIfMissing(trackSummary);
-          await loadOfflineTracks();
+        if (!isLocalDeviceTrackId(track.id)) {
+          const alreadyInDb = downloadedIds.has(track.id) || (await isDownloaded(track.id));
           if (queueGenerationRef.current !== selectionEpoch) return;
+          if (!alreadyInDb) {
+            const trackSummary: TrackSummary = {
+              id: track.id,
+              title: track.title,
+              artist: track.artist,
+              duration: track.duration,
+              thumbnailUrl: track.thumbnailUrl,
+              formattedDuration:
+                'formattedDuration' in track && track.formattedDuration
+                  ? track.formattedDuration
+                  : formatSeconds(track.duration),
+            };
+            await registerLocalTrackIfMissing(trackSummary);
+            await loadOfflineTracks();
+            if (queueGenerationRef.current !== selectionEpoch) return;
+          }
         }
 
         playbackParams = {
@@ -2171,6 +2289,13 @@ export default function App() {
           duration: track.duration,
         };
       } else {
+        if (isLocalDeviceTrackId(track.id)) {
+          showToast(`Arquivo local corrompido ou indisponível: "${track.title}"`, 'error');
+          setErrorMessage(
+            `Não foi possível reproduzir "${track.title}": arquivo local corrompido ou removido.`
+          );
+          return;
+        }
         if ('localUri' in track) {
           await deleteDownloadedTrack(track.id);
           await loadOfflineTracks();
@@ -2284,6 +2409,14 @@ export default function App() {
           duration: session.track.duration,
         });
       } else {
+        if (isLocalDeviceTrackId(session.track.id)) {
+          showToast(`Arquivo local corrompido ou indisponível: "${session.track.title}"`, 'error');
+          setErrorMessage(
+            `Não foi possível reproduzir "${session.track.title}": arquivo local corrompido ou removido.`
+          );
+          setRestoredSession(null);
+          return false;
+        }
         const streamInfo = await getAudioStream(session.track.id);
         await playTrack({
           id: session.track.id,
@@ -2694,7 +2827,7 @@ export default function App() {
   }, [showToast]);
 
   const handleDownload = (track: TrackSummary) => {
-    if (!track || !track.id) return;
+    if (!track || !track.id || isLocalDeviceTrackId(track.id)) return;
     if (downloadedIds.has(track.id)) {
       showToast(`"${track.title}" já está salva em Baixadas`, 'success');
       return;
@@ -2734,6 +2867,192 @@ export default function App() {
       console.error('Falha ao remover faixa offline:', err);
     }
   };
+
+  const handleChangeDownloadsSortMode = async (mode: DownloadsSortMode) => {
+    setDownloadsSortModeState(mode);
+    await setDownloadsSortMode(mode).catch(() => {});
+  };
+
+  const handleRescanLocalMedia = async () => {
+    if (isScanningLocalMedia) return;
+    setIsScanningLocalMedia(true);
+    try {
+      const hasPerm = await checkLocalAudioPermission();
+      if (!hasPerm) {
+        const granted = await requestLocalAudioPermission();
+        if (!granted) {
+          showToast('Permissão de áudio necessária para escanear músicas do dispositivo.', 'error');
+          return;
+        }
+      }
+      const result = await scanAndSyncLocalDeviceAudio();
+      await loadOfflineTracks();
+      if (result.corruptedCount > 0) {
+        showToast(
+          `${result.validCount} música(s) local(is) e ${result.corruptedCount} arquivo(s) corrompido(s) detectado(s).`,
+          'info'
+        );
+      } else {
+        showToast(`${result.validCount} música(s) encontrada(s) no dispositivo.`, 'success');
+      }
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Falha ao escanear músicas do dispositivo.',
+        'error'
+      );
+    } finally {
+      setIsScanningLocalMedia(false);
+    }
+  };
+
+  const handleEnableAndScanLocalMedia = async () => {
+    const granted = await requestLocalAudioPermission();
+    if (!granted) {
+      showToast('Permissão negada. Ative o acesso a áudio nas configurações para usar este recurso.', 'error');
+      return;
+    }
+    await setLocalMediaEnabled(true);
+    setLocalMediaEnabledState(true);
+    await handleRescanLocalMedia();
+  };
+
+  const handleToggleExcludedFolder = async (folderName: string) => {
+    const lower = folderName.toLowerCase();
+    const exists = excludedLocalFolders.some((f) => f.toLowerCase() === lower);
+    const next = exists
+      ? excludedLocalFolders.filter((f) => f.toLowerCase() !== lower)
+      : [...excludedLocalFolders, folderName];
+    setExcludedLocalFoldersState(next);
+    await setExcludedLocalFolders(next).catch(() => {});
+    await loadOfflineTracks();
+  };
+
+  const handleRestoreHiddenLocalTracks = async () => {
+    await restoreHiddenLocalTracks().catch(() => {});
+    await loadOfflineTracks();
+    showToast('Músicas locais ocultadas foram restauradas.', 'success');
+  };
+
+  const handlePlayOfflineTrack = async (
+    item: UnifiedOfflineTrackItem,
+    visibleQueue: UnifiedOfflineTrackItem[]
+  ) => {
+    if (item.isCorrupted) {
+      showToast(`Arquivo corrompido: "${item.title}"`, 'error');
+      return;
+    }
+    const playableQueue: PlayableTrack[] = visibleQueue
+      .filter((t) => !t.isCorrupted && Boolean(t.localUri))
+      .map((t) => ({
+        id: t.id,
+        title: t.title,
+        artist: t.artist,
+        duration: t.duration,
+        thumbnailUrl: t.thumbnailUrl,
+        localUri: t.localUri,
+        downloadedAt: t.timestamp,
+      }));
+    const startIdx = playableQueue.findIndex((t) => t.id === item.id);
+    if (playableQueue.length === 0 || startIdx < 0) {
+      showToast('Nenhuma faixa válida disponível para reprodução.', 'error');
+      return;
+    }
+    await handlePlayPlaylist(playableQueue, startIdx);
+  };
+
+  const handlePlayOfflinePlaylist = async (playlistId: string) => {
+    try {
+      const detail = await getPlaylistById(playlistId);
+      if (!detail) return;
+      const excludedSet = new Set(excludedLocalFolders.map((f) => f.toLowerCase()));
+      const excludedLocalIds = new Set(
+        localDeviceTracks
+          .filter((lt) => excludedSet.has((lt.folderName || 'Armazenamento').toLowerCase()))
+          .map((lt) => lt.id)
+      );
+      const offlineTracks = detail.tracks.filter(
+        (t) =>
+          !t.isCorrupted &&
+          !excludedLocalIds.has(t.trackId) &&
+          Boolean(t.isDownloaded || downloadedIds.has(t.trackId))
+      );
+      if (offlineTracks.length === 0) {
+        showToast('Nenhuma faixa offline disponível nesta playlist.', 'error');
+        return;
+      }
+      await handlePlayPlaylist(offlineTracks, 0);
+    } catch (err) {
+      console.error('[OfflinePlaylist] Falha ao tocar playlist offline:', err);
+    }
+  };
+
+  const handleSaveLocalTrackEdit = async (payload: EditLocalTrackSavePayload) => {
+    if (!editingLocalTrack) return;
+    await saveLocalTrackMetadataEdit(editingLocalTrack, payload);
+    await loadOfflineTracks();
+    await loadPlaylists();
+    showToast('Informações da música atualizadas.', 'success');
+  };
+
+  const handleRevalidateLocalTrack = async (track: LocalDeviceTrack) => {
+    try {
+      const res = await revalidateLocalTrack(track);
+      await loadOfflineTracks();
+      if (res.isCorrupted) {
+        showToast(`Ainda corrompido: ${res.corruptionReason || track.fileName}`, 'error');
+      } else {
+        showToast(`"${track.title}" validada e pronta para tocar!`, 'success');
+      }
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Falha ao revalidar arquivo local.',
+        'error'
+      );
+    }
+  };
+
+  const handleHideLocalTrack = async (track: LocalDeviceTrack) => {
+    if (nativeActiveTrack?.id === track.id) {
+      await resetPlayer().catch(() => {});
+    }
+    if (restoredSession?.track.id === track.id) {
+      setRestoredSession(null);
+    }
+    await hideLocalTrackFromLibrary(track.id);
+    await loadOfflineTracks();
+    showToast(`"${track.title}" ocultada do Sonary (arquivo mantido no celular).`, 'info');
+  };
+
+  const handleDeleteLocalTrackFromDevice = async (track: LocalDeviceTrack) => {
+    try {
+      if (nativeActiveTrack?.id === track.id) {
+        await resetPlayer().catch(() => {});
+      }
+      const res = await deleteLocalTrackFromDevice(track);
+      if (res.deleted) {
+        if (restoredSession?.track.id === track.id) {
+          setRestoredSession(null);
+        }
+        await loadOfflineTracks();
+        await loadPlaylists();
+        showToast(`"${track.fileName}" apagado do dispositivo.`, 'success');
+      } else if (!res.cancelled) {
+        showToast('Não foi possível apagar o arquivo no dispositivo.', 'error');
+      }
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Falha ao apagar arquivo do dispositivo.',
+        'error'
+      );
+    }
+  };
+
+  const visiblePlayableLocalCount = React.useMemo(() => {
+    const excludedSet = new Set(excludedLocalFolders.map((f) => f.toLowerCase()));
+    return localDeviceTracks.filter(
+      (t) => !t.isCorrupted && !excludedSet.has((t.folderName || 'Armazenamento').toLowerCase())
+    ).length;
+  }, [localDeviceTracks, excludedLocalFolders]);
 
   const formatSeconds = (seconds?: number): string => {
     if (!seconds || seconds <= 0) return '0:00';
@@ -2799,6 +3118,7 @@ export default function App() {
                 initialPlaylist={
                   playlists.find((p) => p.id === selectedPlaylistId) ?? null
                 }
+                offlineOnly={isPlaylistDetailOfflineOnly}
                 currentActiveTrackId={activeTrack?.id}
                 isPlaying={isPlaying}
                 downloadedTrackIds={downloadedIds}
@@ -3182,70 +3502,71 @@ export default function App() {
                     </View>
                   )}
 
-                  {/* Aba Músicas Baixadas (Biblioteca Offline) */}
-                  {activeTab === 'downloads' && (() => {
-                    const normalizedDownloadsQuery = downloadsSearchQuery.trim().toLowerCase();
-                    const displayedDownloads = normalizedDownloadsQuery
-                      ? downloadedTracks.filter(
-                        (t) =>
-                          t.title.toLowerCase().includes(normalizedDownloadsQuery) ||
-                          t.artist.toLowerCase().includes(normalizedDownloadsQuery)
-                      )
-                      : downloadedTracks;
-
-                    return (
-                      <View style={styles.tabContent}>
-                        {downloadedTracks.length > 0 && (
-                          <View style={styles.downloadsSearchWrapper}>
-                            <SearchPillInput
-                              value={downloadsSearchQuery}
-                              onChangeText={setDownloadsSearchQuery}
-                              placeholder="Buscar nas baixadas..."
-                              accessibilityLabel="Buscar músicas baixadas"
-                              clearAccessibilityLabel="Limpar busca de baixadas"
-                            />
-                          </View>
-                        )}
-                        <FlatList
-                          data={displayedDownloads}
-                          keyExtractor={(item) => item.id}
-                          contentContainerStyle={styles.listContent}
-                          ListEmptyComponent={
-                            <View style={[styles.emptyContainer, styles.emptyDownloadsContainer]}>
-                              <FolderDown color="#717171" size={56} />
-                              <Text style={styles.emptyTitle}>
-                                {normalizedDownloadsQuery
-                                  ? 'Nenhuma faixa encontrada'
-                                  : 'Nenhuma música baixada'}
-                              </Text>
-                              <Text style={styles.emptySubtitle}>
-                                {normalizedDownloadsQuery
-                                  ? `Não foram encontrados resultados para "${downloadsSearchQuery}".`
-                                  : 'Suas faixas salvas aparecerão aqui e podem ser ouvidas sem internet.'}
-                              </Text>
-                            </View>
-                          }
-                          renderItem={({ item }) => (
-                            <TrackCard
-                              id={item.id}
-                              title={item.title}
-                              artist={item.artist}
-                              durationText={formatSeconds(item.duration)}
-                              thumbnailUrl={item.thumbnailUrl}
-                              isActive={activeTrack?.id === item.id}
-                              isPlaying={isPlaying}
-                              isOfflineList={true}
-                              onPress={() => handleSelectTrack(item)}
-                              onAddToPlaylist={() => handleOpenAddToPlaylist(item)}
-                              onDeleteOffline={() => handleDeleteOfflineTrack(item.id)}
-                              onPlayNext={() => handlePlayNext(item)}
-                              onAddToQueue={() => handleAddToQueue(item)}
-                            />
-                          )}
-                        />
-                      </View>
-                    );
-                  })()}
+                  {/* Aba Músicas Baixadas (Biblioteca Offline + Dispositivo) */}
+                  {activeTab === 'downloads' && (
+                    <View style={styles.tabContent}>
+                      <DownloadsSection
+                        downloadedTracks={downloadedTracks}
+                        localDeviceTracks={localDeviceTracks}
+                        offlinePlaylists={offlinePlaylists}
+                        excludedLocalFolders={excludedLocalFolders}
+                        localMediaEnabled={localMediaEnabled}
+                        isScanningLocalMedia={isScanningLocalMedia}
+                        sortMode={downloadsSortMode}
+                        searchQuery={downloadsSearchQuery}
+                        activeTrackId={activeTrack?.id}
+                        isPlaying={isPlaying}
+                        hiddenLocalCount={hiddenLocalCount}
+                        onChangeSearchQuery={setDownloadsSearchQuery}
+                        onChangeSortMode={handleChangeDownloadsSortMode}
+                        onEnableAndScanLocalMedia={handleEnableAndScanLocalMedia}
+                        onRescanLocalMedia={handleRescanLocalMedia}
+                        onToggleExcludedFolder={handleToggleExcludedFolder}
+                        onRestoreHiddenLocalTracks={handleRestoreHiddenLocalTracks}
+                        onPlayOfflineTrack={handlePlayOfflineTrack}
+                        onOpenOfflinePlaylist={(plId) =>
+                          openPlaylistDetail(plId, { offlineOnly: true })
+                        }
+                        onPlayOfflinePlaylist={handlePlayOfflinePlaylist}
+                        onAddToPlaylist={(item) =>
+                          handleOpenAddToPlaylist({
+                            id: item.id,
+                            title: item.title,
+                            artist: item.artist,
+                            duration: item.duration,
+                            thumbnailUrl: item.thumbnailUrl,
+                          })
+                        }
+                        onDeleteDownloadedTrack={handleDeleteOfflineTrack}
+                        onEditLocalTrack={(track) => setEditingLocalTrack(track)}
+                        onRevalidateLocalTrack={handleRevalidateLocalTrack}
+                        onHideLocalTrack={handleHideLocalTrack}
+                        onDeleteLocalTrackFromDevice={handleDeleteLocalTrackFromDevice}
+                        onPlayNext={(item) =>
+                          handlePlayNext({
+                            id: item.id,
+                            title: item.title,
+                            artist: item.artist,
+                            duration: item.duration,
+                            thumbnailUrl: item.thumbnailUrl,
+                            localUri: item.localUri,
+                            downloadedAt: item.timestamp,
+                          })
+                        }
+                        onAddToQueue={(item) =>
+                          handleAddToQueue({
+                            id: item.id,
+                            title: item.title,
+                            artist: item.artist,
+                            duration: item.duration,
+                            thumbnailUrl: item.thumbnailUrl,
+                            localUri: item.localUri,
+                            downloadedAt: item.timestamp,
+                          })
+                        }
+                      />
+                    </View>
+                  )}
 
                   {/* Aba Apoiar (Contribuição Voluntária via Pix) */}
                   {activeTab === 'support' && (
@@ -3368,7 +3689,7 @@ export default function App() {
                 activeTab={pendingTab ?? activeTab}
                 onTabChange={handleTabChange}
                 playlistCount={playlists.length}
-                downloadCount={downloadedTracks.length}
+                downloadCount={downloadedTracks.length + visiblePlayableLocalCount}
               />
             </Animated.View>
           )}
@@ -3547,6 +3868,14 @@ export default function App() {
           onOpenSettings={() => showToast('Em breve no Sonary', 'info')}
           onOpenDevMenu={isDevMode ? () => setIsDevMenuVisible(true) : undefined}
           onOpenSupport={() => handleTabChange('support')}
+        />
+
+        {/* Modal de Edição de Música Local do Dispositivo */}
+        <EditLocalTrackModal
+          visible={Boolean(editingLocalTrack)}
+          track={editingLocalTrack}
+          onClose={() => setEditingLocalTrack(null)}
+          onSave={handleSaveLocalTrackEdit}
         />
 
         {/* Modal de Backup e Restauração JSON */}

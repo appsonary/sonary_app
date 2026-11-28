@@ -11,6 +11,8 @@ import {
   getDownloadedTrackById,
   getDownloadedTracks,
   DownloadedTrack,
+  isLocalDeviceTrackId,
+  getLocalDeviceTrackById,
   getPersistedDownloadQueue,
   upsertPersistedDownloadQueueItem,
   upsertPersistedDownloadQueueBatch,
@@ -35,6 +37,7 @@ export type { DownloadedTrack };
 const AUDIO_DIRECTORY = `${FileSystem.documentDirectory}tracks/`;
 const THUMBNAIL_DIRECTORY = `${FileSystem.documentDirectory}thumbnails/`;
 export const PLAYLIST_COVERS_DIRECTORY = `${FileSystem.documentDirectory}playlist_covers/`;
+export const LOCAL_TRACK_COVERS_DIRECTORY = `${FileSystem.documentDirectory}local_track_covers/`;
 const MAX_LOCAL_URI_CACHE = 500;
 const localUriCache = new Map<string, string | null>();
 let lastFsGeneration: number | undefined = undefined;
@@ -85,6 +88,11 @@ export async function ensureStorageDirectories(): Promise<void> {
   const coversDirInfo = await FileSystem.getInfoAsync(PLAYLIST_COVERS_DIRECTORY);
   if (!coversDirInfo.exists) {
     await FileSystem.makeDirectoryAsync(PLAYLIST_COVERS_DIRECTORY, { intermediates: true });
+  }
+
+  const localCoversDirInfo = await FileSystem.getInfoAsync(LOCAL_TRACK_COVERS_DIRECTORY);
+  if (!localCoversDirInfo.exists) {
+    await FileSystem.makeDirectoryAsync(LOCAL_TRACK_COVERS_DIRECTORY, { intermediates: true });
   }
 }
 
@@ -210,6 +218,52 @@ export async function deletePlaylistCover(
   coverUri?: string | null
 ): Promise<void> {
   if (!coverUri || !coverUri.startsWith(PLAYLIST_COVERS_DIRECTORY)) {
+    return;
+  }
+  await FileSystem.deleteAsync(coverUri, { idempotent: true });
+}
+
+/**
+ * Redimensiona a capa customizada de uma música local para 600x600 JPEG
+ * e salva no diretório app-scoped sem alterar o arquivo original do dispositivo.
+ */
+export async function saveLocalTrackCover(
+  trackId: string,
+  sourceUri: string
+): Promise<string> {
+  await ensureStorageDirectories();
+
+  const manipulated = await ImageManipulator.manipulateAsync(
+    sourceUri,
+    [{ resize: { width: 600, height: 600 } }],
+    { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG }
+  );
+
+  const safeId = trackId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const destUri = `${LOCAL_TRACK_COVERS_DIRECTORY}${safeId}_${Date.now()}.jpg`;
+
+  try {
+    const existingFiles = await FileSystem.readDirectoryAsync(LOCAL_TRACK_COVERS_DIRECTORY);
+    for (const filename of existingFiles) {
+      if (filename.startsWith(`${safeId}_`)) {
+        await FileSystem.deleteAsync(`${LOCAL_TRACK_COVERS_DIRECTORY}${filename}`, {
+          idempotent: true,
+        });
+      }
+    }
+  } catch { }
+
+  await FileSystem.moveAsync({ from: manipulated.uri, to: destUri });
+  return destUri;
+}
+
+/**
+ * Remove uma capa customizada local caso pertença ao diretório da app.
+ */
+export async function deleteLocalTrackCover(
+  coverUri?: string | null
+): Promise<void> {
+  if (!coverUri || !coverUri.startsWith(LOCAL_TRACK_COVERS_DIRECTORY)) {
     return;
   }
   await FileSystem.deleteAsync(coverUri, { idempotent: true });
@@ -427,6 +481,14 @@ export async function downloadTrackFile(
  * Obtém a URI local de uma faixa baixada se existir em disco com integridade e no banco.
  */
 export async function getLocalTrackUri(videoId: string): Promise<string | null> {
+  if (isLocalDeviceTrackId(videoId)) {
+    const localRecord = await getLocalDeviceTrackById(videoId);
+    if (localRecord && !localRecord.isCorrupted && localRecord.contentUri) {
+      return localRecord.contentUri;
+    }
+    return null;
+  }
+
   syncFileSystemGeneration();
   if (localUriCache.has(videoId)) {
     const cached = localUriCache.get(videoId) ?? null;
@@ -463,6 +525,7 @@ export async function isTrackDownloaded(videoId: string): Promise<boolean> {
  * Registra a faixa no banco SQLite caso ela já exista em disco com integridade e ainda não esteja no banco.
  */
 export async function registerLocalTrackIfMissing(track: TrackSummary): Promise<void> {
+  if (!track || isLocalDeviceTrackId(track.id)) return;
   const localUri = await getLocalTrackUri(track.id);
   if (!localUri) return;
 
@@ -1113,7 +1176,7 @@ function pushOrReplacePending(track: TrackSummary): void {
  * Enfileira uma faixa individual para download em background.
  */
 export function enqueueDownload(track: TrackSummary): EnqueueResult {
-  if (!track || !track.id) return 'already_queued';
+  if (!track || !track.id || isLocalDeviceTrackId(track.id)) return 'already_queued';
   const existing = downloadQueue.find((i) => i.track.id === track.id);
   if (existing && (existing.status === 'pending' || existing.status === 'downloading')) {
     return 'already_queued';
@@ -1177,7 +1240,7 @@ export function enqueuePlaylistDownload(tracks: TrackSummary[]): EnqueuePlaylist
   }> = [];
 
   for (const track of tracks) {
-    if (!track || !track.id) continue;
+    if (!track || !track.id || isLocalDeviceTrackId(track.id)) continue;
     const existing = downloadQueue.find((i) => i.track.id === track.id);
     if (existing && (existing.status === 'pending' || existing.status === 'downloading')) {
       alreadyQueuedCount += 1;
